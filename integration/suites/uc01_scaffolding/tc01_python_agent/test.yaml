@@ -19,22 +19,26 @@ pre_run:
 # Main test steps
 test:
   # Scaffold the agent
-  - handler: shell
+  - name: "Scaffold Python agent"
+    handler: shell
     command: "meshctl scaffold --name test-python-agent --agent-type tool --lang python"
     capture: scaffold_output
 
   # List generated files
-  - handler: shell
+  - name: "List generated files"
+    handler: shell
     command: "find test-python-agent -type f | sort"
     capture: generated_files
 
   # Check main.py content
-  - handler: shell
+  - name: "Check main.py content"
+    handler: shell
     command: "cat test-python-agent/main.py"
     capture: main_content
 
   # Check helm-values.yaml content
-  - handler: shell
+  - name: "Check helm-values.yaml content"
+    handler: shell
     command: "cat test-python-agent/helm-values.yaml"
     capture: helm_values
 

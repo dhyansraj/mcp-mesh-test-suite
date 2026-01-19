@@ -22,7 +22,8 @@ pre_run:
 
 test:
   # Copy UC-level artifacts to workspace and replace version placeholders
-  - handler: shell
+  - name: "Copy UC-level artifacts to workspace"
+    handler: shell
     command: |
       cp -r /uc-artifacts/py-simple-agent /workspace/
       cp -r /uc-artifacts/ts-simple-agent /workspace/
@@ -32,46 +33,54 @@ test:
     capture: copy_output
 
   # Install TypeScript dependencies
-  - handler: shell
+  - name: "Install TypeScript dependencies"
+    handler: shell
     command: "cd ts-simple-agent && npm install --silent"
     workdir: /workspace
     timeout: 120
     capture: npm_install
 
   # Start Python agent in detached mode using meshctl (auto-starts registry)
-  - handler: shell
+  - name: "Start Python agent in detached mode"
+    handler: shell
     command: "meshctl start py-simple-agent/main.py -d"
     workdir: /workspace
     capture: py_start
 
   # Wait for Python agent to register
-  - handler: wait
+  - name: "Wait for Python agent to register"
+    handler: wait
     seconds: 8
 
   # Check Python agent is registered
-  - handler: shell
+  - name: "Check Python agent is registered"
+    handler: shell
     command: "meshctl list"
     workdir: /workspace
     capture: list_after_py
 
   # Start TypeScript agent in detached mode
-  - handler: shell
+  - name: "Start TypeScript agent in detached mode"
+    handler: shell
     command: "meshctl start ts-simple-agent/src/index.ts -d"
     workdir: /workspace
     capture: ts_start
 
   # Wait for TypeScript agent to register
-  - handler: wait
+  - name: "Wait for TypeScript agent to register"
+    handler: wait
     seconds: 8
 
   # Check both agents are registered
-  - handler: shell
+  - name: "Check both agents are registered"
+    handler: shell
     command: "meshctl list"
     workdir: /workspace
     capture: list_both
 
   # Verify agent count
-  - handler: shell
+  - name: "Verify agent count"
+    handler: shell
     command: |
       count=$(meshctl list 2>/dev/null | grep -c "simple-agent" || echo "0")
       echo "Agent count: $count"
@@ -86,7 +95,8 @@ test:
     capture: agent_count
 
   # Stop all agents
-  - handler: shell
+  - name: "Stop all agents"
+    handler: shell
     command: "meshctl stop 2>/dev/null || true"
     workdir: /workspace
     ignore_errors: true

@@ -19,23 +19,27 @@ pre_run:
 
 test:
   # Copy artifact
-  - handler: shell
+  - name: "Copy artifact to workspace"
+    handler: shell
     command: |
       cp -r /uc-artifacts/py-math-agent /workspace/
     capture: copy_output
 
   # Start agent
-  - handler: shell
+  - name: "Start agent"
+    handler: shell
     command: "meshctl start py-math-agent/main.py -d"
     workdir: /workspace
     capture: start_agent
 
   # Wait for registration
-  - handler: wait
+  - name: "Wait for registration"
+    handler: wait
     seconds: 10
 
   # Verify all tools are listed
-  - handler: shell
+  - name: "Verify all tools are listed"
+    handler: shell
     command: |
       echo "=== Tools list ==="
       meshctl list --tools
@@ -63,7 +67,8 @@ test:
     capture: all_tools_listed
 
   # Call each tool independently
-  - handler: shell
+  - name: "Call each tool independently"
+    handler: shell
     command: |
       echo "=== Calling all tools ==="
 
@@ -93,7 +98,8 @@ test:
     capture: all_tools_callable
 
   # Verify capability grouping
-  - handler: shell
+  - name: "Verify capability grouping"
+    handler: shell
     command: |
       TOOLS=$(meshctl list --tools 2>&1)
       if echo "$TOOLS" | grep -q "math_operations"; then

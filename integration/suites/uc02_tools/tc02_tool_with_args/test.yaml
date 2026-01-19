@@ -19,23 +19,27 @@ pre_run:
 
 test:
   # Copy artifact
-  - handler: shell
+  - name: "Copy artifact to workspace"
+    handler: shell
     command: |
       cp -r /uc-artifacts/py-math-agent /workspace/
     capture: copy_output
 
   # Start agent
-  - handler: shell
+  - name: "Start agent"
+    handler: shell
     command: "meshctl start py-math-agent/main.py -d"
     workdir: /workspace
     capture: start_agent
 
   # Wait for registration
-  - handler: wait
+  - name: "Wait for registration"
+    handler: wait
     seconds: 10
 
   # Test add with positive numbers
-  - handler: shell
+  - name: "Test add with positive numbers"
+    handler: shell
     command: |
       RESULT=$(meshctl call add '{"a": 10, "b": 20}' 2>&1)
       echo "add(10,20): $RESULT"
@@ -49,7 +53,8 @@ test:
     capture: test_positive
 
   # Test add with negative numbers
-  - handler: shell
+  - name: "Test add with negative numbers"
+    handler: shell
     command: |
       RESULT=$(meshctl call add '{"a": -5, "b": 3}' 2>&1)
       echo "add(-5,3): $RESULT"
@@ -63,7 +68,8 @@ test:
     capture: test_negative
 
   # Test subtract
-  - handler: shell
+  - name: "Test subtract"
+    handler: shell
     command: |
       RESULT=$(meshctl call subtract '{"a": 100, "b": 42}' 2>&1)
       echo "subtract(100,42): $RESULT"
@@ -77,7 +83,8 @@ test:
     capture: test_subtract
 
   # Test multiply
-  - handler: shell
+  - name: "Test multiply"
+    handler: shell
     command: |
       RESULT=$(meshctl call multiply '{"a": 7, "b": 8}' 2>&1)
       echo "multiply(7,8): $RESULT"
@@ -91,7 +98,8 @@ test:
     capture: test_multiply
 
   # Test divide
-  - handler: shell
+  - name: "Test divide"
+    handler: shell
     command: |
       RESULT=$(meshctl call divide '{"a": 100, "b": 4}' 2>&1)
       echo "divide(100,4): $RESULT"
@@ -105,7 +113,8 @@ test:
     capture: test_divide
 
   # Test with zero
-  - handler: shell
+  - name: "Test with zero"
+    handler: shell
     command: |
       RESULT=$(meshctl call add '{"a": 0, "b": 0}' 2>&1)
       echo "add(0,0): $RESULT"

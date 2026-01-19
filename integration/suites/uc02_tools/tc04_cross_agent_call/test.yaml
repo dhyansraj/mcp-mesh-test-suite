@@ -24,34 +24,40 @@ pre_run:
 
 test:
   # Copy artifacts
-  - handler: shell
+  - name: "Copy artifacts to workspace"
+    handler: shell
     command: |
       cp -r /uc-artifacts/py-calculator-agent /workspace/
       cp -r /uc-artifacts/py-report-agent /workspace/
     capture: copy_output
 
   # Start calculator agent first (provider)
-  - handler: shell
+  - name: "Start calculator agent (provider)"
+    handler: shell
     command: "meshctl start py-calculator-agent/main.py -d"
     workdir: /workspace
     capture: start_calculator
 
   # Wait for calculator to register
-  - handler: wait
+  - name: "Wait for calculator to register"
+    handler: wait
     seconds: 8
 
   # Start report agent (consumer)
-  - handler: shell
+  - name: "Start report agent (consumer)"
+    handler: shell
     command: "meshctl start py-report-agent/main.py -d"
     workdir: /workspace
     capture: start_report
 
   # Wait for report agent to register and wire
-  - handler: wait
+  - name: "Wait for report agent to register and wire"
+    handler: wait
     seconds: 10
 
   # Verify both agents are registered
-  - handler: shell
+  - name: "Verify both agents are registered"
+    handler: shell
     command: |
       meshctl list
       if meshctl list 2>/dev/null | grep -q "py-calculator-agent" && \
@@ -65,7 +71,8 @@ test:
     capture: both_registered
 
   # Check wiring status - report-agent should depend on calculator
-  - handler: shell
+  - name: "Check wiring status"
+    handler: shell
     command: |
       meshctl status
       echo "=== Checking dependencies ==="
@@ -80,7 +87,8 @@ test:
     capture: wiring_status
 
   # Call sum_report which internally calls calc_add
-  - handler: shell
+  - name: "Call sum_report (cross-agent)"
+    handler: shell
     command: |
       echo "=== Calling sum_report ==="
       RESULT=$(meshctl call sum_report '{"numbers": [1, 2, 3, 4, 5]}' 2>&1)
@@ -96,7 +104,8 @@ test:
     capture: sum_report_call
 
   # Call product_report which internally calls calc_multiply
-  - handler: shell
+  - name: "Call product_report (cross-agent)"
+    handler: shell
     command: |
       echo "=== Calling product_report ==="
       RESULT=$(meshctl call product_report '{"numbers": [2, 3, 4]}' 2>&1)

@@ -20,7 +20,8 @@ pre_run:
 
 test:
   # Copy and setup TypeScript artifacts
-  - handler: shell
+  - name: "Copy and setup TypeScript artifacts"
+    handler: shell
     command: |
       cp -r /uc-artifacts/ts-fast-provider /workspace/
       cp -r /uc-artifacts/ts-tag-consumer /workspace/
@@ -30,42 +31,50 @@ test:
     capture: copy_output
 
   # Install npm dependencies
-  - handler: shell
+  - name: "Install fast provider dependencies"
+    handler: shell
     command: "cd ts-fast-provider && npm install --silent"
     workdir: /workspace
     timeout: 120
 
-  - handler: shell
+  - name: "Install tag consumer dependencies"
+    handler: shell
     command: "cd ts-tag-consumer && npm install --silent"
     workdir: /workspace
     timeout: 120
 
   # Start provider
-  - handler: shell
+  - name: "Start TS fast provider"
+    handler: shell
     command: "meshctl start ts-fast-provider/src/index.ts -d"
     workdir: /workspace
     capture: start_provider
 
-  - handler: wait
+  - name: "Wait for provider registration"
+    handler: wait
     seconds: 10
 
   # Start consumer
-  - handler: shell
+  - name: "Start TS tag consumer"
+    handler: shell
     command: "meshctl start ts-tag-consumer/src/index.ts -d"
     workdir: /workspace
     capture: start_consumer
 
-  - handler: wait
+  - name: "Wait for consumer registration"
+    handler: wait
     seconds: 10
 
   # Verify both agents registered
-  - handler: shell
+  - name: "Verify both agents registered"
+    handler: shell
     command: "meshctl list"
     workdir: /workspace
     capture: list_output
 
   # Call fetch_required which requires "api" tag
-  - handler: shell
+  - name: "Call fetch_required with api tag"
+    handler: shell
     command: |
       RESULT=$(meshctl call fetch_required '{"query": "test"}' 2>&1)
       echo "Result: $RESULT"

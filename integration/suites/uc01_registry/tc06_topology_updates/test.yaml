@@ -24,7 +24,8 @@ pre_run:
 
 test:
   # Copy artifacts
-  - handler: shell
+  - name: "Copy artifacts to workspace"
+    handler: shell
     command: |
       cp -r /uc-artifacts/py-simple-agent /workspace/
       cp -r /uc-artifacts/ts-simple-agent /workspace/
@@ -33,21 +34,25 @@ test:
     capture: copy_output
 
   # Install TypeScript dependencies
-  - handler: shell
+  - name: "Install TypeScript dependencies"
+    handler: shell
     command: "cd ts-simple-agent && npm install --silent"
     workdir: /workspace
     timeout: 120
 
   # === STEP 1: Start agent 1, verify 1 agent in list ===
-  - handler: shell
+  - name: "Start first agent (py-simple-agent)"
+    handler: shell
     command: "meshctl start py-simple-agent/main.py -d"
     workdir: /workspace
     capture: start_1
 
-  - handler: wait
+  - name: "Wait for first agent registration"
+    handler: wait
     seconds: 8
 
-  - handler: shell
+  - name: "Verify 1 agent after first join"
+    handler: shell
     command: |
       echo "=== After starting py-simple-agent ==="
       meshctl list
@@ -63,15 +68,18 @@ test:
     capture: list_after_1
 
   # === STEP 2: Start agent 2, verify 2 agents in list ===
-  - handler: shell
+  - name: "Start second agent (ts-simple-agent)"
+    handler: shell
     command: "meshctl start ts-simple-agent/src/index.ts -d"
     workdir: /workspace
     capture: start_2
 
-  - handler: wait
+  - name: "Wait for second agent registration"
+    handler: wait
     seconds: 8
 
-  - handler: shell
+  - name: "Verify 2 agents after second join"
+    handler: shell
     command: |
       echo "=== After starting ts-simple-agent ==="
       meshctl list
@@ -87,15 +95,18 @@ test:
     capture: list_after_2
 
   # === STEP 3: Stop agent 1, verify only agent 2 remains ===
-  - handler: shell
+  - name: "Stop first agent (py-simple-agent)"
+    handler: shell
     command: "meshctl stop py-simple-agent"
     workdir: /workspace
     capture: stop_1
 
-  - handler: wait
+  - name: "Wait for agent to unregister"
+    handler: wait
     seconds: 5
 
-  - handler: shell
+  - name: "Verify only ts-simple-agent remains"
+    handler: shell
     command: |
       echo "=== After stopping py-simple-agent ==="
       meshctl list
@@ -115,15 +126,18 @@ test:
     capture: list_after_leave
 
   # === STEP 4: Start agent 1 again, verify 2 agents ===
-  - handler: shell
+  - name: "Rejoin first agent (py-simple-agent)"
+    handler: shell
     command: "meshctl start py-simple-agent/main.py -d"
     workdir: /workspace
     capture: rejoin_1
 
-  - handler: wait
+  - name: "Wait for rejoin registration"
+    handler: wait
     seconds: 8
 
-  - handler: shell
+  - name: "Verify both agents present after rejoin"
+    handler: shell
     command: |
       echo "=== After py-simple-agent rejoins ==="
       meshctl list

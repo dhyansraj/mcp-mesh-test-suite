@@ -25,7 +25,8 @@ pre_run:
 
 test:
   # Copy artifacts
-  - handler: shell
+  - name: "Copy artifacts to workspace"
+    handler: shell
     command: |
       cp -r /uc-artifacts/py-optional-dep-agent /workspace/
       cp -r /uc-artifacts/py-calculator-agent /workspace/
@@ -33,22 +34,26 @@ test:
 
   # === PHASE 1: Start agent WITHOUT its optional dependency ===
 
-  - handler: shell
+  - name: "Start agent without optional dependency"
+    handler: shell
     command: "meshctl start py-optional-dep-agent/main.py -d"
     workdir: /workspace
     capture: start_without_dep
 
-  - handler: wait
+  - name: "Wait for agent registration"
+    handler: wait
     seconds: 10
 
   # Verify agent is registered
-  - handler: shell
+  - name: "Verify agent is registered"
+    handler: shell
     command: "meshctl list"
     workdir: /workspace
     capture: list_without_dep
 
   # Check calculator is not available
-  - handler: shell
+  - name: "Check calculator is not available"
+    handler: shell
     command: |
       RESULT=$(meshctl call check_calculator 2>&1)
       echo "check_calculator: $RESULT"
@@ -62,7 +67,8 @@ test:
     capture: check_without_dep
 
   # Call smart_add - should use local fallback
-  - handler: shell
+  - name: "Call smart_add with local fallback"
+    handler: shell
     command: |
       RESULT=$(meshctl call smart_add '{"a": 5, "b": 3}' 2>&1)
       echo "smart_add(5,3) without calculator: $RESULT"
@@ -77,16 +83,19 @@ test:
 
   # === PHASE 2: Start the dependency (calculator) ===
 
-  - handler: shell
+  - name: "Start calculator dependency"
+    handler: shell
     command: "meshctl start py-calculator-agent/main.py -d"
     workdir: /workspace
     capture: start_calculator
 
-  - handler: wait
+  - name: "Wait for calculator registration"
+    handler: wait
     seconds: 10
 
   # Verify both agents are now registered
-  - handler: shell
+  - name: "Verify calculator is now registered"
+    handler: shell
     command: |
       meshctl list
       if meshctl list 2>/dev/null | grep -q "py-calculator-agent"; then
@@ -99,7 +108,8 @@ test:
     capture: list_with_dep
 
   # Check calculator is now available
-  - handler: shell
+  - name: "Check calculator is now available"
+    handler: shell
     command: |
       RESULT=$(meshctl call check_calculator 2>&1)
       echo "check_calculator: $RESULT"
@@ -113,7 +123,8 @@ test:
     capture: check_with_dep
 
   # Call smart_add - should now use calculator
-  - handler: shell
+  - name: "Call smart_add with calculator"
+    handler: shell
     command: |
       RESULT=$(meshctl call smart_add '{"a": 10, "b": 7}' 2>&1)
       echo "smart_add(10,7) with calculator: $RESULT"

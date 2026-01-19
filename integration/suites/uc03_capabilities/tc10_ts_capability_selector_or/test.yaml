@@ -23,7 +23,8 @@ pre_run:
 
 test:
   # Copy and setup TypeScript artifacts
-  - handler: shell
+  - name: "Copy and setup TypeScript artifacts"
+    handler: shell
     command: |
       cp -r /uc-artifacts/ts-fast-provider /workspace/
       cp -r /uc-artifacts/ts-accurate-provider /workspace/
@@ -35,29 +36,35 @@ test:
     capture: copy_output
 
   # Install npm dependencies for all TS agents
-  - handler: shell
+  - name: "Install npm dependencies for all TS agents"
+    handler: shell
     command: "cd ts-fast-provider && npm install --silent && cd ../ts-accurate-provider && npm install --silent && cd ../ts-tag-consumer && npm install --silent"
     workdir: /workspace
     timeout: 180
 
   # === TEST 1: Only fast provider available ===
-  - handler: shell
+  - name: "Test 1: Start fast provider only"
+    handler: shell
     command: "meshctl start ts-fast-provider/src/index.ts -d"
     workdir: /workspace
     capture: start_fast_only
 
-  - handler: wait
+  - name: "Wait for fast provider registration"
+    handler: wait
     seconds: 20
 
-  - handler: shell
+  - name: "Test 1: Start consumer"
+    handler: shell
     command: "meshctl start ts-tag-consumer/src/index.ts -d"
     workdir: /workspace
     capture: start_consumer_1
 
-  - handler: wait
+  - name: "Wait for consumer registration"
+    handler: wait
     seconds: 20
 
-  - handler: shell
+  - name: "Test 1: Call fetch_required with only fast available"
+    handler: shell
     command: |
       echo "=== DEBUG: Before call ==="
       meshctl list 2>&1 || echo "meshctl list failed"
@@ -78,45 +85,54 @@ test:
     capture: test_fast_only
 
   # Stop agents but keep registry running (avoids stale DB entries)
-  - handler: shell
+  - name: "Stop agents (keep registry running)"
+    handler: shell
     command: "meshctl stop --agents 2>/dev/null || true"
     workdir: /workspace
     ignore_errors: true
 
-  - handler: wait
+  - name: "Wait for cleanup"
+    handler: wait
     seconds: 5
 
   # === TEST 2: Only accurate provider available ===
   # Debug: Check registry state before starting
-  - handler: shell
+  - name: "Debug: Check registry state before test 2"
+    handler: shell
     command: "meshctl list 2>&1 || echo 'No agents registered'"
     workdir: /workspace
     capture: debug_before_test2
 
-  - handler: shell
+  - name: "Test 2: Start accurate provider only"
+    handler: shell
     command: "meshctl start ts-accurate-provider/src/index.ts -d"
     workdir: /workspace
     capture: start_accurate_only
 
-  - handler: wait
+  - name: "Wait for accurate provider registration"
+    handler: wait
     seconds: 25
 
-  - handler: shell
+  - name: "Test 2: Start consumer"
+    handler: shell
     command: "meshctl start ts-tag-consumer/src/index.ts -d"
     workdir: /workspace
     capture: start_consumer_2
 
   # Wait longer for registry to clear stale agents (heartbeat interval is 5s)
-  - handler: wait
+  - name: "Wait for registry to clear stale agents"
+    handler: wait
     seconds: 25
 
   # Debug: Check registry state before call
-  - handler: shell
+  - name: "Debug: Check registry state before call"
+    handler: shell
     command: "meshctl list 2>&1"
     workdir: /workspace
     capture: debug_list_test2
 
-  - handler: shell
+  - name: "Test 2: Call fetch_required with only accurate available"
+    handler: shell
     command: |
       RESULT=$(meshctl call fetch_required '{"query": "test2"}' 2>&1)
       echo "With only accurate: $RESULT"
@@ -131,33 +147,40 @@ test:
     capture: test_accurate_only
 
   # Stop agents but keep registry running
-  - handler: shell
+  - name: "Stop agents (keep registry running)"
+    handler: shell
     command: "meshctl stop --agents 2>/dev/null || true"
     workdir: /workspace
     ignore_errors: true
 
-  - handler: wait
+  - name: "Wait for cleanup"
+    handler: wait
     seconds: 5
 
   # === TEST 3: Both providers available ===
-  - handler: shell
+  - name: "Test 3: Start both providers"
+    handler: shell
     command: "meshctl start ts-fast-provider/src/index.ts ts-accurate-provider/src/index.ts -d"
     workdir: /workspace
     capture: start_both
 
-  - handler: wait
+  - name: "Wait for providers registration"
+    handler: wait
     seconds: 25
 
-  - handler: shell
+  - name: "Test 3: Start consumer"
+    handler: shell
     command: "meshctl start ts-tag-consumer/src/index.ts -d"
     workdir: /workspace
     capture: start_consumer_3
 
   # Wait longer for registry to clear stale agents
-  - handler: wait
+  - name: "Wait for registry to clear stale agents"
+    handler: wait
     seconds: 25
 
-  - handler: shell
+  - name: "Test 3: Call fetch_required with both available"
+    handler: shell
     command: |
       RESULT=$(meshctl call fetch_required '{"query": "test3"}' 2>&1)
       echo "With both: $RESULT"

@@ -24,7 +24,8 @@ pre_run:
 
 test:
   # Copy UC-level artifacts to workspace and replace version placeholders
-  - handler: shell
+  - name: "Copy UC-level artifacts to workspace"
+    handler: shell
     command: |
       cp -r /uc-artifacts/py-simple-agent /workspace/
       cp -r /uc-artifacts/ts-simple-agent /workspace/
@@ -32,29 +33,34 @@ test:
     capture: copy_output
 
   # Install TypeScript dependencies
-  - handler: shell
+  - name: "Install TypeScript dependencies"
+    handler: shell
     command: "cd ts-simple-agent && npm install --silent"
     workdir: /workspace
     timeout: 120
 
   # Start both agents
-  - handler: shell
+  - name: "Start both agents"
+    handler: shell
     command: "meshctl start py-simple-agent/main.py ts-simple-agent/src/index.ts -d"
     workdir: /workspace
     capture: start_agents
 
   # Wait for registration
-  - handler: wait
+  - name: "Wait for registration"
+    handler: wait
     seconds: 10
 
   # Verify both agents are registered
-  - handler: shell
+  - name: "Verify both agents are registered"
+    handler: shell
     command: "meshctl list"
     workdir: /workspace
     capture: list_output
 
   # === TEST 1: Unique partial name "py-simple" should work ===
-  - handler: shell
+  - name: "Test partial name py-simple resolves"
+    handler: shell
     command: |
       if meshctl status py-simple 2>&1; then
         echo "PASS: py-simple resolved correctly"
@@ -66,7 +72,8 @@ test:
     capture: py_partial
 
   # === TEST 2: Unique partial name "ts-simple" should work ===
-  - handler: shell
+  - name: "Test partial name ts-simple resolves"
+    handler: shell
     command: |
       if meshctl status ts-simple 2>&1; then
         echo "PASS: ts-simple resolved correctly"
@@ -78,7 +85,8 @@ test:
     capture: ts_partial
 
   # === TEST 3: Shorter unique partial "py" should work ===
-  - handler: shell
+  - name: "Test short partial name py resolves"
+    handler: shell
     command: |
       if meshctl status py 2>&1; then
         echo "PASS: py resolved correctly"
@@ -90,7 +98,8 @@ test:
     capture: py_short
 
   # === TEST 4: Ambiguous partial "simple" should fail (matches both agents) ===
-  - handler: shell
+  - name: "Test ambiguous partial name is rejected"
+    handler: shell
     command: |
       # This should fail because "simple" matches both py-simple-agent and ts-simple-agent
       if meshctl status simple 2>&1; then
@@ -103,7 +112,8 @@ test:
     capture: ambiguous_check
 
   # === TEST 5: Non-existent partial should fail ===
-  - handler: shell
+  - name: "Test non-existent partial name is rejected"
+    handler: shell
     command: |
       if meshctl status nonexistent 2>&1; then
         echo "FAIL: Non-existent name should not resolve"

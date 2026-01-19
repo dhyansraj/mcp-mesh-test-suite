@@ -19,27 +19,32 @@ pre_run:
 # Main test steps
 test:
   # Scaffold the agent
-  - handler: shell
+  - name: "Scaffold TypeScript agent"
+    handler: shell
     command: "meshctl scaffold --name test-ts-agent --agent-type tool --lang typescript"
     capture: scaffold_output
 
   # List generated files
-  - handler: shell
+  - name: "List generated files"
+    handler: shell
     command: "find test-ts-agent -type f | sort"
     capture: generated_files
 
   # Check index.ts content
-  - handler: shell
+  - name: "Check index.ts content"
+    handler: shell
     command: "cat test-ts-agent/src/index.ts"
     capture: index_content
 
   # Check package.json content
-  - handler: shell
+  - name: "Check package.json content"
+    handler: shell
     command: "cat test-ts-agent/package.json"
     capture: package_json
 
   # Check helm-values.yaml content
-  - handler: shell
+  - name: "Check helm-values.yaml content"
+    handler: shell
     command: "cat test-ts-agent/helm-values.yaml"
     capture: helm_values
 

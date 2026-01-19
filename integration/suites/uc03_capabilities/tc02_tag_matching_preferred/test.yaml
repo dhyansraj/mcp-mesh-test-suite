@@ -25,7 +25,8 @@ pre_run:
 
 test:
   # Copy artifacts
-  - handler: shell
+  - name: "Copy artifacts to workspace"
+    handler: shell
     command: |
       cp -r /uc-artifacts/py-fast-provider /workspace/
       cp -r /uc-artifacts/py-accurate-provider /workspace/
@@ -33,30 +34,36 @@ test:
     capture: copy_output
 
   # Start both providers
-  - handler: shell
+  - name: "Start fast provider"
+    handler: shell
     command: "meshctl start py-fast-provider/main.py -d"
     workdir: /workspace
     capture: start_fast
 
-  - handler: shell
+  - name: "Start accurate provider"
+    handler: shell
     command: "meshctl start py-accurate-provider/main.py -d"
     workdir: /workspace
     capture: start_accurate
 
-  - handler: wait
+  - name: "Wait for providers registration"
+    handler: wait
     seconds: 10
 
   # Start consumer
-  - handler: shell
+  - name: "Start consumer"
+    handler: shell
     command: "meshctl start py-tag-consumer/main.py -d"
     workdir: /workspace
     capture: start_consumer
 
-  - handler: wait
+  - name: "Wait for consumer registration"
+    handler: wait
     seconds: 10
 
   # Verify all agents registered
-  - handler: shell
+  - name: "Verify all agents registered"
+    handler: shell
     command: |
       meshctl list
       count=$(meshctl list 2>/dev/null | grep -c "provider\|consumer" || echo "0")
@@ -65,7 +72,8 @@ test:
     capture: list_output
 
   # Call fetch_prefer_fast which prefers "+fast"
-  - handler: shell
+  - name: "Call fetch_prefer_fast with preferred tag"
+    handler: shell
     command: |
       RESULT=$(meshctl call fetch_prefer_fast '{"query": "test"}' 2>&1)
       echo "Result: $RESULT"

@@ -26,7 +26,8 @@ pre_run:
 
 test:
   # Copy artifacts
-  - handler: shell
+  - name: "Copy artifacts to workspace"
+    handler: shell
     command: |
       cp -r /uc-artifacts/py-fast-provider /workspace/
       cp -r /uc-artifacts/py-accurate-provider /workspace/
@@ -34,25 +35,30 @@ test:
     capture: copy_output
 
   # Start both providers
-  - handler: shell
+  - name: "Start both providers"
+    handler: shell
     command: "meshctl start py-fast-provider/main.py py-accurate-provider/main.py -d"
     workdir: /workspace
     capture: start_providers
 
-  - handler: wait
+  - name: "Wait for providers registration"
+    handler: wait
     seconds: 10
 
   # Start consumer
-  - handler: shell
+  - name: "Start consumer"
+    handler: shell
     command: "meshctl start py-tag-consumer/main.py -d"
     workdir: /workspace
     capture: start_consumer
 
-  - handler: wait
+  - name: "Wait for consumer registration"
+    handler: wait
     seconds: 10
 
   # Verify all agents registered
-  - handler: shell
+  - name: "Verify all agents registered"
+    handler: shell
     command: |
       meshctl list
       meshctl list --tools | grep -E "data_service|get_data"
@@ -60,7 +66,8 @@ test:
     capture: list_output
 
   # Call fetch_combined which requires api, prefers accurate, excludes deprecated
-  - handler: shell
+  - name: "Call fetch_combined with combined tag filter"
+    handler: shell
     command: |
       RESULT=$(meshctl call fetch_combined '{"query": "test"}' 2>&1)
       echo "Result: $RESULT"
@@ -78,7 +85,8 @@ test:
     capture: call_combined
 
   # Verify we can call both providers' tools directly
-  - handler: shell
+  - name: "Verify data_service capability visible"
+    handler: shell
     command: |
       # Both providers have get_data tool with same capability
       # meshctl should show both as available

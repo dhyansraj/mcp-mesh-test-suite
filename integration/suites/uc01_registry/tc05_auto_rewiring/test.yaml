@@ -28,36 +28,42 @@ pre_run:
 
 test:
   # Copy artifact
-  - handler: shell
+  - name: "Copy artifact to workspace"
+    handler: shell
     command: |
       cp -r /uc-artifacts/py-simple-agent /workspace/
     capture: copy_output
 
   # Start agent (registry auto-starts on port 8000)
-  - handler: shell
+  - name: "Start agent with auto-starting registry"
+    handler: shell
     command: "meshctl start py-simple-agent/main.py -d"
     workdir: /workspace
     capture: start_agent
 
   # Wait for registration
-  - handler: wait
+  - name: "Wait for registration"
+    handler: wait
     seconds: 10
 
   # Verify agent is registered
-  - handler: shell
+  - name: "Verify agent is registered"
+    handler: shell
     command: "meshctl list"
     workdir: /workspace
     capture: list_before
 
   # Get agent port for direct curl call
-  - handler: shell
+  - name: "Get agent port"
+    handler: shell
     command: |
       # py-simple-agent runs on port 9000 (hardcoded in main.py)
       echo "Agent port: 9000"
     capture: agent_port
 
   # Test meshctl call works (via registry)
-  - handler: shell
+  - name: "Test meshctl call via registry"
+    handler: shell
     command: |
       echo "Attempting meshctl call..."
       timeout 10 meshctl call greet '{"name": "Before"}' 2>&1 || echo "Call timed out or failed"
@@ -66,7 +72,8 @@ test:
     capture: call_before
 
   # Stop the registry process (but keep agent running)
-  - handler: shell
+  - name: "Stop registry process"
+    handler: shell
     command: |
       echo "Stopping registry..."
       meshctl stop registry
@@ -75,11 +82,13 @@ test:
     capture: kill_registry
 
   # Short wait for registry to die
-  - handler: wait
+  - name: "Wait for registry to stop"
+    handler: wait
     seconds: 2
 
   # Verify meshctl list fails (registry is down)
-  - handler: shell
+  - name: "Verify meshctl list fails without registry"
+    handler: shell
     command: |
       if timeout 5 meshctl list 2>&1; then
         echo "UNEXPECTED: meshctl list worked without registry"
@@ -91,7 +100,8 @@ test:
     capture: list_after_kill
 
   # === KEY TEST: Direct curl call should still work ===
-  - handler: shell
+  - name: "Test direct curl call without registry"
+    handler: shell
     command: |
       # Call the agent directly via curl (bypassing registry)
       RESPONSE=$(curl -s --max-time 10 -X POST http://localhost:9000/mcp \
@@ -121,7 +131,8 @@ test:
     capture: curl_call
 
   # Also test tools/list via curl
-  - handler: shell
+  - name: "Test tools/list via curl without registry"
+    handler: shell
     command: |
       RESPONSE=$(curl -s --max-time 10 -X POST http://localhost:9000/mcp \
         -H "Content-Type: application/json" \

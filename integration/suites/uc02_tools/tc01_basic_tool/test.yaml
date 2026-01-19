@@ -19,35 +19,41 @@ pre_run:
 
 test:
   # Copy artifact
-  - handler: shell
+  - name: "Copy artifact to workspace"
+    handler: shell
     command: |
       cp -r /uc-artifacts/py-math-agent /workspace/
     capture: copy_output
 
   # Start agent
-  - handler: shell
+  - name: "Start agent"
+    handler: shell
     command: "meshctl start py-math-agent/main.py -d"
     workdir: /workspace
     capture: start_agent
 
   # Wait for registration
-  - handler: wait
+  - name: "Wait for registration"
+    handler: wait
     seconds: 10
 
   # Verify agent is registered
-  - handler: shell
+  - name: "Verify agent is registered"
+    handler: shell
     command: "meshctl list"
     workdir: /workspace
     capture: list_output
 
   # Verify tools are listed
-  - handler: shell
+  - name: "Verify tools are listed"
+    handler: shell
     command: "meshctl list --tools"
     workdir: /workspace
     capture: list_tools
 
   # Call basic tool (add with default behavior)
-  - handler: shell
+  - name: "Call add tool"
+    handler: shell
     command: |
       echo "=== Calling add tool ==="
       RESULT=$(meshctl call add '{"a": 5, "b": 3}' 2>&1)

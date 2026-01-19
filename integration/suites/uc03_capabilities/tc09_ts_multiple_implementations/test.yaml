@@ -21,7 +21,8 @@ pre_run:
 
 test:
   # Copy and setup TypeScript artifacts
-  - handler: shell
+  - name: "Copy and setup TypeScript artifacts"
+    handler: shell
     command: |
       cp -r /uc-artifacts/ts-fast-provider /workspace/
       cp -r /uc-artifacts/ts-accurate-provider /workspace/
@@ -33,7 +34,8 @@ test:
     capture: copy_output
 
   # Install npm dependencies
-  - handler: shell
+  - name: "Install npm dependencies for all TS agents"
+    handler: shell
     command: |
       cd ts-fast-provider && npm install --silent
       cd ../ts-accurate-provider && npm install --silent
@@ -42,31 +44,37 @@ test:
     timeout: 180
 
   # Start both providers
-  - handler: shell
+  - name: "Start both TS providers"
+    handler: shell
     command: "meshctl start ts-fast-provider/src/index.ts ts-accurate-provider/src/index.ts -d"
     workdir: /workspace
     capture: start_providers
 
-  - handler: wait
+  - name: "Wait for providers registration"
+    handler: wait
     seconds: 10
 
   # Start consumer
-  - handler: shell
+  - name: "Start TS tag consumer"
+    handler: shell
     command: "meshctl start ts-tag-consumer/src/index.ts -d"
     workdir: /workspace
     capture: start_consumer
 
-  - handler: wait
+  - name: "Wait for consumer registration"
+    handler: wait
     seconds: 10
 
   # Verify all agents registered
-  - handler: shell
+  - name: "Verify all agents registered"
+    handler: shell
     command: "meshctl list"
     workdir: /workspace
     capture: list_output
 
   # Call fetch_combined which prefers accurate
-  - handler: shell
+  - name: "Call fetch_combined with combined tag filter"
+    handler: shell
     command: |
       RESULT=$(meshctl call fetch_combined '{"query": "test"}' 2>&1)
       echo "Result: $RESULT"

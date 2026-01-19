@@ -25,7 +25,8 @@ pre_run:
 
 test:
   # Copy artifacts
-  - handler: shell
+  - name: "Copy artifacts to workspace"
+    handler: shell
     command: |
       cp -r /uc-artifacts/py-deprecated-provider /workspace/
       cp -r /uc-artifacts/py-fast-provider /workspace/
@@ -33,37 +34,44 @@ test:
     capture: copy_output
 
   # Start deprecated provider first (would normally be matched first)
-  - handler: shell
+  - name: "Start deprecated provider"
+    handler: shell
     command: "meshctl start py-deprecated-provider/main.py -d"
     workdir: /workspace
     capture: start_deprecated
 
   # Start fast provider
-  - handler: shell
+  - name: "Start fast provider"
+    handler: shell
     command: "meshctl start py-fast-provider/main.py -d"
     workdir: /workspace
     capture: start_fast
 
-  - handler: wait
+  - name: "Wait for providers registration"
+    handler: wait
     seconds: 10
 
   # Start consumer
-  - handler: shell
+  - name: "Start consumer"
+    handler: shell
     command: "meshctl start py-tag-consumer/main.py -d"
     workdir: /workspace
     capture: start_consumer
 
-  - handler: wait
+  - name: "Wait for consumer registration"
+    handler: wait
     seconds: 10
 
   # Verify all agents registered
-  - handler: shell
+  - name: "Verify all agents registered"
+    handler: shell
     command: "meshctl list"
     workdir: /workspace
     capture: list_output
 
   # Call fetch_exclude_deprecated which excludes "-deprecated"
-  - handler: shell
+  - name: "Call fetch_exclude_deprecated with excluded tag"
+    handler: shell
     command: |
       RESULT=$(meshctl call fetch_exclude_deprecated '{"query": "test"}' 2>&1)
       echo "Result: $RESULT"

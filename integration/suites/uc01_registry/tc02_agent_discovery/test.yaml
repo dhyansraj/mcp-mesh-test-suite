@@ -23,7 +23,8 @@ pre_run:
 
 test:
   # Copy UC-level artifacts to workspace and replace version placeholders
-  - handler: shell
+  - name: "Copy UC-level artifacts to workspace"
+    handler: shell
     command: |
       cp -r /uc-artifacts/py-simple-agent /workspace/
       cp -r /uc-artifacts/ts-simple-agent /workspace/
@@ -32,47 +33,55 @@ test:
     capture: copy_output
 
   # Install TypeScript dependencies
-  - handler: shell
+  - name: "Install TypeScript dependencies"
+    handler: shell
     command: "cd ts-simple-agent && npm install --silent"
     workdir: /workspace
     timeout: 120
 
   # Start both agents in detached mode
-  - handler: shell
+  - name: "Start both agents in detached mode"
+    handler: shell
     command: "meshctl start py-simple-agent/main.py ts-simple-agent/src/index.ts -d"
     workdir: /workspace
     capture: start_agents
 
   # Wait for agents to register
-  - handler: wait
+  - name: "Wait for agents to register"
+    handler: wait
     seconds: 10
 
   # Test: meshctl list (shows healthy agents)
-  - handler: shell
+  - name: "Test meshctl list command"
+    handler: shell
     command: "meshctl list"
     workdir: /workspace
     capture: list_output
 
   # Test: meshctl list --wide (extended info)
-  - handler: shell
+  - name: "Test meshctl list --wide command"
+    handler: shell
     command: "meshctl list --wide"
     workdir: /workspace
     capture: list_wide
 
   # Test: meshctl list --tools (shows available tools)
-  - handler: shell
+  - name: "Test meshctl list --tools command"
+    handler: shell
     command: "meshctl list --tools"
     workdir: /workspace
     capture: list_tools
 
   # Test: meshctl status (shows wiring details)
-  - handler: shell
+  - name: "Test meshctl status command"
+    handler: shell
     command: "meshctl status"
     workdir: /workspace
     capture: status_output
 
   # Verify tool discovery by capability
-  - handler: shell
+  - name: "Verify tool discovery by capability"
+    handler: shell
     command: |
       if meshctl list --tools | grep -q "simple_greeting"; then
         echo "PASS: simple_greeting capability found"
@@ -85,7 +94,8 @@ test:
     capture: capability_check
 
   # Stop all agents
-  - handler: shell
+  - name: "Stop all agents"
+    handler: shell
     command: "meshctl stop 2>/dev/null || true"
     workdir: /workspace
     ignore_errors: true

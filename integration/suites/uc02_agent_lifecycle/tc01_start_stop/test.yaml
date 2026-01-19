@@ -18,45 +18,53 @@ pre_run:
 
 test:
   # Scaffold a test agent
-  - handler: shell
+  - name: "Scaffold test agent"
+    handler: shell
     command: "meshctl scaffold --name lifecycle-agent --agent-type tool --lang python"
     workdir: /workspace
     capture: scaffold_output
 
   # Start agent with meshctl (detached mode, custom port)
-  - handler: shell
+  - name: "Start agent in detached mode"
+    handler: shell
     command: "meshctl start lifecycle-agent/main.py --env MCP_MESH_HTTP_PORT=3001 -d"
     workdir: /workspace
     capture: start_output
 
   # Wait for agent to start
-  - handler: wait
+  - name: "Wait for agent to start"
+    handler: wait
     seconds: 5
 
   # Check if agent is running with meshctl list
-  - handler: shell
+  - name: "Check agent is running with meshctl list"
+    handler: shell
     command: "meshctl list"
     workdir: /workspace
     capture: list_output
 
   # Show agent logs for debugging
-  - handler: shell
+  - name: "Show agent logs for debugging"
+    handler: shell
     command: "meshctl logs lifecycle-agent 2>/dev/null | tail -20 || echo 'no logs'"
     workdir: /workspace
     capture: agent_logs
 
   # Stop agents with meshctl stop
-  - handler: shell
+  - name: "Stop agents with meshctl stop"
+    handler: shell
     command: "meshctl stop"
     workdir: /workspace
     capture: stop_output
 
   # Wait for process to terminate
-  - handler: wait
+  - name: "Wait for process to terminate"
+    handler: wait
     seconds: 2
 
   # Verify agent is stopped
-  - handler: shell
+  - name: "Verify agent is stopped"
+    handler: shell
     command: "meshctl list 2>&1 || echo 'no agents'"
     workdir: /workspace
     capture: stop_check

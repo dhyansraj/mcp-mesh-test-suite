@@ -20,7 +20,8 @@ pre_run:
 
 test:
   # Copy and setup TypeScript artifacts
-  - handler: shell
+  - name: "Copy and setup TypeScript artifacts"
+    handler: shell
     command: |
       cp -r /uc-artifacts/ts-deprecated-provider /workspace/
       cp -r /uc-artifacts/ts-fast-provider /workspace/
@@ -32,7 +33,8 @@ test:
     capture: copy_output
 
   # Install npm dependencies
-  - handler: shell
+  - name: "Install npm dependencies for all TS agents"
+    handler: shell
     command: |
       cd ts-deprecated-provider && npm install --silent
       cd ../ts-fast-provider && npm install --silent
@@ -41,31 +43,37 @@ test:
     timeout: 180
 
   # Start both providers
-  - handler: shell
+  - name: "Start both TS providers"
+    handler: shell
     command: "meshctl start ts-deprecated-provider/src/index.ts ts-fast-provider/src/index.ts -d"
     workdir: /workspace
     capture: start_providers
 
-  - handler: wait
+  - name: "Wait for providers registration"
+    handler: wait
     seconds: 10
 
   # Start consumer
-  - handler: shell
+  - name: "Start TS tag consumer"
+    handler: shell
     command: "meshctl start ts-tag-consumer/src/index.ts -d"
     workdir: /workspace
     capture: start_consumer
 
-  - handler: wait
+  - name: "Wait for consumer registration"
+    handler: wait
     seconds: 10
 
   # Verify all agents registered
-  - handler: shell
+  - name: "Verify all agents registered"
+    handler: shell
     command: "meshctl list"
     workdir: /workspace
     capture: list_output
 
   # Call fetch_exclude_deprecated which excludes "-deprecated"
-  - handler: shell
+  - name: "Call fetch_exclude_deprecated with excluded tag"
+    handler: shell
     command: |
       RESULT=$(meshctl call fetch_exclude_deprecated '{"query": "test"}' 2>&1)
       echo "Result: $RESULT"

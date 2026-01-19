@@ -24,32 +24,38 @@ pre_run:
 
 test:
   # Copy artifacts
-  - handler: shell
+  - name: "Copy artifacts to workspace"
+    handler: shell
     command: |
       cp -r /uc-artifacts/py-fast-provider /workspace/
       cp -r /uc-artifacts/py-tag-consumer /workspace/
     capture: copy_output
 
   # Start provider with api,fast tags
-  - handler: shell
+  - name: "Start provider with api,fast tags"
+    handler: shell
     command: "meshctl start py-fast-provider/main.py -d"
     workdir: /workspace
     capture: start_provider
 
-  - handler: wait
+  - name: "Wait for provider registration"
+    handler: wait
     seconds: 8
 
   # Start consumer
-  - handler: shell
+  - name: "Start consumer"
+    handler: shell
     command: "meshctl start py-tag-consumer/main.py -d"
     workdir: /workspace
     capture: start_consumer
 
-  - handler: wait
+  - name: "Wait for consumer registration"
+    handler: wait
     seconds: 10
 
   # Verify both agents registered
-  - handler: shell
+  - name: "Verify both agents registered"
+    handler: shell
     command: |
       meshctl list
       meshctl list --tools
@@ -57,7 +63,8 @@ test:
     capture: list_output
 
   # Call fetch_required which requires "api" tag
-  - handler: shell
+  - name: "Call fetch_required with api tag"
+    handler: shell
     command: |
       RESULT=$(meshctl call fetch_required '{"query": "test"}' 2>&1)
       echo "Result: $RESULT"
