@@ -1,10 +1,12 @@
 # MCP Mesh Library Test Suite Configuration
 # Tests package availability and builds the tsuite-mesh base image
 #
-# IMPORTANT: Run this suite WITHOUT --docker flag
-#   cd mcp-mesh-lib-test-suites && tsuite --all
-#
 # After successful run, use the built image in mcp-mesh-test-suites
+
+# Suite settings
+suite:
+  name: "MCP Mesh Library Tests"
+  mode: "standalone"  # 'docker' or 'standalone' - this suite runs without docker
 
 packages:
   # Version to test - update this for each release

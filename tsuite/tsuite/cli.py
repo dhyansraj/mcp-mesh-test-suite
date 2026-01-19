@@ -32,6 +32,8 @@ from . import db
 from . import repository as repo
 from .models import RunStatus, TestStatus
 from . import reporter
+from .sse import sse_manager
+from .models import SuiteMode
 
 console = Console()
 
@@ -66,6 +68,37 @@ def get_handlers() -> dict:
         "wait": wait.execute,
         "llm": llm.execute,
     }
+
+
+def sync_suite_to_db(suite_path: Path, config: dict, test_count: int) -> None:
+    """
+    Sync the suite configuration to the database.
+    Called when running tests from CLI to keep DB in sync with YAML.
+    """
+    import json
+
+    folder_path = str(suite_path.resolve())
+
+    # Get suite info from config
+    suite_config = config.get("suite", {})
+    suite_name = suite_config.get("name", suite_path.name)
+    mode_str = suite_config.get("mode", "docker")
+
+    try:
+        mode = SuiteMode(mode_str)
+    except ValueError:
+        mode = SuiteMode.DOCKER
+
+    # Upsert suite (create or update)
+    repo.upsert_suite(
+        folder_path=folder_path,
+        suite_name=suite_name,
+        mode=mode,
+        config_json=json.dumps(config),
+        test_count=test_count,
+    )
+
+    console.print(f"[dim]Suite synced: {suite_name}[/dim]")
 
 
 def print_banner(config: dict, test_count: int):
@@ -350,9 +383,9 @@ def main(
 
         failed_test_ids = [t.test_id for t in failed_tests]
         console.print(f"[yellow]Retrying {len(failed_test_ids)} failed test(s) from run {latest_run.run_id[:8]}[/yellow]")
-    # Determine suite path
+    # Determine suite path (always resolve to absolute for Docker volume mounts)
     if suite_path:
-        suite = Path(suite_path)
+        suite = Path(suite_path).resolve()
     else:
         # Try to find suite in current directory or parent
         cwd = Path.cwd()
@@ -372,6 +405,9 @@ def main(
     discovery = TestDiscovery(suite)
     all_tests = discovery.discover_tests()
     routine_sets = discovery.discover_routines()
+
+    # Sync suite to database (keeps DB in sync with YAML for dashboard)
+    sync_suite_to_db(suite, config, len(all_tests))
 
     # Filter tests
     if retry_failed and failed_test_ids:
@@ -440,6 +476,9 @@ def main(
     _current_run_id = run.run_id
     console.print(f"[dim]Run ID: {run.run_id[:12]}...[/dim]")
 
+    # Emit SSE run_started event
+    sse_manager.emit_run_started(run.run_id, len(tests))
+
     # Create test result records for all tests
     test_result_map = {}  # test_id -> db test_result_id
     for test in tests:
@@ -469,6 +508,7 @@ def main(
             stop_on_fail=stop_on_fail,
             image_override=image,
             test_result_map=test_result_map,
+            run_id=run.run_id,
         )
     else:
         results = run_local_mode(
@@ -480,10 +520,23 @@ def main(
             verbose=verbose,
             stop_on_fail=stop_on_fail,
             test_result_map=test_result_map,
+            run_id=run.run_id,
         )
 
     # Complete run record
     repo.complete_run(run.run_id)
+
+    # Emit SSE run_completed event
+    passed_count = sum(1 for r in results if r.passed)
+    failed_count = sum(1 for r in results if not r.passed)
+    total_duration_ms = int(sum(r.duration for r in results) * 1000)
+    sse_manager.emit_run_completed(
+        run_id=run.run_id,
+        passed=passed_count,
+        failed=failed_count,
+        skipped=0,
+        duration_ms=total_duration_ms,
+    )
 
     # Print summary
     print_summary(results, run.run_id)
@@ -520,6 +573,7 @@ def run_local_mode(
     verbose: bool,
     stop_on_fail: bool,
     test_result_map: dict | None = None,
+    run_id: str | None = None,
 ) -> list[TestResult]:
     """Run tests in local mode (no Docker)."""
     # Setup routine resolver
@@ -563,6 +617,11 @@ def run_local_mode(
                         started_at=datetime.now(),
                     )
 
+                # Emit SSE test_started event
+                run_id = _current_run_id
+                if run_id:
+                    sse_manager.emit_test_started(run_id, test.id, test.name)
+
                 result = executor.execute(test)
                 results.append(result)
 
@@ -575,6 +634,17 @@ def run_local_mode(
                         finished_at=datetime.now(),
                         duration_ms=int(result.duration * 1000),
                         error_message=result.error,
+                    )
+
+                # Emit SSE test_completed event
+                if run_id:
+                    sse_manager.emit_test_completed(
+                        run_id=run_id,
+                        test_id=test.id,
+                        status="passed" if result.passed else "failed",
+                        duration_ms=int(result.duration * 1000),
+                        passed=result.steps_passed,
+                        failed=result.steps_failed,
                     )
 
                 print_test_result(result, verbose)
@@ -598,6 +668,7 @@ def run_docker_mode(
     stop_on_fail: bool,
     image_override: str | None = None,
     test_result_map: dict | None = None,
+    run_id: str | None = None,
 ) -> list[TestResult]:
     """Run tests in Docker containers."""
     from .docker_executor import DockerExecutor, ContainerConfig, check_docker_available
@@ -610,7 +681,7 @@ def run_docker_mode(
         from .discovery import TestDiscovery
         discovery = TestDiscovery(suite)
         routine_sets = discovery.discover_routines()
-        return run_local_mode(tests, routine_sets, suite, workdir, port, verbose, stop_on_fail, test_result_map)
+        return run_local_mode(tests, routine_sets, suite, workdir, port, verbose, stop_on_fail, test_result_map, run_id)
 
     console.print(f"[dim]Docker: {info}[/dim]")
 
@@ -636,6 +707,7 @@ def run_docker_mode(
             suite_path=suite,
             base_workdir=workdir,
             config=container_config,
+            run_id=run_id,
         )
 
         with Progress(
@@ -658,6 +730,11 @@ def run_docker_mode(
                         status=TestStatus.RUNNING,
                         started_at=start_time,
                     )
+
+                # Emit SSE test_started event
+                run_id = _current_run_id
+                if run_id:
+                    sse_manager.emit_test_started(run_id, test.id, test.name)
 
                 docker_result = executor.execute_test(test)
 
@@ -687,6 +764,17 @@ def run_docker_mode(
                         finished_at=datetime.now(),
                         duration_ms=int(result.duration * 1000),
                         error_message=result.error,
+                    )
+
+                # Emit SSE test_completed event
+                if run_id:
+                    sse_manager.emit_test_completed(
+                        run_id=run_id,
+                        test_id=test.id,
+                        status="passed" if result.passed else "failed",
+                        duration_ms=int(result.duration * 1000),
+                        passed=result.steps_passed,
+                        failed=result.steps_failed,
                     )
 
                 # Print Docker output

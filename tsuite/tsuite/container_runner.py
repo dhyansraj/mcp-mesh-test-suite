@@ -31,9 +31,17 @@ def run_test(test_yaml_path: str, suite_path: str):
         test_yaml_path: Path to test.yaml file
         suite_path: Path to test suite root (for loading config/routines)
     """
+    import time
+    start_time = time.time()
+
     # Initialize client for server communication
     client = RunnerClient()
     test_id = os.environ.get("TSUITE_TEST_ID", "unknown")
+    run_id = os.environ.get("TSUITE_RUN_ID")
+
+    # Report test started (new API architecture)
+    if run_id:
+        client.report_test_running(run_id, test_id)
 
     # Load test configuration
     with open(test_yaml_path) as f:
@@ -149,6 +157,33 @@ def run_test(test_yaml_path: str, suite_path: str):
     # Report final status
     status = "passed" if results["passed"] else "failed"
     client.progress(4, status, f"Test {status}")
+
+    # Calculate duration and step counts
+    duration_ms = int((time.time() - start_time) * 1000)
+    steps_passed = sum(1 for s in results["steps"] if s["result"].get("success"))
+    steps_failed = sum(1 for s in results["steps"] if not s["result"].get("success"))
+
+    # Report test completed via API (new architecture)
+    if run_id:
+        if results["passed"]:
+            client.report_test_passed(
+                run_id=run_id,
+                test_id=test_id,
+                duration_ms=duration_ms,
+                steps_passed=steps_passed,
+                steps_failed=steps_failed,
+                steps=results["steps"],
+            )
+        else:
+            client.report_test_failed(
+                run_id=run_id,
+                test_id=test_id,
+                duration_ms=duration_ms,
+                error_message=results["error"],
+                steps_passed=steps_passed,
+                steps_failed=steps_failed,
+                steps=results["steps"],
+            )
 
     # Print summary
     print(f"\n{'='*50}")

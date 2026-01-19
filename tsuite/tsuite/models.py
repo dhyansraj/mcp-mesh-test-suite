@@ -33,6 +33,11 @@ class StepStatus(Enum):
     SKIPPED = "skipped"
 
 
+class SuiteMode(Enum):
+    DOCKER = "docker"
+    STANDALONE = "standalone"
+
+
 @dataclass
 class Run:
     """Represents a test run session."""
@@ -40,19 +45,25 @@ class Run:
     started_at: datetime
     finished_at: Optional[datetime] = None
     status: RunStatus = RunStatus.PENDING
+    suite_id: Optional[int] = None
     cli_version: Optional[str] = None
     sdk_python_version: Optional[str] = None
     sdk_typescript_version: Optional[str] = None
     docker_image: Optional[str] = None
     total_tests: int = 0
+    pending_count: int = 0
+    running_count: int = 0
     passed: int = 0
     failed: int = 0
     skipped: int = 0
     duration_ms: Optional[int] = None
+    filters: Optional[dict] = None
+    mode: str = "docker"
 
     def to_dict(self) -> dict:
         return {
             "run_id": self.run_id,
+            "suite_id": self.suite_id,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
             "status": self.status.value,
@@ -61,16 +72,28 @@ class Run:
             "sdk_typescript_version": self.sdk_typescript_version,
             "docker_image": self.docker_image,
             "total_tests": self.total_tests,
+            "pending_count": self.pending_count,
+            "running_count": self.running_count,
             "passed": self.passed,
             "failed": self.failed,
             "skipped": self.skipped,
             "duration_ms": self.duration_ms,
+            "filters": self.filters,
+            "mode": self.mode,
         }
 
     @classmethod
     def from_row(cls, row) -> "Run":
+        filters = None
+        if row["filters"]:
+            try:
+                filters = json.loads(row["filters"])
+            except json.JSONDecodeError:
+                filters = None
+
         return cls(
             run_id=row["run_id"],
+            suite_id=row["suite_id"],
             started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
             finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
             status=RunStatus(row["status"]),
@@ -79,16 +102,20 @@ class Run:
             sdk_typescript_version=row["sdk_typescript_version"],
             docker_image=row["docker_image"],
             total_tests=row["total_tests"] or 0,
+            pending_count=row["pending_count"] or 0,
+            running_count=row["running_count"] or 0,
             passed=row["passed"] or 0,
             failed=row["failed"] or 0,
             skipped=row["skipped"] or 0,
             duration_ms=row["duration_ms"],
+            filters=filters,
+            mode=row["mode"] or "docker",
         )
 
 
 @dataclass
 class TestResult:
-    """Represents a test case result."""
+    """Represents a test case result (also used for live tracking)."""
     id: Optional[int] = None
     run_id: str = ""
     test_id: str = ""
@@ -102,6 +129,10 @@ class TestResult:
     duration_ms: Optional[int] = None
     error_message: Optional[str] = None
     error_step: Optional[int] = None
+    skip_reason: Optional[str] = None
+    steps_json: Optional[List[dict]] = None
+    steps_passed: int = 0
+    steps_failed: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -118,6 +149,10 @@ class TestResult:
             "duration_ms": self.duration_ms,
             "error_message": self.error_message,
             "error_step": self.error_step,
+            "skip_reason": self.skip_reason,
+            "steps": self.steps_json,
+            "steps_passed": self.steps_passed,
+            "steps_failed": self.steps_failed,
         }
 
     @classmethod
@@ -128,6 +163,13 @@ class TestResult:
                 tags = json.loads(row["tags"])
             except json.JSONDecodeError:
                 tags = []
+
+        steps_json = None
+        if row["steps_json"]:
+            try:
+                steps_json = json.loads(row["steps_json"])
+            except json.JSONDecodeError:
+                steps_json = None
 
         return cls(
             id=row["id"],
@@ -143,6 +185,10 @@ class TestResult:
             duration_ms=row["duration_ms"],
             error_message=row["error_message"],
             error_step=row["error_step"],
+            skip_reason=row["skip_reason"],
+            steps_json=steps_json,
+            steps_passed=row["steps_passed"] or 0,
+            steps_failed=row["steps_failed"] or 0,
         )
 
 
@@ -263,6 +309,48 @@ class CapturedValue:
             key=row["key"],
             value=row["value"],
             captured_at=datetime.fromisoformat(row["captured_at"]) if row["captured_at"] else None,
+        )
+
+
+@dataclass
+class Suite:
+    """Represents a registered test suite."""
+    id: Optional[int] = None
+    folder_path: str = ""
+    suite_name: str = ""
+    mode: SuiteMode = SuiteMode.DOCKER
+    config_json: Optional[str] = None
+    test_count: int = 0
+    last_synced_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "folder_path": self.folder_path,
+            "suite_name": self.suite_name,
+            "mode": self.mode.value,
+            "config_json": self.config_json,
+            "config": json.loads(self.config_json) if self.config_json else None,
+            "test_count": self.test_count,
+            "last_synced_at": self.last_synced_at.isoformat() if self.last_synced_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    @classmethod
+    def from_row(cls, row) -> "Suite":
+        return cls(
+            id=row["id"],
+            folder_path=row["folder_path"],
+            suite_name=row["suite_name"],
+            mode=SuiteMode(row["mode"]),
+            config_json=row["config_json"],
+            test_count=row["test_count"] or 0,
+            last_synced_at=datetime.fromisoformat(row["last_synced_at"]) if row["last_synced_at"] else None,
+            created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+            updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None,
         )
 
 

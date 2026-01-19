@@ -19,6 +19,7 @@ from werkzeug.serving import make_server
 from .context import runtime
 from . import repository as repo
 from .models import RunStatus, TestStatus
+from .sse import sse_manager, stream_events, SSEEvent
 
 # Suppress Flask's default logging
 log = logging.getLogger("werkzeug")
@@ -28,6 +29,14 @@ log.setLevel(logging.ERROR)
 def create_app() -> Flask:
     """Create the Flask application."""
     app = Flask(__name__)
+
+    @app.after_request
+    def add_cors_headers(response):
+        """Add CORS headers to all responses for dashboard access."""
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return response
 
     @app.route("/health", methods=["GET"])
     def health():
@@ -207,6 +216,254 @@ def create_app() -> Flask:
 
         return jsonify(detail.to_dict())
 
+    # =========================================================================
+    # Run Management API (New Architecture)
+    # =========================================================================
+
+    @app.route("/api/runs", methods=["POST"])
+    def api_create_run():
+        """
+        Create a new test run with all tests in PENDING state.
+
+        Request body:
+            suite_id: int - The suite to run tests from
+            filters: dict (optional) - Filters to select tests
+                uc: list[str] - Use cases to include
+                tc: list[str] - Test cases to include
+                tags: list[str] - Tags to filter by
+
+        Returns:
+            run_id: str
+            total_tests: int
+            tests: list of test objects with pending status
+        """
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON body"}), 400
+
+        suite_id = data.get("suite_id")
+        if not suite_id:
+            return jsonify({"error": "Missing 'suite_id' field"}), 400
+
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        # Get filters
+        filters = data.get("filters", {})
+        uc_filter = filters.get("uc", [])
+        tc_filter = filters.get("tc", [])
+        tag_filter = filters.get("tags", [])
+
+        # Load and resolve tests from suite
+        from .discovery import TestDiscovery
+        import os
+
+        if not os.path.isdir(suite.folder_path):
+            return jsonify({"error": f"Suite directory not found: {suite.folder_path}"}), 400
+
+        try:
+            discovery = TestDiscovery(suite.folder_path)
+            all_tests = discovery.discover_tests()
+        except Exception as e:
+            return jsonify({"error": f"Failed to load suite: {str(e)}"}), 500
+
+        # Resolve tests based on filters
+        resolved_tests = []
+        for test in all_tests:
+            # Apply filters
+            include = True
+
+            if tc_filter:
+                include = test.id in tc_filter
+
+            if uc_filter and include:
+                include = test.uc in uc_filter
+
+            if tag_filter and include:
+                include = any(tag in (test.tags or []) for tag in tag_filter)
+
+            if include:
+                resolved_tests.append({
+                    "test_id": test.id,
+                    "use_case": test.uc,
+                    "test_case": test.tc,
+                    "name": test.name,
+                    "tags": test.tags,
+                })
+
+        if not resolved_tests:
+            return jsonify({"error": "No tests match the specified filters"}), 400
+
+        # Create run with tests
+        run = repo.create_run_with_tests(
+            suite_id=suite_id,
+            tests=resolved_tests,
+            filters=filters if filters else None,
+            mode=suite.mode.value,
+        )
+
+        # Get created tests
+        tests = repo.list_test_results(run.run_id)
+
+        return jsonify({
+            "run_id": run.run_id,
+            "suite_id": suite_id,
+            "total_tests": run.total_tests,
+            "status": run.status.value,
+            "mode": run.mode,
+            "tests": [t.to_dict() for t in tests],
+        }), 201
+
+    @app.route("/api/runs/<run_id>/start", methods=["POST"])
+    def api_start_run(run_id: str):
+        """
+        Start a previously created run.
+
+        This marks the run as RUNNING and can optionally dispatch to a runner.
+        """
+        run = repo.get_run(run_id)
+        if not run:
+            return jsonify({"error": f"Run not found: {run_id}"}), 404
+
+        if run.status != RunStatus.PENDING:
+            return jsonify({"error": f"Run already started or completed"}), 400
+
+        repo.start_run(run_id)
+
+        # Emit SSE event
+        sse_manager.emit_run_started(run_id, run.total_tests)
+
+        return jsonify({
+            "run_id": run_id,
+            "status": "running",
+            "message": "Run started",
+        })
+
+    @app.route("/api/runs/<run_id>/tests/tree", methods=["GET"])
+    def api_get_run_tests_tree(run_id: str):
+        """
+        Get test results grouped by use case (tree structure).
+
+        Returns hierarchical structure for dashboard display.
+        """
+        run = repo.get_run(run_id)
+        if not run:
+            return jsonify({"error": f"Run not found: {run_id}"}), 404
+
+        grouped = repo.get_tests_by_usecase(run_id)
+
+        # Convert to list and serialize
+        use_cases = []
+        for uc_id, uc_data in sorted(grouped.items()):
+            use_cases.append({
+                "use_case": uc_data["use_case"],
+                "tests": [t.to_dict() for t in uc_data["tests"]],
+                "pending": uc_data["pending"],
+                "running": uc_data["running"],
+                "passed": uc_data["passed"],
+                "failed": uc_data["failed"],
+                "skipped": uc_data["skipped"],
+                "total": uc_data["total"],
+            })
+
+        return jsonify({
+            "run_id": run_id,
+            "run": run.to_dict(),
+            "use_cases": use_cases,
+        })
+
+    @app.route("/api/runs/<run_id>/tests/<path:test_id>", methods=["PATCH"])
+    def api_update_test_status(run_id: str, test_id: str):
+        """
+        Update the status of a specific test.
+
+        Called by test runners to report progress.
+
+        Request body:
+            status: str - 'running', 'passed', 'failed', 'skipped'
+            duration_ms: int (optional)
+            error_message: str (optional)
+            steps: list (optional) - Step results
+            skip_reason: str (optional)
+        """
+        run = repo.get_run(run_id)
+        if not run:
+            return jsonify({"error": f"Run not found: {run_id}"}), 404
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON body"}), 400
+
+        status_str = data.get("status")
+        if not status_str:
+            return jsonify({"error": "Missing 'status' field"}), 400
+
+        try:
+            status = TestStatus(status_str)
+        except ValueError:
+            return jsonify({"error": f"Invalid status: {status_str}"}), 400
+
+        # Update test status
+        test = repo.update_test_status(
+            run_id=run_id,
+            test_id=test_id,
+            status=status,
+            duration_ms=data.get("duration_ms"),
+            error_message=data.get("error_message"),
+            steps_json=data.get("steps"),
+            steps_passed=data.get("steps_passed"),
+            steps_failed=data.get("steps_failed"),
+            skip_reason=data.get("skip_reason"),
+        )
+
+        if not test:
+            return jsonify({"error": f"Test not found: {test_id}"}), 404
+
+        # Emit SSE event
+        if status == TestStatus.RUNNING:
+            sse_manager.emit_test_started(run_id, test_id, test.name or test_id)
+        elif status in (TestStatus.PASSED, TestStatus.FAILED, TestStatus.SKIPPED):
+            sse_manager.emit_test_completed(
+                run_id, test_id, status.value,
+                data.get("duration_ms", 0),
+                data.get("steps_passed", 0),
+                data.get("steps_failed", 0),
+            )
+
+        return jsonify(test.to_dict())
+
+    @app.route("/api/runs/<run_id>/complete", methods=["POST"])
+    def api_complete_run(run_id: str):
+        """
+        Mark a run as completed.
+
+        Request body:
+            duration_ms: int (optional) - Total run duration
+        """
+        run = repo.get_run(run_id)
+        if not run:
+            return jsonify({"error": f"Run not found: {run_id}"}), 404
+
+        data = request.get_json() or {}
+        duration_ms = data.get("duration_ms")
+
+        repo.complete_run(run_id, duration_ms=duration_ms)
+
+        # Get updated run
+        run = repo.get_run(run_id)
+
+        # Emit SSE event
+        sse_manager.emit_run_completed(
+            run_id,
+            passed=run.passed,
+            failed=run.failed,
+            skipped=run.skipped,
+            duration_ms=run.duration_ms or 0,
+        )
+
+        return jsonify(run.to_dict())
+
     @app.route("/api/stats", methods=["GET"])
     def api_stats():
         """
@@ -304,17 +561,28 @@ def create_app() -> Flask:
         """
         Server-Sent Events stream for live run updates.
 
-        Clients can subscribe to get real-time status changes.
+        Clients can subscribe to get real-time status changes for a specific run.
         """
         def generate():
-            # Initial state
-            summary = repo.get_run_summary(run_id)
-            if summary:
-                yield f"data: {json.dumps(summary.to_dict())}\n\n"
+            # Subscribe to run events
+            queue = sse_manager.subscribe_run(run_id)
 
-            # For now, just send initial state
-            # Future: implement proper event streaming with polling or pubsub
-            yield f"data: {json.dumps({'type': 'connected', 'run_id': run_id})}\n\n"
+            try:
+                # Send initial state
+                summary = repo.get_run_summary(run_id)
+                if summary:
+                    yield f"data: {json.dumps({'type': 'initial_state', 'run_id': run_id, **summary.to_dict()})}\n\n"
+
+                # Send connected event
+                yield f"data: {json.dumps({'type': 'connected', 'run_id': run_id})}\n\n"
+
+                # Stream events
+                for event in stream_events(queue):
+                    yield event
+
+            finally:
+                # Clean up subscription
+                sse_manager.unsubscribe_run(run_id, queue)
 
         return Response(
             generate(),
@@ -322,10 +590,655 @@ def create_app() -> Flask:
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
             },
         )
 
+    @app.route("/api/events", methods=["GET"])
+    def api_global_events():
+        """
+        Server-Sent Events stream for all test events.
+
+        Clients can subscribe to get real-time updates across all runs.
+        Used by the dashboard live view.
+
+        Query params:
+            run_id: Optional filter to only receive events for a specific run
+        """
+        filter_run_id = request.args.get("run_id")
+
+        def generate():
+            # Subscribe to global events
+            queue = sse_manager.subscribe_global()
+
+            try:
+                # Send connected event
+                current_run = sse_manager.get_current_run()
+                yield f"data: {json.dumps({'type': 'connected', 'current_run_id': current_run})}\n\n"
+
+                # Replay cached events for current run (for late subscribers)
+                if current_run:
+                    cached_events = sse_manager.get_cached_events(current_run)
+                    for cached_event in cached_events:
+                        yield cached_event
+
+                # Stream events
+                for event in stream_events(queue):
+                    # If filtering by run_id, check if event matches
+                    if filter_run_id and event.startswith("data:"):
+                        try:
+                            event_data = json.loads(event[5:].strip())
+                            if event_data.get("run_id") != filter_run_id:
+                                continue
+                        except (json.JSONDecodeError, IndexError):
+                            pass
+                    yield event
+
+            finally:
+                # Clean up subscription
+                sse_manager.unsubscribe_global(queue)
+
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.route("/api/events/emit", methods=["POST"])
+    def api_emit_event():
+        """
+        Receive events from external processes (like CLI subprocesses) and broadcast via SSE.
+
+        This endpoint allows the CLI running in a subprocess to send events
+        to the API server, which then broadcasts them to all SSE subscribers.
+
+        Request body:
+            type: Event type (run_started, test_started, test_completed, run_completed, etc.)
+            run_id: The run ID
+            ... other event-specific fields
+        """
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON body"}), 400
+
+        event_type = data.get("type")
+        run_id = data.get("run_id")
+
+        if not event_type:
+            return jsonify({"error": "Missing 'type' field"}), 400
+
+        # Create and emit the event
+        event = SSEEvent(type=event_type, data=data)
+        sse_manager.emit(event, run_id=run_id)
+
+        # Update current run tracking
+        if event_type == "run_started":
+            sse_manager.set_current_run(run_id)
+        elif event_type == "run_completed":
+            sse_manager.set_current_run(None)
+            # Clear event cache after run completes (allow time for late subscribers)
+            # Note: Don't clear immediately in case clients are still catching up
+            # The cache will be naturally replaced when next run starts
+
+        return jsonify({"ok": True}), 200
+
+    # =========================================================================
+    # Suite Management API Endpoints
+    # =========================================================================
+
+    @app.route("/api/suites", methods=["GET"])
+    def api_list_suites():
+        """List all registered test suites."""
+        suites = repo.list_suites()
+        return jsonify({
+            "suites": [s.to_dict() for s in suites],
+            "count": len(suites),
+        })
+
+    @app.route("/api/suites", methods=["POST"])
+    def api_create_suite():
+        """
+        Register a new test suite by folder path.
+
+        Request body:
+            folder_path: Absolute path to the suite folder
+            mode: 'docker' or 'standalone' (optional, defaults to config or 'docker')
+        """
+        data = request.get_json() or {}
+        folder_path = data.get("folder_path")
+
+        if not folder_path:
+            return jsonify({"error": "folder_path is required"}), 400
+
+        # Normalize and validate path
+        import os
+        folder_path = os.path.abspath(os.path.expanduser(folder_path))
+
+        if not os.path.isdir(folder_path):
+            return jsonify({"error": f"Directory not found: {folder_path}"}), 400
+
+        # Check for config.yaml
+        config_path = os.path.join(folder_path, "config.yaml")
+        if not os.path.isfile(config_path):
+            return jsonify({"error": f"No config.yaml found in {folder_path}"}), 400
+
+        # Check if suite already exists
+        existing = repo.get_suite_by_path(folder_path)
+        if existing:
+            return jsonify({"error": "Suite already exists", "suite": existing.to_dict()}), 409
+
+        # Parse config and discover tests
+        try:
+            suite_info = _parse_suite_config(folder_path)
+        except Exception as e:
+            return jsonify({"error": f"Failed to parse config: {str(e)}"}), 400
+
+        # Override mode if provided
+        mode_str = data.get("mode") or suite_info.get("mode", "docker")
+        from .models import SuiteMode
+        try:
+            mode = SuiteMode(mode_str)
+        except ValueError:
+            return jsonify({"error": f"Invalid mode: {mode_str}. Must be 'docker' or 'standalone'"}), 400
+
+        # Create suite
+        suite = repo.create_suite(
+            folder_path=folder_path,
+            suite_name=suite_info.get("name", os.path.basename(folder_path)),
+            mode=mode,
+            config_json=json.dumps(suite_info.get("config", {})),
+            test_count=suite_info.get("test_count", 0),
+        )
+
+        return jsonify({
+            **suite.to_dict(),
+            "tests": suite_info.get("tests", []),
+        }), 201
+
+    @app.route("/api/suites/<int:suite_id>", methods=["GET"])
+    def api_get_suite(suite_id: int):
+        """Get suite details with test list."""
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        # Parse tests from folder
+        import os
+        tests = []
+        use_cases = []
+        if os.path.isdir(suite.folder_path):
+            try:
+                suite_info = _parse_suite_config(suite.folder_path)
+                tests = suite_info.get("tests", [])
+                use_cases = suite_info.get("use_cases", [])
+            except Exception:
+                pass
+
+        return jsonify({
+            **suite.to_dict(),
+            "tests": tests,
+            "use_cases": use_cases,
+        })
+
+    @app.route("/api/suites/<int:suite_id>", methods=["PUT"])
+    def api_update_suite(suite_id: int):
+        """Update suite settings."""
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        data = request.get_json() or {}
+
+        mode = None
+        if "mode" in data:
+            from .models import SuiteMode
+            try:
+                mode = SuiteMode(data["mode"])
+            except ValueError:
+                return jsonify({"error": f"Invalid mode: {data['mode']}"}), 400
+
+        repo.update_suite(
+            suite_id,
+            suite_name=data.get("suite_name"),
+            mode=mode,
+        )
+
+        return jsonify(repo.get_suite(suite_id).to_dict())
+
+    @app.route("/api/suites/<int:suite_id>", methods=["DELETE"])
+    def api_delete_suite(suite_id: int):
+        """Remove a suite from settings (does not delete files)."""
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        repo.delete_suite(suite_id)
+        return jsonify({"deleted": True, "id": suite_id})
+
+    @app.route("/api/suites/<int:suite_id>/sync", methods=["POST"])
+    def api_sync_suite(suite_id: int):
+        """Re-read config.yaml and update cached config."""
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        import os
+        if not os.path.isdir(suite.folder_path):
+            return jsonify({"error": f"Directory not found: {suite.folder_path}"}), 400
+
+        try:
+            suite_info = _parse_suite_config(suite.folder_path)
+        except Exception as e:
+            return jsonify({"error": f"Failed to parse config: {str(e)}"}), 400
+
+        # Update mode from config if present
+        from .models import SuiteMode
+        mode_str = suite_info.get("mode", suite.mode.value)
+        try:
+            mode = SuiteMode(mode_str)
+        except ValueError:
+            mode = suite.mode
+
+        repo.update_suite(
+            suite_id,
+            suite_name=suite_info.get("name", suite.suite_name),
+            mode=mode,
+            config_json=json.dumps(suite_info.get("config", {})),
+            test_count=suite_info.get("test_count", 0),
+        )
+
+        updated = repo.get_suite(suite_id)
+        return jsonify({
+            "synced": True,
+            "test_count": updated.test_count,
+            "last_synced_at": updated.last_synced_at.isoformat() if updated.last_synced_at else None,
+        })
+
+    @app.route("/api/suites/<int:suite_id>/resolve", methods=["POST"])
+    def api_resolve_tests(suite_id: int):
+        """
+        Resolve (dry-run) test selection without creating a run.
+
+        This endpoint allows clients to preview which tests would be selected
+        based on the provided filters before actually creating a run.
+
+        Request body:
+            filters: dict (optional) - Filters to select tests
+                uc: list[str] - Use cases to include
+                tc: list[str] - Test cases to include
+                tags: list[str] - Tags to filter by
+
+        Returns:
+            suite_id: int
+            filters: dict - Applied filters
+            tests: list - Resolved test objects
+            count: int - Number of tests
+            use_cases: list - Grouped by use case with counts
+        """
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        import os
+        if not os.path.isdir(suite.folder_path):
+            return jsonify({"error": f"Directory not found: {suite.folder_path}"}), 400
+
+        # Load suite data
+        from .discovery import TestDiscovery
+        try:
+            discovery = TestDiscovery(suite.folder_path)
+            all_tests = discovery.discover_tests()
+        except Exception as e:
+            return jsonify({"error": f"Failed to load suite: {str(e)}"}), 500
+
+        # Get filters from request body
+        data = request.get_json() or {}
+        filters = data.get("filters", {})
+        uc_filter = filters.get("uc", [])
+        tc_filter = filters.get("tc", [])
+        tag_filter = filters.get("tags", [])
+
+        # Resolve tests based on filters
+        resolved_tests = []
+        use_case_counts = {}
+
+        for test in all_tests:
+            include = True
+
+            if tc_filter:
+                include = test.id in tc_filter
+
+            if uc_filter and include:
+                include = test.uc in uc_filter
+
+            if tag_filter and include:
+                include = any(tag in (test.tags or []) for tag in tag_filter)
+
+            if include:
+                test_info = {
+                    "test_id": test.id,
+                    "use_case": test.uc,
+                    "test_case": test.tc,
+                    "name": test.name,
+                    "tags": test.tags,
+                    "description": test.config.get("description") if test.config else None,
+                }
+                resolved_tests.append(test_info)
+
+                # Track use case counts
+                uc = test.uc
+                if uc not in use_case_counts:
+                    use_case_counts[uc] = {"use_case": uc, "count": 0}
+                use_case_counts[uc]["count"] += 1
+
+        return jsonify({
+            "suite_id": suite_id,
+            "filters": filters if filters else None,
+            "tests": resolved_tests,
+            "count": len(resolved_tests),
+            "use_cases": list(use_case_counts.values()),
+        })
+
+    @app.route("/api/suites/<int:suite_id>/tests", methods=["GET"])
+    def api_suite_tests(suite_id: int):
+        """List all tests in a suite."""
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        import os
+        if not os.path.isdir(suite.folder_path):
+            return jsonify({"error": f"Directory not found: {suite.folder_path}"}), 400
+
+        try:
+            suite_info = _parse_suite_config(suite.folder_path)
+        except Exception as e:
+            return jsonify({"error": f"Failed to parse config: {str(e)}"}), 400
+
+        tests = suite_info.get("tests", [])
+
+        # Apply filters
+        uc_filter = request.args.get("uc")
+        tag_filter = request.args.get("tag")
+
+        if uc_filter:
+            tests = [t for t in tests if t.get("use_case") == uc_filter]
+        if tag_filter:
+            tests = [t for t in tests if tag_filter in t.get("tags", [])]
+
+        return jsonify({
+            "suite_id": suite_id,
+            "tests": tests,
+            "count": len(tests),
+        })
+
+    @app.route("/api/suites/<int:suite_id>/run", methods=["POST"])
+    def api_run_suite(suite_id: int):
+        """
+        Run tests in a suite. Can run all tests, a specific use case, or test case.
+
+        Request body (optional):
+            uc: Use case to run (e.g., "uc01_scaffolding")
+            tc: Test case to run (e.g., "uc01_scaffolding/tc01_python_agent")
+
+        Returns:
+            run_id: ID of the started run
+            message: Status message
+        """
+        import subprocess
+        import os
+        from pathlib import Path
+
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        if not os.path.isdir(suite.folder_path):
+            return jsonify({"error": f"Directory not found: {suite.folder_path}"}), 400
+
+        data = request.get_json() or {}
+        uc = data.get("uc")
+        tc = data.get("tc")
+
+        # Determine tsuite venv path (relative to this package)
+        tsuite_dir = Path(__file__).parent.parent
+        venv_python = tsuite_dir / "venv" / "bin" / "python"
+
+        if not venv_python.exists():
+            return jsonify({"error": f"Python venv not found: {venv_python}"}), 500
+
+        # Build command
+        # Use a different port (9998) so it doesn't conflict with the API server (9999)
+        cmd = [
+            str(venv_python),
+            "-m", "tsuite.cli",
+            "--suite-path", suite.folder_path,
+            "--port", "9998",
+        ]
+
+        # Add filter flags
+        if tc:
+            cmd.extend(["--tc", tc])
+        elif uc:
+            cmd.extend(["--uc", uc])
+        else:
+            cmd.append("--all")
+
+        # Add docker flag if mode is docker
+        if suite.mode.value == "docker":
+            cmd.append("--docker")
+
+        # Determine the event server URL for the subprocess to send events back
+        # The subprocess runs on the host machine (not in Docker), so it can
+        # reach localhost directly. The Docker containers communicate via
+        # host.docker.internal to the test server, but SSE events are forwarded
+        # from the subprocess, not from inside Docker.
+        event_server_url = f"http://{request.host}"
+        import sys
+        print(f"[RUN DEBUG] Starting test with TSUITE_EVENT_SERVER={event_server_url}", file=sys.stderr, flush=True)
+
+        # Start subprocess (non-blocking)
+        try:
+            # Write subprocess output to temp file for debugging
+            import tempfile
+            output_path = tempfile.mktemp(prefix='tsuite_run_', suffix='.log')
+            print(f"[RUN DEBUG] Subprocess output will be at: {output_path}", file=sys.stderr, flush=True)
+
+            # Run subprocess directly (no shell) with file handle redirection
+            output_file = open(output_path, 'w')
+            process = subprocess.Popen(
+                cmd,
+                stdout=output_file,
+                stderr=subprocess.STDOUT,
+                cwd=suite.folder_path,
+                env={
+                    **os.environ,
+                    "PYTHONUNBUFFERED": "1",
+                    "TSUITE_EVENT_SERVER": event_server_url,
+                },
+            )
+            print(f"[RUN DEBUG] Subprocess started with PID {process.pid}", file=sys.stderr, flush=True)
+
+            # Build description of what's running
+            if tc:
+                description = f"Running test case: {tc}"
+            elif uc:
+                description = f"Running use case: {uc}"
+            else:
+                description = f"Running all tests in: {suite.suite_name}"
+
+            return jsonify({
+                "started": True,
+                "pid": process.pid,
+                "description": description,
+                "mode": suite.mode.value,
+                "command": " ".join(cmd),
+            }), 202
+
+        except Exception as e:
+            return jsonify({"error": f"Failed to start run: {str(e)}"}), 500
+
+    # =========================================================================
+    # File Browser API Endpoint
+    # =========================================================================
+
+    @app.route("/api/browse", methods=["GET"])
+    def api_browse_folders():
+        """
+        Browse directories for folder selection.
+
+        Query params:
+            path: Directory path to list (defaults to home directory)
+
+        Returns:
+            path: Current path
+            parent: Parent directory path (null if at root)
+            directories: List of subdirectories with metadata
+            is_suite: Whether current path is a valid test suite
+        """
+        import os
+        from pathlib import Path
+
+        # Get requested path, default to home
+        requested_path = request.args.get("path", "")
+
+        if not requested_path:
+            # Default to home directory
+            path = Path.home()
+        else:
+            path = Path(os.path.expanduser(requested_path))
+
+        # Normalize path
+        try:
+            path = path.resolve()
+        except Exception:
+            return jsonify({"error": "Invalid path"}), 400
+
+        # Security: don't allow browsing certain system directories
+        restricted_prefixes = ["/proc", "/sys", "/dev", "/etc/shadow"]
+        path_str = str(path)
+        for prefix in restricted_prefixes:
+            if path_str.startswith(prefix):
+                return jsonify({"error": "Access denied"}), 403
+
+        if not path.exists():
+            return jsonify({"error": f"Path does not exist: {path}"}), 404
+
+        if not path.is_dir():
+            return jsonify({"error": f"Not a directory: {path}"}), 400
+
+        # Check if this is a valid test suite
+        is_suite = (path / "config.yaml").exists() and (path / "suites").is_dir()
+
+        # Get parent directory
+        parent = str(path.parent) if path.parent != path else None
+
+        # List directories
+        directories = []
+        try:
+            for entry in sorted(path.iterdir()):
+                if entry.is_dir() and not entry.name.startswith("."):
+                    # Check if subdir is a suite
+                    subdir_is_suite = (
+                        (entry / "config.yaml").exists() and
+                        (entry / "suites").is_dir()
+                    )
+                    directories.append({
+                        "name": entry.name,
+                        "path": str(entry),
+                        "is_suite": subdir_is_suite,
+                    })
+        except PermissionError:
+            return jsonify({"error": "Permission denied"}), 403
+
+        return jsonify({
+            "path": str(path),
+            "parent": parent,
+            "directories": directories,
+            "is_suite": is_suite,
+        })
+
     return app
+
+
+def _parse_suite_config(folder_path: str) -> dict:
+    """
+    Parse config.yaml and discover tests in a suite folder.
+
+    Returns:
+        dict with keys: name, mode, config, tests, test_count, use_cases
+    """
+    import os
+    import yaml
+
+    config_path = os.path.join(folder_path, "config.yaml")
+
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f) or {}
+
+    # Extract suite info
+    suite_config = config.get("suite", {})
+    name = suite_config.get("name", os.path.basename(folder_path))
+    mode = suite_config.get("mode", "docker")
+
+    # Discover tests
+    tests = []
+    use_cases = {}
+    suites_dir = os.path.join(folder_path, "suites")
+
+    if os.path.isdir(suites_dir):
+        for uc_name in sorted(os.listdir(suites_dir)):
+            uc_path = os.path.join(suites_dir, uc_name)
+            if not os.path.isdir(uc_path) or uc_name.startswith("."):
+                continue
+
+            uc_tests = []
+            for tc_name in sorted(os.listdir(uc_path)):
+                tc_path = os.path.join(uc_path, tc_name)
+                test_yaml = os.path.join(tc_path, "test.yaml")
+
+                if not os.path.isfile(test_yaml):
+                    continue
+
+                # Parse test.yaml for metadata
+                try:
+                    with open(test_yaml, "r") as f:
+                        test_config = yaml.safe_load(f) or {}
+                except Exception:
+                    test_config = {}
+
+                test_id = f"{uc_name}/{tc_name}"
+                test_info = {
+                    "test_id": test_id,
+                    "use_case": uc_name,
+                    "test_case": tc_name,
+                    "name": test_config.get("name", tc_name),
+                    "description": test_config.get("description", ""),
+                    "tags": test_config.get("tags", []),
+                    "steps_count": len(test_config.get("steps", [])),
+                }
+                tests.append(test_info)
+                uc_tests.append(test_info)
+
+            if uc_tests:
+                use_cases[uc_name] = {
+                    "id": uc_name,
+                    "name": uc_name.replace("_", " ").title(),
+                    "test_count": len(uc_tests),
+                }
+
+    return {
+        "name": name,
+        "mode": mode,
+        "config": config,
+        "tests": tests,
+        "test_count": len(tests),
+        "use_cases": list(use_cases.values()),
+    }
 
 
 class RunnerServer:

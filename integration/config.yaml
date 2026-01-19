@@ -1,6 +1,11 @@
 # MCP Mesh Integration Test Suite Configuration
 # Update version here before running release tests
 
+# Suite settings
+suite:
+  name: "MCP Mesh Integration Tests"
+  mode: "docker"  # 'docker' or 'standalone'
+
 # Package versions to test (released packages only)
 packages:
   cli_version: "0.8.0-beta.8"     # @mcpmesh/cli (npm)

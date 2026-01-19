@@ -14,6 +14,7 @@ from .models import (
     StepResult, StepStatus,
     AssertionResult,
     CapturedValue,
+    Suite, SuiteMode,
 )
 
 
@@ -142,7 +143,7 @@ def get_run_summary(run_id: str) -> Optional[RunSummary]:
     )
 
 
-def complete_run(run_id: str) -> None:
+def complete_run(run_id: str, duration_ms: Optional[int] = None) -> None:
     """Mark a run as completed and calculate final stats."""
     tests = list_test_results(run_id)
 
@@ -153,10 +154,11 @@ def complete_run(run_id: str) -> None:
     # Determine overall status
     status = RunStatus.COMPLETED if failed == 0 else RunStatus.FAILED
 
-    # Calculate duration
+    # Calculate duration if not provided
     run = get_run(run_id)
     finished_at = datetime.now()
-    duration_ms = int((finished_at - run.started_at).total_seconds() * 1000) if run else None
+    if duration_ms is None and run:
+        duration_ms = int((finished_at - run.started_at).total_seconds() * 1000)
 
     update_run(
         run_id,
@@ -167,6 +169,244 @@ def complete_run(run_id: str) -> None:
         skipped=skipped,
         duration_ms=duration_ms,
     )
+
+
+def create_run_with_tests(
+    suite_id: int,
+    tests: List[dict],
+    filters: Optional[dict] = None,
+    mode: str = "docker",
+) -> Run:
+    """
+    Create a new run with all tests in PENDING state.
+
+    Args:
+        suite_id: The suite this run belongs to
+        tests: List of test dicts with keys: test_id, use_case, test_case, name, tags
+        filters: The filters used to select these tests
+        mode: 'docker' or 'standalone'
+
+    Returns:
+        The created Run object
+    """
+    run_id = str(uuid.uuid4())
+    started_at = datetime.now()
+    total_tests = len(tests)
+    filters_json = json.dumps(filters) if filters else None
+
+    # Create the run record
+    db.execute(
+        """
+        INSERT INTO runs (
+            run_id, suite_id, started_at, status, total_tests,
+            pending_count, running_count, passed, failed, skipped,
+            filters, mode
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            run_id, suite_id, started_at.isoformat(), RunStatus.PENDING.value,
+            total_tests, total_tests, 0, 0, 0, 0, filters_json, mode,
+        ),
+    )
+
+    # Create test result records (all PENDING)
+    for test in tests:
+        tags_json = json.dumps(test.get("tags", [])) if test.get("tags") else None
+        db.execute(
+            """
+            INSERT INTO test_results (
+                run_id, test_id, use_case, test_case, name, tags, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id, test["test_id"], test["use_case"], test["test_case"],
+                test.get("name"), tags_json, TestStatus.PENDING.value,
+            ),
+        )
+
+    db.commit()
+
+    return Run(
+        run_id=run_id,
+        suite_id=suite_id,
+        started_at=started_at,
+        status=RunStatus.PENDING,
+        total_tests=total_tests,
+        pending_count=total_tests,
+        running_count=0,
+        passed=0,
+        failed=0,
+        skipped=0,
+        filters=filters,
+        mode=mode,
+    )
+
+
+def start_run(run_id: str) -> None:
+    """Mark a run as started (RUNNING status)."""
+    db.execute(
+        "UPDATE runs SET status = ? WHERE run_id = ?",
+        (RunStatus.RUNNING.value, run_id),
+    )
+    db.commit()
+
+
+def update_test_status(
+    run_id: str,
+    test_id: str,
+    status: TestStatus,
+    duration_ms: Optional[int] = None,
+    error_message: Optional[str] = None,
+    steps_json: Optional[List[dict]] = None,
+    steps_passed: Optional[int] = None,
+    steps_failed: Optional[int] = None,
+    skip_reason: Optional[str] = None,
+) -> Optional[TestResult]:
+    """
+    Update the status of a specific test in a run.
+
+    This is the main method called by test runners to report progress.
+    It also updates the run's counters.
+    """
+    # Get current test state
+    test = get_test_result_by_test_id(run_id, test_id)
+    if not test:
+        return None
+
+    old_status = test.status
+    now = datetime.now()
+
+    # Build update
+    updates = ["status = ?"]
+    params = [status.value]
+
+    if status == TestStatus.RUNNING and not test.started_at:
+        updates.append("started_at = ?")
+        params.append(now.isoformat())
+
+    if status in (TestStatus.PASSED, TestStatus.FAILED, TestStatus.SKIPPED):
+        updates.append("finished_at = ?")
+        params.append(now.isoformat())
+
+    if duration_ms is not None:
+        updates.append("duration_ms = ?")
+        params.append(duration_ms)
+
+    if error_message is not None:
+        updates.append("error_message = ?")
+        params.append(error_message)
+
+    if steps_json is not None:
+        updates.append("steps_json = ?")
+        params.append(json.dumps(steps_json))
+
+    if steps_passed is not None:
+        updates.append("steps_passed = ?")
+        params.append(steps_passed)
+
+    if steps_failed is not None:
+        updates.append("steps_failed = ?")
+        params.append(steps_failed)
+
+    if skip_reason is not None:
+        updates.append("skip_reason = ?")
+        params.append(skip_reason)
+
+    # Update test result
+    params.extend([run_id, test_id])
+    db.execute(
+        f"UPDATE test_results SET {', '.join(updates)} WHERE run_id = ? AND test_id = ?",
+        tuple(params),
+    )
+
+    # Update run counters based on status change
+    _update_run_counters(run_id, old_status, status)
+
+    db.commit()
+
+    return get_test_result_by_test_id(run_id, test_id)
+
+
+def _update_run_counters(run_id: str, old_status: TestStatus, new_status: TestStatus) -> None:
+    """Update run counters when a test status changes."""
+    if old_status == new_status:
+        return
+
+    # Decrement old status counter
+    if old_status == TestStatus.PENDING:
+        db.execute("UPDATE runs SET pending_count = pending_count - 1 WHERE run_id = ?", (run_id,))
+    elif old_status == TestStatus.RUNNING:
+        db.execute("UPDATE runs SET running_count = running_count - 1 WHERE run_id = ?", (run_id,))
+    elif old_status == TestStatus.PASSED:
+        db.execute("UPDATE runs SET passed = passed - 1 WHERE run_id = ?", (run_id,))
+    elif old_status == TestStatus.FAILED:
+        db.execute("UPDATE runs SET failed = failed - 1 WHERE run_id = ?", (run_id,))
+    elif old_status == TestStatus.SKIPPED:
+        db.execute("UPDATE runs SET skipped = skipped - 1 WHERE run_id = ?", (run_id,))
+
+    # Increment new status counter
+    if new_status == TestStatus.PENDING:
+        db.execute("UPDATE runs SET pending_count = pending_count + 1 WHERE run_id = ?", (run_id,))
+    elif new_status == TestStatus.RUNNING:
+        db.execute("UPDATE runs SET running_count = running_count + 1 WHERE run_id = ?", (run_id,))
+    elif new_status == TestStatus.PASSED:
+        db.execute("UPDATE runs SET passed = passed + 1 WHERE run_id = ?", (run_id,))
+    elif new_status == TestStatus.FAILED:
+        db.execute("UPDATE runs SET failed = failed + 1 WHERE run_id = ?", (run_id,))
+    elif new_status == TestStatus.SKIPPED:
+        db.execute("UPDATE runs SET skipped = skipped + 1 WHERE run_id = ?", (run_id,))
+
+
+def get_tests_by_usecase(run_id: str) -> dict:
+    """
+    Get tests for a run grouped by use case.
+
+    Returns dict like:
+    {
+        "uc01_registry": {
+            "use_case": "uc01_registry",
+            "tests": [TestResult, ...],
+            "pending": 2,
+            "running": 1,
+            "passed": 3,
+            "failed": 0,
+            "total": 6,
+        },
+        ...
+    }
+    """
+    tests = list_test_results(run_id)
+
+    grouped = {}
+    for test in tests:
+        uc = test.use_case
+        if uc not in grouped:
+            grouped[uc] = {
+                "use_case": uc,
+                "tests": [],
+                "pending": 0,
+                "running": 0,
+                "passed": 0,
+                "failed": 0,
+                "skipped": 0,
+                "total": 0,
+            }
+
+        grouped[uc]["tests"].append(test)
+        grouped[uc]["total"] += 1
+
+        if test.status == TestStatus.PENDING:
+            grouped[uc]["pending"] += 1
+        elif test.status == TestStatus.RUNNING:
+            grouped[uc]["running"] += 1
+        elif test.status == TestStatus.PASSED:
+            grouped[uc]["passed"] += 1
+        elif test.status == TestStatus.FAILED:
+            grouped[uc]["failed"] += 1
+        elif test.status == TestStatus.SKIPPED:
+            grouped[uc]["skipped"] += 1
+
+    return grouped
 
 
 # =============================================================================
@@ -277,7 +517,13 @@ def get_test_detail(test_result_id: int) -> Optional[TestDetail]:
     if not test:
         return None
 
+    # First try normalized step_results table
     steps = list_step_results(test_result_id)
+
+    # If no normalized steps, convert from embedded steps_json
+    if not steps and test.steps_json:
+        steps = _convert_embedded_steps(test_result_id, test.steps_json)
+
     assertions = list_assertion_results(test_result_id)
     captured = list_captured_values(test_result_id)
 
@@ -287,6 +533,47 @@ def get_test_detail(test_result_id: int) -> Optional[TestDetail]:
         assertions=assertions,
         captured=captured,
     )
+
+
+def _convert_embedded_steps(test_result_id: int, steps_json: List[dict]) -> List[StepResult]:
+    """Convert embedded steps_json to StepResult objects."""
+    results = []
+    for step in steps_json:
+        phase = step.get("phase", "test")
+        index = step.get("index", 0)
+        result = step.get("result", {})
+
+        # Determine status from result
+        success = result.get("success", False)
+        status = StepStatus.PASSED if success else StepStatus.FAILED
+
+        # Extract error message
+        error_message = result.get("error")
+        if not error_message and not success:
+            # Try to get error from stderr
+            stderr = result.get("stderr", "")
+            if stderr:
+                error_message = stderr[:500]  # Truncate long errors
+
+        step_result = StepResult(
+            id=None,  # Not persisted in normalized table
+            test_result_id=test_result_id,
+            step_index=index,
+            phase=phase,
+            handler=result.get("handler", ""),
+            description=None,
+            status=status,
+            started_at=None,
+            finished_at=None,
+            duration_ms=None,
+            exit_code=result.get("exit_code"),
+            stdout=result.get("stdout"),
+            stderr=result.get("stderr"),
+            error_message=error_message,
+        )
+        results.append(step_result)
+
+    return results
 
 
 # =============================================================================
@@ -555,3 +842,132 @@ def get_run_stats() -> dict:
         """
     )
     return dict(row) if row else {}
+
+
+# =============================================================================
+# Suite Operations
+# =============================================================================
+
+def create_suite(
+    folder_path: str,
+    suite_name: str,
+    mode: SuiteMode = SuiteMode.DOCKER,
+    config_json: Optional[str] = None,
+    test_count: int = 0,
+) -> Suite:
+    """Create a new test suite record."""
+    now = datetime.now()
+
+    cursor = db.execute(
+        """
+        INSERT INTO suites (
+            folder_path, suite_name, mode, config_json, test_count,
+            last_synced_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            folder_path, suite_name, mode.value, config_json, test_count,
+            now.isoformat(), now.isoformat(), now.isoformat(),
+        ),
+    )
+    db.commit()
+
+    return Suite(
+        id=cursor.lastrowid,
+        folder_path=folder_path,
+        suite_name=suite_name,
+        mode=mode,
+        config_json=config_json,
+        test_count=test_count,
+        last_synced_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def upsert_suite(
+    folder_path: str,
+    suite_name: str,
+    mode: SuiteMode = SuiteMode.DOCKER,
+    config_json: Optional[str] = None,
+    test_count: int = 0,
+) -> Suite:
+    """Create or update a suite by folder_path."""
+    existing = get_suite_by_path(folder_path)
+
+    if existing:
+        update_suite(
+            existing.id,
+            suite_name=suite_name,
+            mode=mode,
+            config_json=config_json,
+            test_count=test_count,
+        )
+        return get_suite(existing.id)
+    else:
+        return create_suite(
+            folder_path=folder_path,
+            suite_name=suite_name,
+            mode=mode,
+            config_json=config_json,
+            test_count=test_count,
+        )
+
+
+def update_suite(
+    suite_id: int,
+    suite_name: Optional[str] = None,
+    mode: Optional[SuiteMode] = None,
+    config_json: Optional[str] = None,
+    test_count: Optional[int] = None,
+) -> None:
+    """Update a suite record."""
+    updates = ["updated_at = ?"]
+    params = [datetime.now().isoformat()]
+
+    if suite_name is not None:
+        updates.append("suite_name = ?")
+        params.append(suite_name)
+    if mode is not None:
+        updates.append("mode = ?")
+        params.append(mode.value)
+    if config_json is not None:
+        updates.append("config_json = ?")
+        params.append(config_json)
+        updates.append("last_synced_at = ?")
+        params.append(datetime.now().isoformat())
+    if test_count is not None:
+        updates.append("test_count = ?")
+        params.append(test_count)
+
+    params.append(suite_id)
+    db.execute(
+        f"UPDATE suites SET {', '.join(updates)} WHERE id = ?",
+        tuple(params),
+    )
+    db.commit()
+
+
+def get_suite(suite_id: int) -> Optional[Suite]:
+    """Get a suite by ID."""
+    row = db.fetchone("SELECT * FROM suites WHERE id = ?", (suite_id,))
+    return Suite.from_row(row) if row else None
+
+
+def get_suite_by_path(folder_path: str) -> Optional[Suite]:
+    """Get a suite by folder path."""
+    row = db.fetchone("SELECT * FROM suites WHERE folder_path = ?", (folder_path,))
+    return Suite.from_row(row) if row else None
+
+
+def list_suites() -> List[Suite]:
+    """List all registered suites."""
+    rows = db.fetchall("SELECT * FROM suites ORDER BY suite_name")
+    return [Suite.from_row(row) for row in rows]
+
+
+def delete_suite(suite_id: int) -> bool:
+    """Delete a suite by ID. Returns True if deleted."""
+    cursor = db.execute("DELETE FROM suites WHERE id = ?", (suite_id,))
+    db.commit()
+    return cursor.rowcount > 0

@@ -53,6 +53,7 @@ class DockerExecutor:
         suite_path: Path,
         base_workdir: Path,
         config: ContainerConfig | None = None,
+        run_id: str | None = None,
     ):
         """
         Initialize Docker executor.
@@ -63,12 +64,14 @@ class DockerExecutor:
             suite_path: Path to mcp-mesh-test-suites/ directory
             base_workdir: Base directory for test workspaces
             config: Container configuration
+            run_id: The run ID for API status reporting (new architecture)
         """
         self.server_url = server_url
         self.framework_path = Path(framework_path)
         self.suite_path = Path(suite_path)
         self.base_workdir = Path(base_workdir)
         self.config = config or ContainerConfig()
+        self.run_id = run_id
 
         # Initialize Docker client
         try:
@@ -109,6 +112,10 @@ class DockerExecutor:
             "TSUITE_TEST_ID": test.id,
             "PYTHONUNBUFFERED": "1",
         }
+
+        # Add run_id for new API architecture
+        if self.run_id:
+            env["TSUITE_RUN_ID"] = self.run_id
 
         # Add env from test config
         if "env" in container_config:

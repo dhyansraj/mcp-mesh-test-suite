@@ -20,9 +20,17 @@ _db_path: Optional[Path] = None
 
 
 SCHEMA = """
+-- Schema version tracking
+CREATE TABLE IF NOT EXISTS schema_version (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    version INTEGER NOT NULL DEFAULT 1
+);
+INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 2);
+
 -- Each test run session
 CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
+    suite_id INTEGER REFERENCES suites(id),
     started_at TEXT NOT NULL,
     finished_at TEXT,
     status TEXT DEFAULT 'pending',
@@ -31,16 +39,20 @@ CREATE TABLE IF NOT EXISTS runs (
     sdk_typescript_version TEXT,
     docker_image TEXT,
     total_tests INTEGER DEFAULT 0,
+    pending_count INTEGER DEFAULT 0,
+    running_count INTEGER DEFAULT 0,
     passed INTEGER DEFAULT 0,
     failed INTEGER DEFAULT 0,
     skipped INTEGER DEFAULT 0,
-    duration_ms INTEGER
+    duration_ms INTEGER,
+    filters TEXT,
+    mode TEXT DEFAULT 'docker' CHECK(mode IN ('standalone', 'docker'))
 );
 
--- Individual test case results
+-- Individual test case results (also used for live tracking)
 CREATE TABLE IF NOT EXISTS test_results (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id TEXT NOT NULL REFERENCES runs(run_id),
+    run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
     test_id TEXT NOT NULL,
     use_case TEXT NOT NULL,
     test_case TEXT NOT NULL,
@@ -52,6 +64,10 @@ CREATE TABLE IF NOT EXISTS test_results (
     duration_ms INTEGER,
     error_message TEXT,
     error_step INTEGER,
+    skip_reason TEXT,
+    steps_json TEXT,
+    steps_passed INTEGER DEFAULT 0,
+    steps_failed INTEGER DEFAULT 0,
     UNIQUE(run_id, test_id)
 );
 
@@ -96,12 +112,26 @@ CREATE TABLE IF NOT EXISTS captured_values (
     UNIQUE(test_result_id, key)
 );
 
+-- Registered test suites (for dashboard settings)
+CREATE TABLE IF NOT EXISTS suites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    folder_path TEXT UNIQUE NOT NULL,
+    suite_name TEXT NOT NULL,
+    mode TEXT DEFAULT 'docker' CHECK(mode IN ('standalone', 'docker')),
+    config_json TEXT,
+    test_count INTEGER DEFAULT 0,
+    last_synced_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_test_results_run ON test_results(run_id);
 CREATE INDEX IF NOT EXISTS idx_test_results_status ON test_results(status);
 CREATE INDEX IF NOT EXISTS idx_step_results_test ON step_results(test_result_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
 CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_suites_folder_path ON suites(folder_path);
 """
 
 

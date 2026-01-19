@@ -41,8 +41,8 @@ test:
     capture: meshctl_help
 
 assertions:
-  - expr: ${captured.node_version} contains 'v20'
-    message: "Node.js v20 should be installed"
+  - expr: ${captured.node_version} contains 'v2'
+    message: "Node.js v20+ should be installed"
 
   - expr: ${captured.meshctl_version} contains '${config.packages.cli_version}'
     message: "meshctl version should match config"

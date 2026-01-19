@@ -231,6 +231,264 @@ class RunnerClient:
         tid = test_id or self.test_id
         return self._get(f"/context/{tid}") or {}
 
+    # =========================================================================
+    # New Architecture API Methods
+    # =========================================================================
+    # These methods are used by test handlers to report status to the API server
+    # in the new architecture where handlers call the API directly.
+
+    def _patch(self, path: str, data: dict) -> dict | None:
+        """Make a PATCH request."""
+        url = f"{self.api_url}{path}"
+        try:
+            response = requests.patch(url, json=data, timeout=self._timeout)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException:
+            return None
+
+    def report_test_running(
+        self,
+        run_id: str,
+        test_id: str | None = None,
+    ) -> dict | None:
+        """
+        Report that a test has started running.
+
+        Args:
+            run_id: The run ID
+            test_id: Test ID (defaults to TSUITE_TEST_ID env var)
+
+        Returns:
+            Updated test result dict or None on error.
+        """
+        tid = test_id or self.test_id
+        return self._patch(f"/api/runs/{run_id}/tests/{tid}", {
+            "status": "running",
+        })
+
+    def report_test_passed(
+        self,
+        run_id: str,
+        test_id: str | None = None,
+        duration_ms: int | None = None,
+        steps_passed: int | None = None,
+        steps_failed: int | None = None,
+        steps: list | None = None,
+    ) -> dict | None:
+        """
+        Report that a test has passed.
+
+        Args:
+            run_id: The run ID
+            test_id: Test ID (defaults to TSUITE_TEST_ID env var)
+            duration_ms: Test duration in milliseconds
+            steps_passed: Number of steps that passed
+            steps_failed: Number of steps that failed
+            steps: Detailed step results
+
+        Returns:
+            Updated test result dict or None on error.
+        """
+        tid = test_id or self.test_id
+        data = {"status": "passed"}
+        if duration_ms is not None:
+            data["duration_ms"] = duration_ms
+        if steps_passed is not None:
+            data["steps_passed"] = steps_passed
+        if steps_failed is not None:
+            data["steps_failed"] = steps_failed
+        if steps is not None:
+            data["steps"] = steps
+        return self._patch(f"/api/runs/{run_id}/tests/{tid}", data)
+
+    def report_test_failed(
+        self,
+        run_id: str,
+        test_id: str | None = None,
+        duration_ms: int | None = None,
+        error_message: str | None = None,
+        steps_passed: int | None = None,
+        steps_failed: int | None = None,
+        steps: list | None = None,
+    ) -> dict | None:
+        """
+        Report that a test has failed.
+
+        Args:
+            run_id: The run ID
+            test_id: Test ID (defaults to TSUITE_TEST_ID env var)
+            duration_ms: Test duration in milliseconds
+            error_message: Error message
+            steps_passed: Number of steps that passed
+            steps_failed: Number of steps that failed
+            steps: Detailed step results
+
+        Returns:
+            Updated test result dict or None on error.
+        """
+        tid = test_id or self.test_id
+        data = {"status": "failed"}
+        if duration_ms is not None:
+            data["duration_ms"] = duration_ms
+        if error_message is not None:
+            data["error_message"] = error_message
+        if steps_passed is not None:
+            data["steps_passed"] = steps_passed
+        if steps_failed is not None:
+            data["steps_failed"] = steps_failed
+        if steps is not None:
+            data["steps"] = steps
+        return self._patch(f"/api/runs/{run_id}/tests/{tid}", data)
+
+    def report_test_skipped(
+        self,
+        run_id: str,
+        test_id: str | None = None,
+        skip_reason: str | None = None,
+    ) -> dict | None:
+        """
+        Report that a test was skipped.
+
+        Args:
+            run_id: The run ID
+            test_id: Test ID (defaults to TSUITE_TEST_ID env var)
+            skip_reason: Reason for skipping
+
+        Returns:
+            Updated test result dict or None on error.
+        """
+        tid = test_id or self.test_id
+        data = {"status": "skipped"}
+        if skip_reason is not None:
+            data["skip_reason"] = skip_reason
+        return self._patch(f"/api/runs/{run_id}/tests/{tid}", data)
+
+    def report_test_status(
+        self,
+        run_id: str,
+        status: str,
+        test_id: str | None = None,
+        duration_ms: int | None = None,
+        error_message: str | None = None,
+        skip_reason: str | None = None,
+        steps_passed: int | None = None,
+        steps_failed: int | None = None,
+        steps: list | None = None,
+    ) -> dict | None:
+        """
+        Generic method to report test status.
+
+        Args:
+            run_id: The run ID
+            status: Test status (running, passed, failed, skipped)
+            test_id: Test ID (defaults to TSUITE_TEST_ID env var)
+            duration_ms: Test duration in milliseconds
+            error_message: Error message (for failed tests)
+            skip_reason: Reason for skipping (for skipped tests)
+            steps_passed: Number of steps that passed
+            steps_failed: Number of steps that failed
+            steps: Detailed step results
+
+        Returns:
+            Updated test result dict or None on error.
+        """
+        tid = test_id or self.test_id
+        data = {"status": status}
+        if duration_ms is not None:
+            data["duration_ms"] = duration_ms
+        if error_message is not None:
+            data["error_message"] = error_message
+        if skip_reason is not None:
+            data["skip_reason"] = skip_reason
+        if steps_passed is not None:
+            data["steps_passed"] = steps_passed
+        if steps_failed is not None:
+            data["steps_failed"] = steps_failed
+        if steps is not None:
+            data["steps"] = steps
+        return self._patch(f"/api/runs/{run_id}/tests/{tid}", data)
+
+    def start_run(self, run_id: str) -> dict | None:
+        """
+        Signal that a run has started.
+
+        Args:
+            run_id: The run ID
+
+        Returns:
+            Response dict or None on error.
+        """
+        url = f"{self.api_url}/api/runs/{run_id}/start"
+        try:
+            response = requests.post(url, timeout=self._timeout)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException:
+            return None
+
+    def complete_run(
+        self,
+        run_id: str,
+        duration_ms: int | None = None,
+    ) -> dict | None:
+        """
+        Signal that a run has completed.
+
+        Args:
+            run_id: The run ID
+            duration_ms: Total run duration in milliseconds
+
+        Returns:
+            Response dict or None on error.
+        """
+        url = f"{self.api_url}/api/runs/{run_id}/complete"
+        data = {}
+        if duration_ms is not None:
+            data["duration_ms"] = duration_ms
+        try:
+            response = requests.post(url, json=data, timeout=self._timeout)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException:
+            return None
+
+    def get_run(self, run_id: str) -> dict | None:
+        """
+        Get run details.
+
+        Args:
+            run_id: The run ID
+
+        Returns:
+            Run dict or None on error.
+        """
+        return self._get(f"/api/runs/{run_id}")
+
+    def get_run_tests(self, run_id: str) -> dict | None:
+        """
+        Get all tests for a run.
+
+        Args:
+            run_id: The run ID
+
+        Returns:
+            Dict with tests list or None on error.
+        """
+        return self._get(f"/api/runs/{run_id}/tests")
+
+    def get_run_tests_tree(self, run_id: str) -> dict | None:
+        """
+        Get tests grouped by use case (tree structure).
+
+        Args:
+            run_id: The run ID
+
+        Returns:
+            Dict with use_cases list or None on error.
+        """
+        return self._get(f"/api/runs/{run_id}/tests/tree")
+
 
 # Convenience instance
 _default_client: RunnerClient | None = None
