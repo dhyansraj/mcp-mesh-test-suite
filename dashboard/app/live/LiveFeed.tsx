@@ -452,7 +452,7 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetai
                               <Circle className="h-4 w-4 text-muted-foreground" />
                             )}
                             <span className="text-sm font-medium">
-                              Step {step.step_index + 1}: {step.phase}
+                              Step {step.step_index + 1}: {step.description || step.phase}
                             </span>
                             {step.handler && (
                               <Badge variant="outline" className="text-xs">

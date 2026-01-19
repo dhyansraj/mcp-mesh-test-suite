@@ -11,7 +11,8 @@ timeout: 180
 
 test:
   # Install Node.js
-  - handler: shell
+  - name: "Install Node.js and npm"
+    handler: shell
     command: |
       apt-get update -qq
       apt-get install -y -qq curl
@@ -20,23 +21,27 @@ test:
     timeout: 120
 
   # Verify Node.js
-  - handler: shell
+  - name: "Verify Node.js installation"
+    handler: shell
     command: "node --version && npm --version"
     capture: node_version
 
   # Install meshctl
-  - handler: shell
+  - name: "Install meshctl CLI globally"
+    handler: shell
     command: "npm install -g @mcpmesh/cli@${config.packages.cli_version}"
     timeout: 60
     capture: install_output
 
   # Verify meshctl
-  - handler: shell
+  - name: "Check meshctl version"
+    handler: shell
     command: "meshctl --version"
     capture: meshctl_version
 
   # Test meshctl help
-  - handler: shell
+  - name: "Verify meshctl help output"
+    handler: shell
     command: "meshctl --help"
     capture: meshctl_help
 

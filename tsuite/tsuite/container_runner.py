@@ -79,7 +79,13 @@ def run_test(test_yaml_path: str, suite_path: str):
     client.progress(0, "running", "Executing pre_run")
     for i, step in enumerate(test_config.get("pre_run", [])):
         result = execute_step(step, context, global_routines, client)
-        results["steps"].append({"phase": "pre_run", "index": i, "result": result})
+        results["steps"].append({
+            "phase": "pre_run",
+            "index": i,
+            "name": step.get("name"),
+            "handler": step.get("handler", step.get("routine")),
+            "result": result,
+        })
         print(f"[pre_run:{i}] {step.get('handler', step.get('routine', '?'))}: {'OK' if result['success'] else 'FAIL'}")
 
         if not result["success"] and not step.get("ignore_errors"):
@@ -99,7 +105,13 @@ def run_test(test_yaml_path: str, suite_path: str):
         client.progress(1, "running", "Executing test steps")
         for i, step in enumerate(test_config.get("test", [])):
             result = execute_step(step, context, global_routines, client)
-            results["steps"].append({"phase": "test", "index": i, "result": result})
+            results["steps"].append({
+                "phase": "test",
+                "index": i,
+                "name": step.get("name"),
+                "handler": step.get("handler", step.get("routine")),
+                "result": result,
+            })
             print(f"[test:{i}] {step.get('handler', step.get('routine', '?'))}: {'OK' if result['success'] else 'FAIL'}")
 
             if not result["success"] and not step.get("ignore_errors"):
@@ -151,7 +163,13 @@ def run_test(test_yaml_path: str, suite_path: str):
     for i, step in enumerate(test_config.get("post_run", [])):
         step_with_ignore = {**step, "ignore_errors": True}
         result = execute_step(step_with_ignore, context, global_routines, client)
-        results["steps"].append({"phase": "post_run", "index": i, "result": result})
+        results["steps"].append({
+            "phase": "post_run",
+            "index": i,
+            "name": step.get("name"),
+            "handler": step.get("handler", step.get("routine")),
+            "result": result,
+        })
         print(f"[post_run:{i}] {step.get('handler', step.get('routine', '?'))}: {'OK' if result['success'] else 'FAIL'}")
 
     # Report final status

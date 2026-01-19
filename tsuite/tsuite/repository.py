@@ -541,6 +541,8 @@ def _convert_embedded_steps(test_result_id: int, steps_json: List[dict]) -> List
     for step in steps_json:
         phase = step.get("phase", "test")
         index = step.get("index", 0)
+        name = step.get("name")  # Optional step name from YAML
+        handler = step.get("handler")  # Handler from step, not result
         result = step.get("result", {})
 
         # Determine status from result
@@ -560,8 +562,8 @@ def _convert_embedded_steps(test_result_id: int, steps_json: List[dict]) -> List
             test_result_id=test_result_id,
             step_index=index,
             phase=phase,
-            handler=result.get("handler", ""),
-            description=None,
+            handler=handler or result.get("handler", ""),
+            description=name,  # Use step name as description
             status=status,
             started_at=None,
             finished_at=None,

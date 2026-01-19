@@ -48,6 +48,7 @@ export interface StepResult {
   step_index: number;
   phase: string;
   handler: string | null;
+  description: string | null;
   status: string;
   duration_ms: number | null;
   stdout: string | null;
