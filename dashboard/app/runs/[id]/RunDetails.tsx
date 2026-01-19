@@ -1,16 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   RunSummary,
   TestResult,
+  TestDetail,
   formatDuration,
   formatRelativeTime,
   getStatusBgColor,
+  getTestDetail,
 } from "@/lib/api";
 import {
   CheckCircle,
@@ -20,30 +26,93 @@ import {
   ChevronRight,
   Terminal,
   AlertCircle,
+  Loader2,
+  Circle,
+  FolderOpen,
+  Folder,
+  FileText,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface RunDetailsProps {
   run: RunSummary;
   tests: TestResult[];
 }
 
-export function RunDetails({ run, tests }: RunDetailsProps) {
-  const [expandedTests, setExpandedTests] = useState<Set<number>>(new Set());
+// Group tests by use_case
+interface UseCaseGroup {
+  use_case: string;
+  tests: TestResult[];
+  passed: number;
+  failed: number;
+  pending: number;
+  running: number;
+}
 
-  const toggleTest = (testId: number) => {
-    setExpandedTests((prev) => {
+function groupTestsByUseCase(tests: TestResult[]): UseCaseGroup[] {
+  const groups = new Map<string, TestResult[]>();
+
+  for (const test of tests) {
+    const uc = test.use_case || "unknown";
+    if (!groups.has(uc)) {
+      groups.set(uc, []);
+    }
+    groups.get(uc)!.push(test);
+  }
+
+  return Array.from(groups.entries()).map(([use_case, tests]) => ({
+    use_case,
+    tests,
+    passed: tests.filter(t => t.status === "passed").length,
+    failed: tests.filter(t => t.status === "failed").length,
+    pending: tests.filter(t => t.status === "pending").length,
+    running: tests.filter(t => t.status === "running").length,
+  }));
+}
+
+export function RunDetails({ run, tests }: RunDetailsProps) {
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState<string | null>(null);
+  const [selectedTest, setSelectedTest] = useState<TestResult | null>(null);
+  const [testDetail, setTestDetail] = useState<TestDetail | null>(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+
+  const useCases = useMemo(() => groupTestsByUseCase(tests), [tests]);
+
+  const toggleExpand = (id: string) => {
+    setExpandedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(testId)) {
-        next.delete(testId);
+      if (next.has(id)) {
+        next.delete(id);
       } else {
-        next.add(testId);
+        next.add(id);
       }
       return next;
     });
   };
 
-  const passedTests = tests.filter((t) => t.status === "passed");
-  const failedTests = tests.filter((t) => t.status === "failed");
+  const handleTestClick = async (test: TestResult) => {
+    setSelectedTest(test);
+    setLoadingDetail(true);
+    try {
+      const detail = await getTestDetail(run.run_id, test.id);
+      setTestDetail(detail);
+    } catch (error) {
+      console.error("Failed to load test detail:", error);
+    } finally {
+      setLoadingDetail(false);
+    }
+  };
+
+  const handleDialogClose = () => {
+    setSelectedTest(null);
+    setTestDetail(null);
+  };
+
+  const stats = {
+    passed: tests.filter(t => t.status === "passed").length,
+    failed: tests.filter(t => t.status === "failed").length,
+  };
 
   return (
     <div className="space-y-6">
@@ -109,151 +178,384 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
         </CardContent>
       </Card>
 
-      {/* Tests Tabs */}
-      <Tabs defaultValue="all" className="space-y-4">
-        <TabsList className="bg-muted">
-          <TabsTrigger value="all">All ({tests.length})</TabsTrigger>
-          <TabsTrigger value="passed" className="text-success">
-            Passed ({passedTests.length})
-          </TabsTrigger>
-          <TabsTrigger value="failed" className="text-destructive">
-            Failed ({failedTests.length})
-          </TabsTrigger>
-        </TabsList>
+      {/* Stats Cards */}
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card
+          className={cn(
+            "cursor-pointer transition-all border-2",
+            filter === "passed"
+              ? "border-success bg-success/10"
+              : "border-transparent hover:border-success/50"
+          )}
+          onClick={() => setFilter(filter === "passed" ? null : "passed")}
+        >
+          <CardContent className="flex items-center gap-4 p-4">
+            <CheckCircle className="h-8 w-8 text-success" />
+            <div>
+              <p className="text-2xl font-bold">{stats.passed}</p>
+              <p className="text-sm text-muted-foreground">Passed</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card
+          className={cn(
+            "cursor-pointer transition-all border-2",
+            filter === "failed"
+              ? "border-destructive bg-destructive/10"
+              : "border-transparent hover:border-destructive/50"
+          )}
+          onClick={() => setFilter(filter === "failed" ? null : "failed")}
+        >
+          <CardContent className="flex items-center gap-4 p-4">
+            <XCircle className="h-8 w-8 text-destructive" />
+            <div>
+              <p className="text-2xl font-bold">{stats.failed}</p>
+              <p className="text-sm text-muted-foreground">Failed</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
 
-        <TabsContent value="all">
-          <TestList
-            tests={tests}
-            expandedTests={expandedTests}
-            onToggle={toggleTest}
-          />
-        </TabsContent>
-        <TabsContent value="passed">
-          <TestList
-            tests={passedTests}
-            expandedTests={expandedTests}
-            onToggle={toggleTest}
-          />
-        </TabsContent>
-        <TabsContent value="failed">
-          <TestList
-            tests={failedTests}
-            expandedTests={expandedTests}
-            onToggle={toggleTest}
-          />
-        </TabsContent>
-      </Tabs>
+      {/* Test Tree */}
+      <TestTree
+        useCases={useCases}
+        expandedIds={expandedIds}
+        onToggle={toggleExpand}
+        onTestClick={handleTestClick}
+        filter={filter}
+      />
+
+      {/* Test Detail Dialog */}
+      <TestDetailDialog
+        open={selectedTest !== null}
+        onOpenChange={(open) => !open && handleDialogClose()}
+        testDetail={testDetail}
+        loading={loadingDetail}
+      />
     </div>
   );
 }
 
-interface TestListProps {
-  tests: TestResult[];
-  expandedTests: Set<number>;
-  onToggle: (id: number) => void;
+// ============================================================================
+// TestTree Component
+// ============================================================================
+
+interface TestTreeProps {
+  useCases: UseCaseGroup[];
+  expandedIds: Set<string>;
+  onToggle: (id: string) => void;
+  onTestClick?: (test: TestResult) => void;
+  filter?: string | null;
 }
 
-function TestList({ tests, expandedTests, onToggle }: TestListProps) {
-  if (tests.length === 0) {
+function getStatusIcon(status: string) {
+  switch (status) {
+    case "passed":
+      return <CheckCircle className="h-4 w-4 text-success" />;
+    case "failed":
+      return <XCircle className="h-4 w-4 text-destructive" />;
+    case "running":
+      return <Loader2 className="h-4 w-4 text-primary animate-spin" />;
+    case "skipped":
+      return <AlertCircle className="h-4 w-4 text-warning" />;
+    default:
+      return <Circle className="h-4 w-4 text-muted-foreground" />;
+  }
+}
+
+function TestTree({ useCases, expandedIds, onToggle, onTestClick, filter }: TestTreeProps) {
+  if (!useCases || useCases.length === 0) {
     return (
-      <Card className="border-border bg-card rounded-md">
-        <CardContent className="flex items-center justify-center py-12">
-          <p className="text-muted-foreground">No tests found</p>
+      <Card>
+        <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+          <FolderOpen className="h-12 w-12 mb-4 opacity-50" />
+          <p>No tests in this run</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Filter use cases and tests
+  const filteredUseCases = useCases.map((uc) => ({
+    ...uc,
+    tests: filter
+      ? uc.tests.filter((t) => t.status === filter)
+      : uc.tests,
+  })).filter((uc) => uc.tests.length > 0);
+
+  if (filteredUseCases.length === 0) {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+          <FolderOpen className="h-12 w-12 mb-4 opacity-50" />
+          <p>No {filter} tests</p>
         </CardContent>
       </Card>
     );
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      {tests.map((test) => (
-        <Card key={test.id} className="border-border bg-card rounded-md">
-          <CardHeader
-            className="cursor-pointer p-4 hover:bg-muted/30"
-            onClick={() => onToggle(test.id)}
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                {expandedTests.has(test.id) ? (
-                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                ) : (
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                )}
-                {test.status === "passed" ? (
-                  <CheckCircle className="h-5 w-5 text-success" />
-                ) : test.status === "failed" ? (
-                  <XCircle className="h-5 w-5 text-destructive" />
-                ) : (
-                  <Clock className="h-5 w-5 text-muted-foreground" />
-                )}
-                <div>
-                  <CardTitle className="text-sm font-medium">
-                    {test.name}
-                  </CardTitle>
-                  <p className="font-mono text-xs text-muted-foreground">
-                    {test.test_id}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-4">
-                {test.tags.length > 0 && (
-                  <div className="flex gap-1">
-                    {test.tags.slice(0, 3).map((tag) => (
-                      <Badge
-                        key={tag}
-                        variant="outline"
-                        className="border-border text-xs"
+    <Card>
+      <CardContent className="p-4">
+        <div className="space-y-1">
+          {filteredUseCases.map((uc) => {
+            const isExpanded = expandedIds.has(uc.use_case);
+            const totalInUc = uc.tests.length;
+            const hasFailed = uc.failed > 0;
+
+            return (
+              <div key={uc.use_case} className="border rounded-md overflow-hidden">
+                {/* Use Case Header */}
+                <button
+                  onClick={() => onToggle(uc.use_case)}
+                  className={cn(
+                    "flex items-center gap-2 w-full p-3 text-left hover:bg-muted/50 transition-colors",
+                    hasFailed && "bg-destructive/5"
+                  )}
+                >
+                  {isExpanded ? (
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                  )}
+                  {isExpanded ? (
+                    <FolderOpen className="h-4 w-4 text-amber-500" />
+                  ) : (
+                    <Folder className="h-4 w-4 text-amber-500" />
+                  )}
+                  <span className="font-medium flex-1">{uc.use_case}</span>
+
+                  {/* Progress indicator */}
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-muted-foreground">
+                      {totalInUc}
+                    </span>
+                    {uc.passed > 0 && (
+                      <span className="text-success">{uc.passed}✓</span>
+                    )}
+                    {uc.failed > 0 && (
+                      <span className="text-destructive">{uc.failed}✗</span>
+                    )}
+                  </div>
+                </button>
+
+                {/* Tests */}
+                {isExpanded && (
+                  <div className="border-t bg-muted/20">
+                    {uc.tests.map((test) => (
+                      <button
+                        key={test.id}
+                        onClick={() => onTestClick?.(test)}
+                        className={cn(
+                          "flex items-center gap-3 px-4 py-2 pl-10 hover:bg-muted/30 transition-colors w-full text-left",
+                          test.status === "failed" && "bg-destructive/5",
+                          onTestClick && "cursor-pointer"
+                        )}
                       >
-                        {tag}
-                      </Badge>
+                        {getStatusIcon(test.status)}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm truncate">
+                            {test.name || test.test_case}
+                          </p>
+                          {test.error_message && (
+                            <p className="text-xs text-destructive truncate mt-1">
+                              {test.error_message}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          {test.duration_ms !== null && (
+                            <span className="font-mono">
+                              {formatDuration(test.duration_ms)}
+                            </span>
+                          )}
+                        </div>
+                      </button>
                     ))}
                   </div>
                 )}
-                <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                  <Clock className="h-3 w-3" />
-                  {formatDuration(test.duration_ms)}
-                </div>
               </div>
-            </div>
-          </CardHeader>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
-          {expandedTests.has(test.id) && (
-            <CardContent className="border-t border-border pt-4">
-              {test.error_message && (
-                <div className="mb-4 rounded-lg bg-destructive/10 p-4">
-                  <div className="flex items-start gap-2">
-                    <AlertCircle className="mt-0.5 h-4 w-4 text-destructive" />
-                    <div>
-                      <p className="text-sm font-medium text-destructive">
-                        Error
-                      </p>
-                      <p className="mt-1 font-mono text-xs text-destructive/80">
-                        {test.error_message}
-                      </p>
-                    </div>
+// ============================================================================
+// TestDetailDialog Component
+// ============================================================================
+
+interface TestDetailDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  testDetail: TestDetail | null;
+  loading: boolean;
+}
+
+function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetailDialogProps) {
+  if (!testDetail && !loading) return null;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
+        <DialogHeader className="flex-shrink-0">
+          <DialogTitle className="flex items-center gap-2">
+            {testDetail && getStatusIcon(testDetail.status)}
+            <span className="truncate">{testDetail?.name || testDetail?.test_id}</span>
+          </DialogTitle>
+        </DialogHeader>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          </div>
+        ) : testDetail ? (
+          <div className="overflow-y-auto max-h-[calc(85vh-120px)] pr-2">
+            <div className="space-y-6">
+              {/* Test Info */}
+              <div className="flex flex-wrap gap-4 text-sm">
+                <div>
+                  <span className="text-muted-foreground">Test ID: </span>
+                  <span className="font-mono">{testDetail.test_id}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Duration: </span>
+                  <span className="font-mono">{formatDuration(testDetail.duration_ms)}</span>
+                </div>
+                <Badge variant={testDetail.status === "passed" ? "default" : "destructive"}>
+                  {testDetail.status}
+                </Badge>
+              </div>
+
+              {/* Error Message */}
+              {testDetail.error_message && (
+                <div className="rounded-md bg-destructive/10 border border-destructive/20 p-4">
+                  <p className="text-sm font-medium text-destructive mb-2">Error</p>
+                  <pre className="text-xs font-mono whitespace-pre-wrap text-destructive/90">
+                    {testDetail.error_message}
+                  </pre>
+                </div>
+              )}
+
+              {/* Steps */}
+              {testDetail.steps && testDetail.steps.length > 0 && (
+                <div>
+                  <h4 className="font-medium mb-3 flex items-center gap-2">
+                    <Terminal className="h-4 w-4" />
+                    Steps ({testDetail.steps.length})
+                  </h4>
+                  <div className="space-y-3">
+                    {testDetail.steps.map((step, idx) => (
+                      <div
+                        key={step.id || idx}
+                        className={cn(
+                          "rounded-md border p-3",
+                          step.status === "passed" && "border-success/30 bg-success/5",
+                          step.status === "failed" && "border-destructive/30 bg-destructive/5"
+                        )}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            {step.status === "passed" ? (
+                              <CheckCircle className="h-4 w-4 text-success" />
+                            ) : step.status === "failed" ? (
+                              <XCircle className="h-4 w-4 text-destructive" />
+                            ) : (
+                              <Circle className="h-4 w-4 text-muted-foreground" />
+                            )}
+                            <span className="text-sm font-medium">
+                              Step {step.step_index + 1}: {step.description || step.phase}
+                            </span>
+                            {step.handler && (
+                              <Badge variant="outline" className="text-xs">
+                                {step.handler}
+                              </Badge>
+                            )}
+                          </div>
+                          {step.duration_ms !== null && (
+                            <span className="text-xs font-mono text-muted-foreground">
+                              {formatDuration(step.duration_ms)}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Step Error */}
+                        {step.error_message && (
+                          <div className="mt-2 p-2 rounded bg-destructive/10 text-xs font-mono text-destructive">
+                            {step.error_message}
+                          </div>
+                        )}
+
+                        {/* Stdout */}
+                        {step.stdout && (
+                          <div className="mt-2">
+                            <p className="text-xs text-muted-foreground mb-1">stdout:</p>
+                            <pre className="p-2 rounded bg-muted text-xs font-mono overflow-x-auto whitespace-pre-wrap max-h-40">
+                              {step.stdout}
+                            </pre>
+                          </div>
+                        )}
+
+                        {/* Stderr */}
+                        {step.stderr && (
+                          <div className="mt-2">
+                            <p className="text-xs text-muted-foreground mb-1">stderr:</p>
+                            <pre className="p-2 rounded bg-destructive/10 text-xs font-mono overflow-x-auto whitespace-pre-wrap max-h-40 text-destructive/90">
+                              {step.stderr}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
 
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Terminal className="h-4 w-4" />
-                  Test Details
+              {/* Assertions */}
+              {testDetail.assertions && testDetail.assertions.length > 0 && (
+                <div>
+                  <h4 className="font-medium mb-3 flex items-center gap-2">
+                    <FileText className="h-4 w-4" />
+                    Assertions ({testDetail.assertions.length})
+                  </h4>
+                  <div className="space-y-2">
+                    {testDetail.assertions.map((assertion, idx) => (
+                      <div
+                        key={assertion.id || idx}
+                        className={cn(
+                          "rounded-md border p-3",
+                          assertion.passed
+                            ? "border-success/30 bg-success/5"
+                            : "border-destructive/30 bg-destructive/5"
+                        )}
+                      >
+                        <div className="flex items-center gap-2">
+                          {assertion.passed ? (
+                            <CheckCircle className="h-4 w-4 text-success" />
+                          ) : (
+                            <XCircle className="h-4 w-4 text-destructive" />
+                          )}
+                          <span className="text-sm">
+                            {assertion.message || assertion.expression}
+                          </span>
+                        </div>
+                        {!assertion.passed && assertion.actual_value && (
+                          <div className="mt-2 text-xs font-mono text-muted-foreground">
+                            <p>Expected: {assertion.expected_value}</p>
+                            <p>Actual: {assertion.actual_value}</p>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <ScrollArea className="h-[200px] rounded-lg bg-background p-4">
-                  <pre className="font-mono text-xs text-muted-foreground">
-                    <div>Use Case: {test.use_case}</div>
-                    <div>Test Case: {test.test_case}</div>
-                    <div>Started: {test.started_at || "N/A"}</div>
-                    <div>Finished: {test.finished_at || "N/A"}</div>
-                    <div>Duration: {formatDuration(test.duration_ms)}</div>
-                  </pre>
-                </ScrollArea>
-              </div>
-            </CardContent>
-          )}
-        </Card>
-      ))}
-    </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </DialogContent>
+    </Dialog>
   );
 }
