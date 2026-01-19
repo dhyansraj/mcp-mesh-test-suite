@@ -392,3 +392,171 @@ export function getStatusBgColor(status: string): string {
       return "bg-muted text-foreground";
   }
 }
+
+// ============================================================================
+// Test Case Editor API Functions
+// ============================================================================
+
+export interface TestCaseYaml {
+  suite_id: number;
+  test_id: string;
+  path: string;
+  raw_yaml: string;
+  structure: TestCaseStructure;
+}
+
+export interface TestCaseStructure {
+  name?: string;
+  description?: string;
+  tags?: string[];
+  timeout?: number;
+  pre_run?: TestStep[];
+  test?: TestStep[];
+  post_run?: TestStep[];
+  assertions?: TestAssertion[];
+}
+
+export interface TestStep {
+  name?: string;
+  handler?: string;
+  routine?: string;
+  command?: string;
+  params?: Record<string, unknown>;
+  capture?: string;
+  timeout?: number;
+  workdir?: string;
+  ignore_errors?: boolean;
+  // Wait handler
+  seconds?: number;
+  type?: string;
+  // HTTP handler
+  method?: string;
+  url?: string;
+  headers?: Record<string, string>;
+  body?: unknown;
+  expect_status?: number;
+}
+
+export interface TestAssertion {
+  expr: string;
+  message?: string;
+}
+
+export interface TestStepsResponse {
+  test_id: string;
+  pre_run: TestStep[];
+  test: TestStep[];
+  post_run: TestStep[];
+  assertions: TestAssertion[];
+}
+
+export async function getTestCaseYaml(
+  suiteId: number,
+  testId: string
+): Promise<TestCaseYaml> {
+  const res = await fetch(
+    `${API_BASE}/api/suites/${suiteId}/tests/${testId}/yaml`,
+    { cache: "no-store" }
+  );
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "Failed to fetch test YAML");
+  }
+  return res.json();
+}
+
+export async function updateTestCaseYaml(
+  suiteId: number,
+  testId: string,
+  options: { raw_yaml?: string; updates?: Partial<TestCaseStructure> }
+): Promise<{ success: boolean; test_id: string; raw_yaml: string }> {
+  const res = await fetch(
+    `${API_BASE}/api/suites/${suiteId}/tests/${testId}/yaml`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(options),
+    }
+  );
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "Failed to update test YAML");
+  }
+  return res.json();
+}
+
+export async function getTestSteps(
+  suiteId: number,
+  testId: string
+): Promise<TestStepsResponse> {
+  const res = await fetch(
+    `${API_BASE}/api/suites/${suiteId}/tests/${testId}/steps`,
+    { cache: "no-store" }
+  );
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "Failed to fetch test steps");
+  }
+  return res.json();
+}
+
+export async function updateTestStep(
+  suiteId: number,
+  testId: string,
+  phase: "pre_run" | "test" | "post_run",
+  index: number,
+  step: Partial<TestStep>
+): Promise<{ success: boolean }> {
+  const res = await fetch(
+    `${API_BASE}/api/suites/${suiteId}/tests/${testId}/steps/${phase}/${index}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(step),
+    }
+  );
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "Failed to update step");
+  }
+  return res.json();
+}
+
+export async function addTestStep(
+  suiteId: number,
+  testId: string,
+  phase: "pre_run" | "test" | "post_run",
+  step: TestStep,
+  index?: number
+): Promise<{ success: boolean }> {
+  const res = await fetch(
+    `${API_BASE}/api/suites/${suiteId}/tests/${testId}/steps/${phase}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ step, index }),
+    }
+  );
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "Failed to add step");
+  }
+  return res.json();
+}
+
+export async function deleteTestStep(
+  suiteId: number,
+  testId: string,
+  phase: "pre_run" | "test" | "post_run",
+  index: number
+): Promise<{ success: boolean }> {
+  const res = await fetch(
+    `${API_BASE}/api/suites/${suiteId}/tests/${testId}/steps/${phase}/${index}`,
+    { method: "DELETE" }
+  );
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "Failed to delete step");
+  }
+  return res.json();
+}

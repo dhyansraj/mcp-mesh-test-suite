@@ -34,9 +34,14 @@ def create_app() -> Flask:
     def add_cors_headers(response):
         """Add CORS headers to all responses for dashboard access."""
         response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         return response
+
+    @app.route("/api/<path:path>", methods=["OPTIONS"])
+    def handle_options(path):
+        """Handle CORS preflight requests."""
+        return "", 204
 
     @app.route("/health", methods=["GET"])
     def health():
@@ -975,6 +980,255 @@ def create_app() -> Flask:
             "tests": tests,
             "count": len(tests),
         })
+
+    # =========================================================================
+    # Test Case Editor API Endpoints
+    # =========================================================================
+
+    @app.route("/api/suites/<int:suite_id>/tests/<path:test_id>/yaml", methods=["GET"])
+    def api_get_test_yaml(suite_id: int, test_id: str):
+        """
+        Get test case YAML content (for editor).
+
+        Returns the raw YAML content and parsed structure.
+        """
+        import os
+        from .yaml_utils import load_yaml_file, get_test_case_structure
+
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        # Build path to test.yaml
+        # test_id is like "uc01_registry/tc01_agent_registration"
+        test_path = os.path.join(suite.folder_path, "suites", test_id, "test.yaml")
+
+        if not os.path.isfile(test_path):
+            return jsonify({"error": f"Test not found: {test_id}"}), 404
+
+        try:
+            # Load with comment preservation
+            yaml_data = load_yaml_file(test_path)
+            structure = get_test_case_structure(yaml_data)
+
+            # Read raw content for display
+            with open(test_path, 'r') as f:
+                raw_yaml = f.read()
+
+            return jsonify({
+                "suite_id": suite_id,
+                "test_id": test_id,
+                "path": test_path,
+                "raw_yaml": raw_yaml,
+                "structure": structure,
+            })
+        except Exception as e:
+            return jsonify({"error": f"Failed to read test: {str(e)}"}), 500
+
+    @app.route("/api/suites/<int:suite_id>/tests/<path:test_id>/yaml", methods=["PUT"])
+    def api_update_test_yaml(suite_id: int, test_id: str):
+        """
+        Update test case YAML content.
+
+        Can update either raw YAML or structured fields (with comment preservation).
+
+        Request body:
+            raw_yaml: str (optional) - Complete YAML content to write
+            updates: dict (optional) - Structured field updates (preserves comments)
+        """
+        import os
+        from .yaml_utils import (
+            load_yaml_file, save_yaml_file, string_to_yaml,
+            merge_yaml_updates, yaml_to_string
+        )
+
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        test_path = os.path.join(suite.folder_path, "suites", test_id, "test.yaml")
+
+        if not os.path.isfile(test_path):
+            return jsonify({"error": f"Test not found: {test_id}"}), 404
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON body"}), 400
+
+        try:
+            if "raw_yaml" in data:
+                # Write raw YAML directly (no comment preservation)
+                yaml_data = string_to_yaml(data["raw_yaml"])
+                save_yaml_file(yaml_data, test_path)
+            elif "updates" in data:
+                # Load existing, merge updates, save (preserves comments)
+                yaml_data = load_yaml_file(test_path)
+                merge_yaml_updates(yaml_data, data["updates"])
+                save_yaml_file(yaml_data, test_path)
+            else:
+                return jsonify({"error": "Must provide 'raw_yaml' or 'updates'"}), 400
+
+            # Return updated content
+            updated_yaml = load_yaml_file(test_path)
+            with open(test_path, 'r') as f:
+                raw_yaml = f.read()
+
+            return jsonify({
+                "success": True,
+                "test_id": test_id,
+                "raw_yaml": raw_yaml,
+            })
+        except Exception as e:
+            return jsonify({"error": f"Failed to save test: {str(e)}"}), 500
+
+    @app.route("/api/suites/<int:suite_id>/tests/<path:test_id>/steps", methods=["GET"])
+    def api_get_test_steps(suite_id: int, test_id: str):
+        """
+        Get test steps in a structured format for the step editor.
+        """
+        import os
+        from .yaml_utils import load_yaml_file, get_test_case_structure
+
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        test_path = os.path.join(suite.folder_path, "suites", test_id, "test.yaml")
+
+        if not os.path.isfile(test_path):
+            return jsonify({"error": f"Test not found: {test_id}"}), 404
+
+        try:
+            yaml_data = load_yaml_file(test_path)
+            structure = get_test_case_structure(yaml_data)
+
+            return jsonify({
+                "test_id": test_id,
+                "pre_run": structure.get("pre_run", []),
+                "test": structure.get("test", []),
+                "post_run": structure.get("post_run", []),
+                "assertions": structure.get("assertions", []),
+            })
+        except Exception as e:
+            return jsonify({"error": f"Failed to read steps: {str(e)}"}), 500
+
+    @app.route("/api/suites/<int:suite_id>/tests/<path:test_id>/steps/<phase>/<int:index>", methods=["PUT"])
+    def api_update_step(suite_id: int, test_id: str, phase: str, index: int):
+        """
+        Update a single step in a test case.
+
+        Request body: Step fields to update
+        """
+        import os
+        from .yaml_utils import load_yaml_file, save_yaml_file, update_step
+
+        if phase not in ("pre_run", "test", "post_run"):
+            return jsonify({"error": f"Invalid phase: {phase}"}), 400
+
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        test_path = os.path.join(suite.folder_path, "suites", test_id, "test.yaml")
+
+        if not os.path.isfile(test_path):
+            return jsonify({"error": f"Test not found: {test_id}"}), 404
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON body"}), 400
+
+        try:
+            yaml_data = load_yaml_file(test_path)
+
+            if not update_step(yaml_data, phase, index, data):
+                return jsonify({"error": f"Step not found: {phase}[{index}]"}), 404
+
+            save_yaml_file(yaml_data, test_path)
+
+            return jsonify({
+                "success": True,
+                "phase": phase,
+                "index": index,
+            })
+        except Exception as e:
+            return jsonify({"error": f"Failed to update step: {str(e)}"}), 500
+
+    @app.route("/api/suites/<int:suite_id>/tests/<path:test_id>/steps/<phase>", methods=["POST"])
+    def api_add_step(suite_id: int, test_id: str, phase: str):
+        """
+        Add a new step to a phase.
+
+        Request body:
+            step: Step definition
+            index: Optional index to insert at (appends if not provided)
+        """
+        import os
+        from .yaml_utils import load_yaml_file, save_yaml_file, add_step
+
+        if phase not in ("pre_run", "test", "post_run"):
+            return jsonify({"error": f"Invalid phase: {phase}"}), 400
+
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        test_path = os.path.join(suite.folder_path, "suites", test_id, "test.yaml")
+
+        if not os.path.isfile(test_path):
+            return jsonify({"error": f"Test not found: {test_id}"}), 404
+
+        data = request.get_json()
+        if not data or "step" not in data:
+            return jsonify({"error": "Must provide 'step' field"}), 400
+
+        try:
+            yaml_data = load_yaml_file(test_path)
+            add_step(yaml_data, phase, data["step"], data.get("index"))
+            save_yaml_file(yaml_data, test_path)
+
+            return jsonify({
+                "success": True,
+                "phase": phase,
+            }), 201
+        except Exception as e:
+            return jsonify({"error": f"Failed to add step: {str(e)}"}), 500
+
+    @app.route("/api/suites/<int:suite_id>/tests/<path:test_id>/steps/<phase>/<int:index>", methods=["DELETE"])
+    def api_delete_step(suite_id: int, test_id: str, phase: str, index: int):
+        """
+        Delete a step from a phase.
+        """
+        import os
+        from .yaml_utils import load_yaml_file, save_yaml_file, remove_step
+
+        if phase not in ("pre_run", "test", "post_run"):
+            return jsonify({"error": f"Invalid phase: {phase}"}), 400
+
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        test_path = os.path.join(suite.folder_path, "suites", test_id, "test.yaml")
+
+        if not os.path.isfile(test_path):
+            return jsonify({"error": f"Test not found: {test_id}"}), 404
+
+        try:
+            yaml_data = load_yaml_file(test_path)
+
+            if not remove_step(yaml_data, phase, index):
+                return jsonify({"error": f"Step not found: {phase}[{index}]"}), 404
+
+            save_yaml_file(yaml_data, test_path)
+
+            return jsonify({
+                "success": True,
+                "phase": phase,
+                "index": index,
+            })
+        except Exception as e:
+            return jsonify({"error": f"Failed to delete step: {str(e)}"}), 500
 
     @app.route("/api/suites/<int:suite_id>/run", methods=["POST"])
     def api_run_suite(suite_id: int):

@@ -1,0 +1,206 @@
+#+TITLE: Test Case Editor - Implementation Plan
+#+DATE: 2026-01-19
+#+STATUS: Planning
+
+* Overview
+
+Add a test case editor to the Settings page that allows viewing and editing
+test suites in a hierarchical manner (Suite → Use Case → Test Case).
+
+** Key Features
+- Tree navigation: Suite → UC → TC
+- Edit test case metadata (name, description, timeout, tags, mode)
+- Edit test steps with syntax highlighting for shell commands
+- Edit assertions
+- Preserve YAML comments on save (using ruamel.yaml)
+
+* Technical Stack
+
+** Frontend
+- Monaco Editor for shell command syntax highlighting (bash)
+- Shadcn/ui components (Dialog, Tabs, Select, Input, Badge)
+- Tree view similar to existing TestTree component
+
+** Backend
+- ruamel.yaml for comment-preserving YAML read/write
+- New API endpoints for reading/writing test files
+
+* Phase 1: Backend - YAML Read/Write with Comment Preservation
+** Status: [ ] Not Started
+
+*** Tasks
+- [ ] Add ruamel.yaml to requirements.txt
+- [ ] Create yaml_utils.py module with comment-preserving read/write
+- [ ] Test round-trip editing preserves comments
+
+*** API Endpoints
+- GET /api/suites/{id}/tests/{test_id}/yaml - Get test YAML content
+- PUT /api/suites/{id}/tests/{test_id}/yaml - Update test YAML content
+
+*** Code Location
+- tsuite/tsuite/yaml_utils.py (new)
+- tsuite/tsuite/server.py (new endpoints)
+
+* Phase 2: Backend - Test Case CRUD API
+** Status: [ ] Not Started
+
+*** Tasks
+- [ ] GET /api/suites/{id}/tests/{test_id}/details - Structured test data
+- [ ] PUT /api/suites/{id}/tests/{test_id}/details - Update structured data
+- [ ] Validation for required fields
+- [ ] Convert between YAML and structured JSON
+
+*** Test YAML Structure Reference
+#+BEGIN_SRC yaml
+name: "Test Name"
+description: "Test description"
+tags:
+  - tag1
+  - tag2
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  - name: "Step name"
+    handler: shell
+    command: |
+      echo "Hello"
+    capture: output_var
+    timeout: 60
+    workdir: /workspace
+    ignore_errors: false
+
+  - name: "Wait step"
+    handler: wait
+    seconds: 5
+
+assertions:
+  - expr: "${captured.output_var} contains 'Hello'"
+    message: "Should contain Hello"
+
+post_run:
+  - routine: global.cleanup_workspace
+#+END_SRC
+
+* Phase 3: Frontend - Suite/UC/TC Tree View
+** Status: [ ] Not Started
+
+*** Tasks
+- [ ] Create TestCaseTree component (Settings page)
+- [ ] Fetch suite hierarchy from API
+- [ ] Collapsible tree navigation
+- [ ] Click on TC opens editor panel/dialog
+
+*** Components
+- dashboard/components/settings/TestCaseTree.tsx (new)
+- dashboard/components/settings/TestCaseEditor.tsx (new)
+
+* Phase 4: Frontend - Test Case Editor UI
+** Status: [ ] Not Started
+
+*** Tasks
+- [ ] Install Monaco Editor: npm install @monaco-editor/react
+- [ ] Create editor layout with tabs (Metadata, Steps, Assertions)
+- [ ] Metadata tab: name, description, timeout, mode dropdown, tags input
+- [ ] Steps tab: list of steps with handlers
+- [ ] Assertions tab: expression + message fields
+
+*** Metadata Fields
+| Field       | Type          | Options                    |
+|-------------+---------------+----------------------------|
+| name        | text input    |                            |
+| description | textarea      |                            |
+| timeout     | number input  | default 300                |
+| mode        | dropdown      | docker, standalone         |
+| tags        | chip input    | multi-select/add           |
+
+*** Handler Types
+| Handler | Fields                                         |
+|---------+------------------------------------------------|
+| shell   | command (monaco), capture, timeout, workdir    |
+| wait    | seconds, type (seconds/http)                   |
+| http    | method, url, headers, body, expect_status      |
+| file    | operation, path, content                       |
+| routine | routine name, params                           |
+
+* Phase 5: Frontend - Monaco Editor Integration
+** Status: [ ] Not Started
+
+*** Tasks
+- [ ] Configure Monaco for bash syntax highlighting
+- [ ] Add shell command editor for step.command field
+- [ ] Handle multi-line commands properly
+- [ ] Dark theme matching dashboard
+
+*** Monaco Configuration
+#+BEGIN_SRC typescript
+import Editor from "@monaco-editor/react";
+
+<Editor
+  height="200px"
+  language="shell"
+  theme="vs-dark"
+  value={step.command}
+  onChange={(value) => updateStep(idx, "command", value)}
+  options={{
+    minimap: { enabled: false },
+    lineNumbers: "on",
+    scrollBeyondLastLine: false,
+    wordWrap: "on",
+  }}
+/>
+#+END_SRC
+
+* Phase 6: Frontend - Step Editor
+** Status: [ ] Not Started
+
+*** Tasks
+- [ ] Create StepEditor component
+- [ ] Handler type dropdown (shell, wait, http, file, routine)
+- [ ] Dynamic form fields based on handler type
+- [ ] Add/remove/reorder steps (drag and drop optional)
+- [ ] Step validation
+
+* Phase 7: Save & Validation
+** Status: [ ] Not Started
+
+*** Tasks
+- [ ] Frontend validation before save
+- [ ] API validation on backend
+- [ ] Preserve YAML comments on save
+- [ ] Show success/error toast messages
+- [ ] Confirm dialog for unsaved changes
+
+* Phase 8: Testing & Polish
+** Status: [ ] Not Started
+
+*** Tasks
+- [ ] Test comment preservation round-trip
+- [ ] Test all handler types
+- [ ] Error handling for invalid YAML
+- [ ] Loading states
+- [ ] Keyboard shortcuts (Ctrl+S to save)
+
+* Dependencies
+
+** Python (Backend)
+- ruamel.yaml - YAML parsing with comment preservation
+
+** npm (Frontend)
+- @monaco-editor/react - Code editor with syntax highlighting
+
+* References
+
+- ruamel.yaml docs: https://yaml.readthedocs.io/
+- Monaco Editor React: https://github.com/suren-atoyan/monaco-react
+- Existing TestTree component: dashboard/app/runs/[id]/RunDetails.tsx
+
+* Notes
+
+- ruamel.yaml must use YAML(typ='rt') for round-trip mode to preserve comments
+- Monaco editor adds ~2MB to bundle, consider lazy loading
+- Need to handle YAML variable interpolation (${config.xxx}, ${captured.xxx})

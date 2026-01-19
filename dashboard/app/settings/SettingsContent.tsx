@@ -14,6 +14,8 @@ import {
   ChevronUp,
   Home,
   Check,
+  Edit,
+  X,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -39,6 +41,7 @@ import {
   browseFolders,
   formatRelativeTime,
 } from "@/lib/api";
+import { TestCaseTree, TestCaseEditor } from "@/components/test-editor";
 
 interface SettingsContentProps {
   initialSuites: Suite[];
@@ -61,6 +64,13 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
   const [isSuite, setIsSuite] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [browseError, setBrowseError] = useState<string | null>(null);
+
+  // Test editor state
+  const [editingSuiteId, setEditingSuiteId] = useState<number | null>(null);
+  const [selectedTest, setSelectedTest] = useState<{
+    testId: string;
+    testName: string;
+  } | null>(null);
 
   // Load directory listing when dialog opens or path changes
   useEffect(() => {
@@ -356,6 +366,17 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
                         <Button
                           variant="ghost"
                           size="icon"
+                          onClick={() => {
+                            setEditingSuiteId(suite.id);
+                            setSelectedTest(null);
+                          }}
+                          title="Edit tests"
+                        >
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
                           onClick={() => handleSyncSuite(suite.id)}
                           disabled={syncingId === suite.id}
                           title="Sync from YAML"
@@ -385,6 +406,65 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
           )}
         </CardContent>
       </Card>
+
+      {/* Test Case Editor Section */}
+      {editingSuiteId && (
+        <Card className="rounded-md">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+            <CardTitle className="text-lg font-medium">
+              Edit Test Cases -{" "}
+              {suites.find((s) => s.id === editingSuiteId)?.suite_name}
+            </CardTitle>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => {
+                setEditingSuiteId(null);
+                setSelectedTest(null);
+              }}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-4 h-[600px]">
+              {/* Tree navigation */}
+              <div className="w-72 border rounded-md overflow-hidden flex flex-col">
+                <div className="p-2 border-b bg-muted/30">
+                  <span className="text-sm font-medium">Test Cases</span>
+                </div>
+                <ScrollArea className="flex-1">
+                  <div className="p-2">
+                    <TestCaseTree
+                      suiteId={editingSuiteId}
+                      selectedTestId={selectedTest?.testId}
+                      onSelectTest={(testId, testName) =>
+                        setSelectedTest({ testId, testName })
+                      }
+                    />
+                  </div>
+                </ScrollArea>
+              </div>
+
+              {/* Editor panel */}
+              <div className="flex-1 border rounded-md overflow-hidden">
+                {selectedTest ? (
+                  <TestCaseEditor
+                    suiteId={editingSuiteId}
+                    testId={selectedTest.testId}
+                    testName={selectedTest.testName}
+                  />
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+                    <Edit className="h-12 w-12 opacity-50 mb-4" />
+                    <p className="text-sm">Select a test case to edit</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Info Section */}
       <Card className="rounded-md">
