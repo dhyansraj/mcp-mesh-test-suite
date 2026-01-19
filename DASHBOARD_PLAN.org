@@ -93,7 +93,7 @@ mcp-mesh-test-suite/
 │   │   ├── sse.ts             # SSE client hook
 │   │   └── utils.ts
 │   ├── public/
-│   │   └── logo.png           # MCP Mesh logo
+│   │   └── logo-cyan.svg      # MCP Mesh logo (copy from images/)
 │   ├── package.json
 │   ├── tailwind.config.ts
 │   └── next.config.js
