@@ -12,9 +12,9 @@ Usage:
 import sys
 from pathlib import Path
 
-# Add test-suite to path
+# Add tsuite to path
 suite_dir = Path(__file__).parent
-framework_dir = suite_dir.parent / "test-suite"
+framework_dir = suite_dir.parent / "tsuite"
 sys.path.insert(0, str(framework_dir))
 
 # Import and run CLI

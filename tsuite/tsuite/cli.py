@@ -358,8 +358,8 @@ def main(
         cwd = Path.cwd()
         if (cwd / "config.yaml").exists():
             suite = cwd
-        elif (cwd / "mcp-mesh-test-suites" / "config.yaml").exists():
-            suite = cwd / "mcp-mesh-test-suites"
+        elif (cwd / "integration" / "config.yaml").exists():
+            suite = cwd / "integration"
         else:
             console.print("[red]Error: Could not find test suite. Use --suite-path[/red]")
             sys.exit(1)
@@ -525,8 +525,9 @@ def run_local_mode(
     # Setup routine resolver
     routine_resolver = RoutineResolver(routine_sets)
 
-    # Load handlers
-    sys.path.insert(0, str(suite.parent / "test-suite"))
+    # Load handlers - framework is relative to this file's location
+    framework_path = Path(__file__).parent.parent
+    sys.path.insert(0, str(framework_path))
     handlers = get_handlers()
 
     results = []
@@ -613,8 +614,8 @@ def run_docker_mode(
 
     console.print(f"[dim]Docker: {info}[/dim]")
 
-    # Get framework path
-    framework_path = suite.parent / "test-suite"
+    # Get framework path - relative to this file's location
+    framework_path = Path(__file__).parent.parent
 
     # Configure container
     docker_config = config.get("docker", {})

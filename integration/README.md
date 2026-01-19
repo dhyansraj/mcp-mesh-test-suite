@@ -18,7 +18,7 @@ Automated integration tests for MCP Mesh releases. Tests run inside Docker conta
    cd ../mcp-mesh-test-suites
    python3 -m venv venv
    source venv/bin/activate
-   pip install -e ../test-suite
+   pip install -e ../tsuite
    ```
 
 ## Quick Start

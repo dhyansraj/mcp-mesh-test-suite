@@ -1,2 +1,2 @@
-# Install the test-suite framework (editable mode for development)
--e ../test-suite
+# Install the tsuite framework (editable mode for development)
+-e ../tsuite

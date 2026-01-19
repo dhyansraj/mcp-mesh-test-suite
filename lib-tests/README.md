@@ -17,7 +17,7 @@ Tests MCP Mesh package availability and builds the `tsuite-mesh` base image for 
 cd /path/to/mcp-mesh/mcp-mesh-lib-test-suites
 python3.11 -m venv venv
 source venv/bin/activate
-pip install -e ../test-suite
+pip install -e ../tsuite
 ```
 
 ## Usage
