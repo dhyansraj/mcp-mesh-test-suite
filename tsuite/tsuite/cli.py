@@ -298,7 +298,7 @@ def generate_comparison(
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.option("--stop-on-fail", is_flag=True, help="Stop on first failure")
 @click.option("--suite-path", type=click.Path(exists=True), help="Path to test suite")
-@click.option("--port", default=9999, help="Server port")
+@click.option("--port", default=9998, help="Internal runner server port")
 @click.option("--docker", is_flag=True, help="Run tests in Docker containers")
 @click.option("--image", default=None, help="Docker image to use (overrides config)")
 @click.option("--db-path", type=click.Path(), help="Path to results database")
@@ -311,6 +311,7 @@ def generate_comparison(
 @click.option("--retry-failed", is_flag=True, help="Retry failed tests from last run")
 @click.option("--mock-llm", is_flag=True, help="Use mock LLM responses (no API calls)")
 @click.option("--skip-tag", multiple=True, help="Skip tests with specific tag(s)")
+@click.option("--api-url", default="http://localhost:9999", help="API server URL for SSE event forwarding")
 def main(
     run_all: bool,
     uc: tuple,
@@ -334,6 +335,7 @@ def main(
     retry_failed: bool,
     mock_llm: bool,
     skip_tag: tuple,
+    api_url: str,
 ):
     """Run integration tests."""
     global _current_run_id
@@ -343,6 +345,10 @@ def main(
         import os
         os.environ["TSUITE_MOCK_LLM"] = "true"
         console.print("[dim]Mock LLM mode enabled[/dim]")
+
+    # Configure SSE event forwarding to API server
+    sse_manager.set_event_server(api_url)
+    console.print(f"[dim]SSE forwarding: {api_url}[/dim]")
 
     # Initialize database
     if db_path:
