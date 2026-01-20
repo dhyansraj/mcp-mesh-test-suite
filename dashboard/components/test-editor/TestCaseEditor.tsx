@@ -204,7 +204,7 @@ export function TestCaseEditor({
   if (!structure) return null;
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between border-b px-4 py-3">
         <div className="flex items-center gap-3">
@@ -243,8 +243,8 @@ export function TestCaseEditor({
       </div>
 
       {/* Tabs Content */}
-      <Tabs defaultValue="metadata" className="flex-1 flex flex-col">
-        <TabsList className="mx-4 mt-4 w-fit">
+      <Tabs defaultValue="metadata" className="flex-1 flex flex-col min-h-0">
+        <TabsList className="mx-4 mt-4 w-fit flex-shrink-0">
           <TabsTrigger value="metadata">Metadata</TabsTrigger>
           <TabsTrigger value="steps">
             Steps ({(structure.test?.length || 0)})
@@ -254,7 +254,7 @@ export function TestCaseEditor({
           </TabsTrigger>
         </TabsList>
 
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="flex-1 overflow-y-auto p-4 min-h-0">
           {/* Metadata Tab */}
           <TabsContent value="metadata" className="m-0 space-y-4">
             <div className="grid gap-4">
