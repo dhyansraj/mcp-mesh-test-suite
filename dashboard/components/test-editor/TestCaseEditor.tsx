@@ -70,7 +70,8 @@ export function TestCaseEditor({
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [yamlData, setYamlData] = useState<TestCaseYaml | null>(null);
   const [structure, setStructure] = useState<TestCaseStructure | null>(null);
-  const [hasChanges, setHasChanges] = useState(false);
+  const [originalStructure, setOriginalStructure] = useState<TestCaseStructure | null>(null);
+  const [changedFields, setChangedFields] = useState<Set<keyof TestCaseStructure>>(new Set());
 
   // Tag input state
   const [newTag, setNewTag] = useState("");
@@ -82,12 +83,14 @@ export function TestCaseEditor({
   const loadTestCase = async () => {
     setLoading(true);
     setError(null);
-    setHasChanges(false);
+    setChangedFields(new Set());
     setSaveSuccess(false);
     try {
       const data = await getTestCaseYaml(suiteId, testId);
       setYamlData(data);
       setStructure(data.structure);
+      // Store a deep copy of original for comparison
+      setOriginalStructure(JSON.parse(JSON.stringify(data.structure)));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load test case");
     } finally {
@@ -96,14 +99,22 @@ export function TestCaseEditor({
   };
 
   const handleSave = async () => {
-    if (!structure) return;
+    if (!structure || changedFields.size === 0) return;
 
     setSaving(true);
     setError(null);
     setSaveSuccess(false);
     try {
-      await updateTestCaseYaml(suiteId, testId, { updates: structure });
-      setHasChanges(false);
+      // Only send the fields that have actually changed
+      const updates: Partial<TestCaseStructure> = {};
+      changedFields.forEach((field) => {
+        updates[field] = structure[field] as any;
+      });
+
+      await updateTestCaseYaml(suiteId, testId, { updates });
+      setChangedFields(new Set());
+      // Update original to match current after successful save
+      setOriginalStructure(JSON.parse(JSON.stringify(structure)));
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (err) {
@@ -119,7 +130,8 @@ export function TestCaseEditor({
   ) => {
     if (!structure) return;
     setStructure({ ...structure, [field]: value });
-    setHasChanges(true);
+    // Track which fields have changed
+    setChangedFields((prev) => new Set(prev).add(field));
   };
 
   const addTag = () => {
@@ -225,7 +237,7 @@ export function TestCaseEditor({
           <Button
             size="sm"
             onClick={handleSave}
-            disabled={saving || !hasChanges}
+            disabled={saving || changedFields.size === 0}
           >
             {saving ? (
               <Loader2 className="h-4 w-4 animate-spin mr-1" />
