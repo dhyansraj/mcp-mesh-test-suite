@@ -987,6 +987,96 @@ def create_app() -> Flask:
     # Test Case Editor API Endpoints
     # =========================================================================
 
+    # =========================================================================
+    # Suite Config Editor API Endpoints
+    # =========================================================================
+
+    @app.route("/api/suites/<int:suite_id>/config", methods=["GET"])
+    def api_get_suite_config(suite_id: int):
+        """
+        Get suite config.yaml content (for config editor).
+
+        Returns the structure of config.yaml with support for editing.
+        """
+        import os
+        from .yaml_utils import load_yaml_file, get_test_case_structure
+
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        config_path = os.path.join(suite.folder_path, "config.yaml")
+
+        if not os.path.isfile(config_path):
+            return jsonify({"error": f"Config not found: {config_path}"}), 404
+
+        try:
+            # Load with comment preservation
+            yaml_data = load_yaml_file(config_path)
+            structure = get_test_case_structure(yaml_data)
+
+            # Read raw content for display
+            with open(config_path, 'r') as f:
+                raw_yaml = f.read()
+
+            return jsonify({
+                "suite_id": suite_id,
+                "path": config_path,
+                "raw_yaml": raw_yaml,
+                "structure": structure,
+            })
+        except Exception as e:
+            return jsonify({"error": f"Failed to read config: {str(e)}"}), 500
+
+    @app.route("/api/suites/<int:suite_id>/config", methods=["PUT"])
+    def api_update_suite_config(suite_id: int):
+        """
+        Update suite config.yaml content.
+
+        Request body:
+            updates: dict - Structured field updates (preserves comments)
+        """
+        import os
+        from .yaml_utils import load_yaml_file, save_yaml_file, merge_yaml_updates
+
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        config_path = os.path.join(suite.folder_path, "config.yaml")
+
+        if not os.path.isfile(config_path):
+            return jsonify({"error": f"Config not found: {config_path}"}), 404
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON body"}), 400
+
+        if "updates" not in data:
+            return jsonify({"error": "Must provide 'updates'"}), 400
+
+        try:
+            # Load existing, merge updates, save (preserves comments)
+            yaml_data = load_yaml_file(config_path)
+            merge_yaml_updates(yaml_data, data["updates"])
+            save_yaml_file(yaml_data, config_path)
+
+            # Return updated content
+            with open(config_path, 'r') as f:
+                raw_yaml = f.read()
+
+            return jsonify({
+                "success": True,
+                "suite_id": suite_id,
+                "raw_yaml": raw_yaml,
+            })
+        except Exception as e:
+            return jsonify({"error": f"Failed to save config: {str(e)}"}), 500
+
+    # =========================================================================
+    # Test Case Editor API Endpoints
+    # =========================================================================
+
     @app.route("/api/suites/<int:suite_id>/tests/<path:test_id>/yaml", methods=["GET"])
     def api_get_test_yaml(suite_id: int, test_id: str):
         """

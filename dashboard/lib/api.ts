@@ -560,3 +560,70 @@ export async function deleteTestStep(
   }
   return res.json();
 }
+
+// ============================================================================
+// Suite Config Editor API Functions
+// ============================================================================
+
+export interface SuiteConfigStructure {
+  suite?: {
+    name?: string;
+    mode?: "docker" | "standalone";
+  };
+  packages?: {
+    cli_version?: string;
+    sdk_python_version?: string;
+    sdk_typescript_version?: string;
+  };
+  docker?: {
+    base_image?: string;
+    network?: string;
+  };
+  defaults?: {
+    timeout?: number;
+    parallel?: number;
+    retry?: number;
+  };
+  reports?: {
+    output_dir?: string;
+    formats?: string[];
+    keep_last?: number;
+  };
+  aliases?: Record<string, string>;
+}
+
+export interface SuiteConfigResponse {
+  suite_id: number;
+  path: string;
+  raw_yaml: string;
+  structure: SuiteConfigStructure;
+}
+
+export async function getSuiteConfig(
+  suiteId: number
+): Promise<SuiteConfigResponse> {
+  const res = await fetch(`${API_BASE}/api/suites/${suiteId}/config`, {
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "Failed to fetch config");
+  }
+  return res.json();
+}
+
+export async function updateSuiteConfig(
+  suiteId: number,
+  updates: Partial<SuiteConfigStructure>
+): Promise<{ success: boolean; suite_id: number; raw_yaml: string }> {
+  const res = await fetch(`${API_BASE}/api/suites/${suiteId}/config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ updates }),
+  });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "Failed to update config");
+  }
+  return res.json();
+}

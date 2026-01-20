@@ -16,6 +16,7 @@ import {
   Check,
   Edit,
   X,
+  Settings,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -42,6 +43,7 @@ import {
   formatRelativeTime,
 } from "@/lib/api";
 import { TestCaseTree, TestCaseEditor } from "@/components/test-editor";
+import { SuiteConfigEditor } from "@/components/suite-editor";
 
 interface SettingsContentProps {
   initialSuites: Suite[];
@@ -71,6 +73,9 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
     testId: string;
     testName: string;
   } | null>(null);
+
+  // Config editor state
+  const [configSuiteId, setConfigSuiteId] = useState<number | null>(null);
 
   // Load directory listing when dialog opens or path changes
   useEffect(() => {
@@ -367,6 +372,16 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
                           variant="ghost"
                           size="icon"
                           onClick={() => {
+                            setConfigSuiteId(suite.id);
+                          }}
+                          title="Edit config"
+                        >
+                          <Settings className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => {
                             setEditingSuiteId(suite.id);
                             setSelectedTest(null);
                           }}
@@ -406,6 +421,35 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
           )}
         </CardContent>
       </Card>
+
+      {/* Config Editor Section */}
+      {configSuiteId && (
+        <Card className="rounded-md">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+            <CardTitle className="text-lg font-medium">
+              Edit Config -{" "}
+              {suites.find((s) => s.id === configSuiteId)?.suite_name}
+            </CardTitle>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setConfigSuiteId(null)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <div className="border rounded-md overflow-hidden h-[600px]">
+              <SuiteConfigEditor
+                suiteId={configSuiteId}
+                suiteName={
+                  suites.find((s) => s.id === configSuiteId)?.suite_name || ""
+                }
+              />
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Test Case Editor Section */}
       {editingSuiteId && (
