@@ -44,6 +44,9 @@ import {
 import {
   getTestCaseYaml,
   updateTestCaseYaml,
+  updateTestStep,
+  addTestStep,
+  deleteTestStep,
   TestCaseYaml,
   TestCaseStructure,
   TestStep,
@@ -148,29 +151,50 @@ export function TestCaseEditor({
     updateField("tags", tags);
   };
 
-  const updateStep = (
+  const handleUpdateStep = async (
     phase: "pre_run" | "test" | "post_run",
     index: number,
     updates: Partial<TestStep>
   ) => {
     if (!structure) return;
-    const steps = [...(structure[phase] || [])];
-    steps[index] = { ...steps[index], ...updates };
-    updateField(phase, steps);
+    try {
+      // Call API to update step (preserves YAML comments)
+      await updateTestStep(suiteId, testId, phase, index, updates);
+      // Update local state for display
+      const steps = [...(structure[phase] || [])];
+      steps[index] = { ...steps[index], ...updates };
+      setStructure({ ...structure, [phase]: steps });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update step");
+    }
   };
 
-  const addStep = (phase: "pre_run" | "test" | "post_run") => {
+  const handleAddStep = async (phase: "pre_run" | "test" | "post_run") => {
     if (!structure) return;
-    const steps = [...(structure[phase] || [])];
-    steps.push({ name: "New step", handler: "shell", command: "" });
-    updateField(phase, steps);
+    const newStep: TestStep = { name: "New step", handler: "shell", command: "" };
+    try {
+      // Call API to add step
+      await addTestStep(suiteId, testId, phase, newStep);
+      // Update local state for display
+      const steps = [...(structure[phase] || []), newStep];
+      setStructure({ ...structure, [phase]: steps });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add step");
+    }
   };
 
-  const removeStep = (phase: "pre_run" | "test" | "post_run", index: number) => {
+  const handleRemoveStep = async (phase: "pre_run" | "test" | "post_run", index: number) => {
     if (!structure) return;
-    const steps = [...(structure[phase] || [])];
-    steps.splice(index, 1);
-    updateField(phase, steps);
+    try {
+      // Call API to delete step
+      await deleteTestStep(suiteId, testId, phase, index);
+      // Update local state for display
+      const steps = [...(structure[phase] || [])];
+      steps.splice(index, 1);
+      setStructure({ ...structure, [phase]: steps });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete step");
+    }
   };
 
   const updateAssertion = (index: number, updates: Partial<TestAssertion>) => {
@@ -360,9 +384,9 @@ export function TestCaseEditor({
                 title="Pre-run Steps"
                 steps={structure.pre_run || []}
                 phase="pre_run"
-                onUpdate={(idx, updates) => updateStep("pre_run", idx, updates)}
-                onAdd={() => addStep("pre_run")}
-                onRemove={(idx) => removeStep("pre_run", idx)}
+                onUpdate={(idx, updates) => handleUpdateStep("pre_run", idx, updates)}
+                onAdd={() => handleAddStep("pre_run")}
+                onRemove={(idx) => handleRemoveStep("pre_run", idx)}
               />
             )}
 
@@ -371,9 +395,9 @@ export function TestCaseEditor({
               title="Test Steps"
               steps={structure.test || []}
               phase="test"
-              onUpdate={(idx, updates) => updateStep("test", idx, updates)}
-              onAdd={() => addStep("test")}
-              onRemove={(idx) => removeStep("test", idx)}
+              onUpdate={(idx, updates) => handleUpdateStep("test", idx, updates)}
+              onAdd={() => handleAddStep("test")}
+              onRemove={(idx) => handleRemoveStep("test", idx)}
             />
 
             {/* Post-run steps */}
@@ -383,10 +407,10 @@ export function TestCaseEditor({
                 steps={structure.post_run || []}
                 phase="post_run"
                 onUpdate={(idx, updates) =>
-                  updateStep("post_run", idx, updates)
+                  handleUpdateStep("post_run", idx, updates)
                 }
-                onAdd={() => addStep("post_run")}
-                onRemove={(idx) => removeStep("post_run", idx)}
+                onAdd={() => handleAddStep("post_run")}
+                onRemove={(idx) => handleRemoveStep("post_run", idx)}
               />
             )}
           </TabsContent>
