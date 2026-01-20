@@ -18,8 +18,10 @@ from werkzeug.serving import make_server
 
 from .context import runtime
 from . import repository as repo
+from . import db
 from .models import RunStatus, TestStatus
 from .sse import sse_manager, stream_events, SSEEvent
+from .discovery import TestDiscovery, load_config
 
 # Suppress Flask's default logging
 log = logging.getLogger("werkzeug")
@@ -1535,3 +1537,56 @@ class RunnerServer:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop()
+
+
+def main():
+    """
+    Run the API server standalone for the dashboard.
+
+    Usage:
+        python -m tsuite.server [--port PORT] [--suites PATHS]
+
+    Examples:
+        python -m tsuite.server --port 9999 --suites integration,lib-tests
+    """
+    import argparse
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(description="Run tsuite API server for dashboard")
+    parser.add_argument("--port", type=int, default=9999, help="Server port (default: 9999)")
+    parser.add_argument("--suites", type=str, help="Comma-separated list of suite paths to sync")
+    args = parser.parse_args()
+
+    # Initialize database
+    db.init_db()
+
+    # Sync suites if provided
+    if args.suites:
+        for suite_path in args.suites.split(","):
+            suite_dir = Path(suite_path.strip()).resolve()
+            config_file = suite_dir / "config.yaml"
+            if suite_dir.exists() and config_file.exists():
+                config = load_config(config_file)
+                if config:
+                    # Count tests
+                    discovery = TestDiscovery(suite_dir)
+                    test_count = len(discovery.discover_tests())
+
+                    # Sync to DB
+                    from .cli import sync_suite_to_db
+                    sync_suite_to_db(suite_dir, config, test_count)
+                    print(f"Synced suite: {suite_dir.name} ({test_count} tests)")
+
+    # Start server (blocking)
+    print(f"Starting API server on http://localhost:{args.port}")
+    app = create_app()
+    server = make_server("0.0.0.0", args.port, app, threaded=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        server.shutdown()
+
+
+if __name__ == "__main__":
+    main()

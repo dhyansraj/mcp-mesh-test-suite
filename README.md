@@ -7,6 +7,7 @@ Integration test suite for [MCP Mesh](https://github.com/dhyansraj/mcp-mesh).
 ```
 mcp-mesh-test-suite/
 ├── tsuite/          # Test framework (Python package)
+├── dashboard/       # Web dashboard (Next.js)
 ├── lib-tests/       # Library tests & Docker image builder
 └── integration/     # Integration test suites
 ```
@@ -20,6 +21,13 @@ The `tsuite` Python package provides the test framework for running integration 
 - Docker container execution
 - Test result database and reporting
 - Routines and reusable test patterns
+
+### dashboard
+
+Web dashboard for monitoring test runs and managing test suites:
+- Real-time test execution monitoring via SSE
+- Test result history and filtering
+- Test case editor with YAML preview
 
 ### lib-tests
 
@@ -54,6 +62,42 @@ source venv/bin/activate
 pip install -e ../tsuite
 
 tsuite --all --docker
+```
+
+## Dashboard
+
+The test suite includes a web dashboard for viewing test results and managing test suites.
+
+### Starting the Dashboard
+
+```bash
+# Terminal 1: Start the API server
+cd mcp-mesh-test-suite
+source tsuite/venv/bin/activate
+python -m tsuite.server --port 9999
+
+# Terminal 2: Start the web server
+cd mcp-mesh-test-suite/dashboard
+npm install  # first time only
+npm run dev
+```
+
+The dashboard will be available at http://localhost:3000
+
+You can add test suites via Settings → Add Suite in the dashboard UI.
+
+Alternatively, pre-sync suites at startup:
+```bash
+python -m tsuite.server --port 9999 --suites integration,lib-tests
+```
+
+### Running Tests with Dashboard
+
+When running tests while the dashboard server is running, use a different port:
+
+```bash
+# In integration/ or lib-tests/ directory
+tsuite --all --docker --port 9998
 ```
 
 ## Configuration
