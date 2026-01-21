@@ -51,15 +51,8 @@ def create_app() -> Flask:
         return jsonify({"status": "ok"})
 
     # =========================================================================
-    # Legacy endpoints removed in Phase 6 cleanup.
-    # All runner endpoints are now at /api/runner/* prefix.
-    # See: /api/runner/config, /api/runner/state, /api/runner/capture, etc.
-    # =========================================================================
-
-    # =========================================================================
-    # Runner API Endpoints (New Architecture)
+    # Runner API Endpoints
     # These endpoints are called by test containers/subprocesses.
-    # They support run_id for tracking which run the request belongs to.
     # =========================================================================
 
     @app.route("/api/runner/config", methods=["GET"])
@@ -70,7 +63,6 @@ def create_app() -> Flask:
         Query params:
             run_id: str (optional) - The run ID for tracking
         """
-        # run_id = request.args.get("run_id")  # For future use
         return jsonify(runtime.get_config())
 
     @app.route("/api/runner/config/<path:path>", methods=["GET"])
@@ -290,7 +282,7 @@ def create_app() -> Flask:
         return jsonify(detail.to_dict())
 
     # =========================================================================
-    # Run Management API (New Architecture)
+    # Run Management API
     # =========================================================================
 
     @app.route("/api/runs", methods=["POST"])
@@ -1435,9 +1427,7 @@ def create_app() -> Flask:
             # Fallback to system python
             venv_python = sys.executable
 
-        # Build CLI command
-        # Phase 3: No --port flag (RunnerServer removed)
-        # CLI uses --api-url to call back to this server
+        # Build CLI command (uses --api-url to call back to this server)
         api_url = f"http://{request.host}"
         cmd = [
             str(venv_python),

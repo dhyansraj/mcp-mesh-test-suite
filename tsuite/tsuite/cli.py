@@ -28,7 +28,6 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 from .context import runtime
 from .discovery import TestDiscovery, load_config
-# Phase 6: RunnerServer removed - CLI uses single API server (port 9999)
 from .executor import TestExecutor, TestResult
 from .routines import RoutineResolver
 from . import db
@@ -60,7 +59,7 @@ class DockerTestResult:
 
 
 # =============================================================================
-# API Server Helper Functions (Phase 2)
+# API Server Helper Functions
 # =============================================================================
 
 def health_check(api_url: str, timeout: int = 5) -> bool:
@@ -217,7 +216,7 @@ def update_test_status_via_api(
 
 
 # =============================================================================
-# Worker Pool for Parallel Execution (Phase 4)
+# Worker Pool for Parallel Execution
 # =============================================================================
 
 class TestTimeoutError(Exception):
@@ -837,8 +836,8 @@ def run_local_mode(
     """
     Run tests in local/standalone mode (no Docker).
 
-    Phase 4: Always sequential (max_workers=1) because tests share
-    the same filesystem and may have dependencies on each other.
+    Always sequential (max_workers=1) because tests share the same
+    filesystem and may have dependencies on each other.
     Use docker mode for parallel execution.
     """
     # Setup routine resolver
@@ -851,7 +850,7 @@ def run_local_mode(
 
     results = []
 
-    # Use API server URL (Phase 6: port parameter removed)
+    # Use API server URL
     server_url = api_url or "http://localhost:9999"
     console.print(f"[dim]API Server: {server_url}[/dim]")
     console.print(f"[dim]Mode: local (standalone)[/dim]\n")
@@ -939,8 +938,8 @@ def run_docker_mode(
     """
     Run tests in Docker containers with optional parallel execution.
 
-    Phase 4: Uses WorkerPool for parallel test execution.
-    max_workers is read from config.defaults.parallel (default: 1).
+    Uses WorkerPool for parallel test execution.
+    max_workers is read from config.execution.max_workers (default: 1).
     """
     from .docker_executor import DockerExecutor, ContainerConfig, check_docker_available
 
@@ -967,16 +966,14 @@ def run_docker_mode(
         mounts=docker_config.get("mounts", []),
     )
 
-    # Phase 4: Get execution settings from config
-    # Support both 'execution' (new) and 'defaults' (legacy) config keys
-    execution = config.get("execution", config.get("defaults", {}))
-    max_workers = execution.get("max_workers", execution.get("parallel", 1))
+    # Get execution settings from config
+    execution = config.get("execution", {})
+    max_workers = execution.get("max_workers", 1)
     test_timeout = execution.get("timeout", 300)  # seconds per test
 
     results = []
     current_run_id = run_id or _current_run_id
 
-    # Phase 2: containers call API server directly (no more RunnerServer)
     # Use host.docker.internal for Docker containers to reach host's API server
     api_server_url = "http://host.docker.internal:9999"
     console.print(f"[dim]API Server: {api_server_url}[/dim]")
@@ -997,7 +994,7 @@ def run_docker_mode(
         """
         Execute a single test and return result.
 
-        Phase 5: Reports CRASHED status on unexpected container/process death.
+        Reports CRASHED status on unexpected container/process death.
         Timeout is reported as FAILED (not CRASHED).
         """
         test_start = datetime.now()
@@ -1023,7 +1020,7 @@ def run_docker_mode(
                 test_timeout
             )
         except TestTimeoutError as e:
-            # Phase 5: Timeout is FAILED, not CRASHED
+            # Timeout is FAILED, not CRASHED
             docker_result = {
                 "test_id": test.id,
                 "passed": False,
@@ -1033,7 +1030,7 @@ def run_docker_mode(
                 "stderr": f"Test exceeded {test_timeout}s timeout",
             }
         except Exception as e:
-            # Phase 5: Unexpected error = container/process crashed
+            # Unexpected error = container/process crashed
             crashed = True
             docker_result = {
                 "test_id": test.id,
@@ -1059,8 +1056,7 @@ def run_docker_mode(
             assertion_results=[],
         )
 
-        # Update test result in database
-        # Phase 5: Use CRASHED status for unexpected death
+        # Update test result in database (use CRASHED status for unexpected death)
         if db_test_id:
             if crashed:
                 status = TestStatus.CRASHED

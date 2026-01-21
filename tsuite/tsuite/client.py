@@ -232,10 +232,8 @@ class RunnerClient:
         return self._get(f"/api/runner/context/{tid}") or {}
 
     # =========================================================================
-    # New Architecture API Methods
+    # Test Status Reporting Methods
     # =========================================================================
-    # These methods are used by test handlers to report status to the API server
-    # in the new architecture where handlers call the API directly.
 
     def _patch(self, path: str, data: dict) -> dict | None:
         """Make a PATCH request."""

@@ -22,11 +22,11 @@ class TestStatus(Enum):
     RUNNING = "running"
     PASSED = "passed"
     FAILED = "failed"
-    CRASHED = "crashed"  # Phase 5: subprocess/container died unexpectedly
+    CRASHED = "crashed"  # subprocess/container died unexpectedly
     SKIPPED = "skipped"
 
 
-# Phase 5: Terminal states that cannot be overwritten
+# Terminal states that cannot be overwritten (idempotent updates)
 TERMINAL_STATES = {TestStatus.PASSED, TestStatus.FAILED, TestStatus.CRASHED, TestStatus.SKIPPED}
 
 

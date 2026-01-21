@@ -27,7 +27,7 @@ from handlers import pip_install, npm_install
 
 
 def _step_result_to_dict(result: StepResult) -> dict:
-    """Convert StepResult to dict for compatibility with existing code."""
+    """Convert StepResult dataclass to dict for step tracking."""
     return {
         "success": result.success,
         "exit_code": result.exit_code,

@@ -272,7 +272,7 @@ def update_test_status(
     This is the main method called by test runners to report progress.
     It also updates the run's counters.
 
-    Phase 5: Idempotent - ignores updates if test is already in a terminal state
+    Idempotent: ignores updates if test is already in a terminal state
     (passed, failed, crashed, skipped). This prevents race conditions in parallel
     execution and ensures crashed tests aren't overwritten.
     """
@@ -283,7 +283,7 @@ def update_test_status(
 
     old_status = test.status
 
-    # Phase 5: Idempotent - don't update terminal states
+    # Idempotent - don't update terminal states
     if old_status in TERMINAL_STATES:
         # Already in terminal state, ignore update
         return test
@@ -481,10 +481,10 @@ def update_test_result(
     """
     Update a test result record.
 
-    Phase 5: Idempotent - ignores status updates if test is already in a
+    Idempotent: ignores status updates if test is already in a
     terminal state (passed, failed, crashed, skipped).
     """
-    # Phase 5: Check current status for idempotency
+    # Check current status for idempotency
     if status is not None:
         current = get_test_result(test_result_id)
         if current and current.status in TERMINAL_STATES:
