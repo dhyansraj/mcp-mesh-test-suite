@@ -242,72 +242,43 @@ CLOSED: [2026-01-21]
   4. CLI updates status via PATCH /api/runs/{id}/tests/{test_id}
   5. CLI completes via POST /api/runs/{id}/complete
 
-** PHASE 4: Worker Pool [0/5]
+** PHASE 4: Worker Pool [5/5]
 
 Enable parallel test execution in docker mode.
 
-*** TODO Add execution config to schema
-#+begin_src yaml
-# config.yaml
-execution:
-  max_workers: 4      # Only effective in docker mode
-  timeout: 300        # Per-test timeout in seconds
-#+end_src
+*** DONE Add execution config to schema
+CLOSED: [2026-01-21]
+- Uses existing config.defaults.parallel for max_workers
+- Uses existing config.defaults.timeout for per-test timeout
+- Default: parallel=1 (sequential), timeout=300s
 
-*** TODO Create WorkerPool class
-#+begin_src python
-from concurrent.futures import ThreadPoolExecutor, as_completed
+*** DONE Create WorkerPool class
+CLOSED: [2026-01-21]
+- Added WorkerPool class with ThreadPoolExecutor
+- Supports context manager pattern (with statement)
+- Added map_unordered() for as_completed results
+- Added TestTimeoutError exception class
 
-class WorkerPool:
-    def __init__(self, max_workers: int = 1):
-        self.max_workers = max_workers
-        self.executor = None
+*** DONE Update run_docker_mode() to use pool
+CLOSED: [2026-01-21]
+- Reads max_workers from config.defaults.parallel
+- Uses WorkerPool for parallel execution when max_workers > 1
+- Sequential fallback when max_workers == 1
+- Extracted execute_single_test() helper for parallel execution
+- Results collected as they complete (unordered)
 
-    def __enter__(self):
-        self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
-        return self
+*** DONE Force max_workers=1 in standalone mode
+CLOSED: [2026-01-21]
+- run_local_mode always uses sequential execution
+- Added docstring clarifying this is intentional (shared filesystem)
+- No WorkerPool used in standalone mode
 
-    def __exit__(self, *args):
-        self.executor.shutdown(wait=True)
-
-    def submit(self, fn, *args, **kwargs):
-        return self.executor.submit(fn, *args, **kwargs)
-
-    def map(self, fn, items):
-        futures = {self.submit(fn, item): item for item in items}
-        for future in as_completed(futures):
-            yield future.result()
-#+end_src
-
-*** TODO Update run_docker_mode() to use pool
-#+begin_src python
-def run_docker_mode(tests, config, api_url, run_id):
-    max_workers = config.get("execution", {}).get("max_workers", 1)
-
-    with WorkerPool(max_workers=max_workers) as pool:
-        for result in pool.map(lambda t: execute_test(t, api_url, run_id), tests):
-            pass  # Status already updated in execute_test
-#+end_src
-
-*** TODO Force max_workers=1 in standalone mode
-#+begin_src python
-def run_local_mode(tests, config, api_url, run_id):
-    # Standalone mode: always sequential (shared filesystem)
-    for test in tests:
-        execute_test(test, api_url, run_id)
-#+end_src
-
-*** TODO Add test execution timeout
-#+begin_src python
-def execute_with_timeout(fn, timeout_seconds):
-    """Execute function with timeout."""
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(fn)
-        try:
-            return future.result(timeout=timeout_seconds)
-        except TimeoutError:
-            raise TestTimeoutError(f"Test exceeded {timeout_seconds}s timeout")
-#+end_src
+*** DONE Add test execution timeout
+CLOSED: [2026-01-21]
+- Added execute_with_timeout() function
+- Wraps test execution with configurable timeout
+- Raises TestTimeoutError on timeout
+- Timeout read from config.defaults.timeout (default 300s)
 
 ** PHASE 5: Idempotent Status Updates [0/4]
 

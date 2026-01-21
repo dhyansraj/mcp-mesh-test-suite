@@ -216,6 +216,88 @@ def update_test_status_via_api(
         console.print(f"[yellow]Warning: Failed to update test status: {e}[/yellow]")
 
 
+# =============================================================================
+# Worker Pool for Parallel Execution (Phase 4)
+# =============================================================================
+
+class TestTimeoutError(Exception):
+    """Raised when a test exceeds its timeout."""
+    pass
+
+
+class WorkerPool:
+    """
+    Thread pool for parallel test execution.
+
+    Used in docker mode to run multiple containers concurrently.
+    Standalone mode should always use max_workers=1.
+    """
+
+    def __init__(self, max_workers: int = 1):
+        from concurrent.futures import ThreadPoolExecutor
+        self.max_workers = max(1, max_workers)
+        self.executor: ThreadPoolExecutor | None = None
+
+    def __enter__(self):
+        from concurrent.futures import ThreadPoolExecutor
+        self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
+        return self
+
+    def __exit__(self, *args):
+        if self.executor:
+            self.executor.shutdown(wait=True)
+
+    def submit(self, fn, *args, **kwargs):
+        """Submit a task to the pool."""
+        if self.executor is None:
+            raise RuntimeError("WorkerPool not entered as context manager")
+        return self.executor.submit(fn, *args, **kwargs)
+
+    def map_unordered(self, fn, items):
+        """
+        Execute fn for each item, yielding results as they complete.
+
+        Results may be returned in any order (not necessarily input order).
+        """
+        from concurrent.futures import as_completed
+
+        if self.executor is None:
+            raise RuntimeError("WorkerPool not entered as context manager")
+
+        futures = {self.executor.submit(fn, item): item for item in items}
+        for future in as_completed(futures):
+            try:
+                yield future.result()
+            except Exception as e:
+                # Return error result for this item
+                item = futures[future]
+                yield {"test_id": getattr(item, 'id', str(item)), "error": str(e), "passed": False}
+
+
+def execute_with_timeout(fn, timeout_seconds: int):
+    """
+    Execute a function with a timeout.
+
+    Args:
+        fn: Callable to execute
+        timeout_seconds: Maximum execution time in seconds
+
+    Returns:
+        Result of fn()
+
+    Raises:
+        TestTimeoutError: If execution exceeds timeout
+    """
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(fn)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FuturesTimeoutError:
+            raise TestTimeoutError(f"Execution exceeded {timeout_seconds}s timeout")
+
+
 def get_handlers() -> dict:
     """Load all available handlers."""
     from handlers import shell, file, routine, http, wait, llm, pip_install, npm_install
@@ -746,7 +828,13 @@ def run_local_mode(
     run_id: str | None = None,
     api_url: str | None = None,
 ) -> list[TestResult]:
-    """Run tests in local mode (no Docker)."""
+    """
+    Run tests in local/standalone mode (no Docker).
+
+    Phase 4: Always sequential (max_workers=1) because tests share
+    the same filesystem and may have dependencies on each other.
+    Use docker mode for parallel execution.
+    """
     # Setup routine resolver
     routine_resolver = RoutineResolver(routine_sets)
 
@@ -843,7 +931,12 @@ def run_docker_mode(
     run_id: str | None = None,
     api_url: str | None = None,
 ) -> list[TestResult]:
-    """Run tests in Docker containers."""
+    """
+    Run tests in Docker containers with optional parallel execution.
+
+    Phase 4: Uses WorkerPool for parallel test execution.
+    max_workers is read from config.defaults.parallel (default: 1).
+    """
     from .docker_executor import DockerExecutor, ContainerConfig, check_docker_available
 
     # Check Docker availability
@@ -869,13 +962,20 @@ def run_docker_mode(
         mounts=docker_config.get("mounts", []),
     )
 
+    # Phase 4: Get execution settings from config
+    defaults = config.get("defaults", {})
+    max_workers = defaults.get("parallel", 1)
+    test_timeout = defaults.get("timeout", 300)  # seconds per test
+
     results = []
+    current_run_id = run_id or _current_run_id
 
     # Phase 2: containers call API server directly (no more RunnerServer)
     # Use host.docker.internal for Docker containers to reach host's API server
     api_server_url = "http://host.docker.internal:9999"
     console.print(f"[dim]API Server: {api_server_url}[/dim]")
-    console.print(f"[dim]Mode: docker ({container_config.image})[/dim]\n")
+    console.print(f"[dim]Mode: docker ({container_config.image})[/dim]")
+    console.print(f"[dim]Workers: {max_workers}, Timeout: {test_timeout}s[/dim]\n")
 
     executor = DockerExecutor(
         server_url=api_server_url,
@@ -886,6 +986,82 @@ def run_docker_mode(
         run_id=run_id,
     )
 
+    # Helper function to execute a single test (for parallel execution)
+    def execute_single_test(test):
+        """Execute a single test and return result."""
+        test_start = datetime.now()
+
+        # Mark test as running in database
+        db_test_id = test_result_map.get(test.id) if test_result_map else None
+        if db_test_id:
+            repo.update_test_result(
+                db_test_id,
+                status=TestStatus.RUNNING,
+                started_at=test_start,
+            )
+
+        # Emit SSE test_started event
+        if current_run_id:
+            sse_manager.emit_test_started(current_run_id, test.id, test.name)
+
+        # Execute test with timeout
+        try:
+            docker_result = execute_with_timeout(
+                lambda: executor.execute_test(test),
+                test_timeout
+            )
+        except TestTimeoutError as e:
+            docker_result = {
+                "test_id": test.id,
+                "passed": False,
+                "duration": test_timeout,
+                "error": str(e),
+                "stdout": "",
+                "stderr": f"Test exceeded {test_timeout}s timeout",
+            }
+
+        # Convert to TestResult
+        result = TestResult(
+            test_id=docker_result["test_id"],
+            test_name=test.name,
+            passed=docker_result["passed"],
+            duration=docker_result.get("duration", 0),
+            steps_passed=0,
+            steps_failed=0 if docker_result["passed"] else 1,
+            assertions_passed=0,
+            assertions_failed=0,
+            error=docker_result.get("error"),
+            step_results=[],
+            assertion_results=[],
+        )
+
+        # Update test result in database
+        if db_test_id:
+            status = TestStatus.PASSED if result.passed else TestStatus.FAILED
+            repo.update_test_result(
+                db_test_id,
+                status=status,
+                finished_at=datetime.now(),
+                duration_ms=int(result.duration * 1000),
+                error_message=result.error,
+            )
+
+        # Emit SSE test_completed event
+        if current_run_id:
+            sse_manager.emit_test_completed(
+                run_id=current_run_id,
+                test_id=test.id,
+                status="passed" if result.passed else "failed",
+                duration_ms=int(result.duration * 1000),
+                passed=result.steps_passed,
+                failed=result.steps_failed,
+            )
+
+        return result, docker_result
+
+    # Execute tests with worker pool
+    stop_requested = False
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -894,73 +1070,54 @@ def run_docker_mode(
     ) as progress:
         task = progress.add_task("Running tests...", total=len(tests))
 
-        for i, test in enumerate(tests):
-            progress.update(task, description=f"[{i+1}/{len(tests)}] {test.id}")
+        if max_workers == 1:
+            # Sequential execution (same as before)
+            for i, test in enumerate(tests):
+                if stop_requested:
+                    break
 
-            # Mark test as running in database
-            db_test_id = test_result_map.get(test.id) if test_result_map else None
-            start_time = datetime.now()
-            if db_test_id:
-                repo.update_test_result(
-                    db_test_id,
-                    status=TestStatus.RUNNING,
-                    started_at=start_time,
-                )
+                progress.update(task, description=f"[{i+1}/{len(tests)}] {test.id}")
 
-            # Emit SSE test_started event
-            current_run_id = run_id or _current_run_id
-            if current_run_id:
-                sse_manager.emit_test_started(current_run_id, test.id, test.name)
+                result, docker_result = execute_single_test(test)
+                results.append(result)
 
-            docker_result = executor.execute_test(test)
+                print_docker_result(docker_result, verbose)
 
-            # Convert to TestResult for consistent handling
-            result = TestResult(
-                test_id=docker_result["test_id"],
-                test_name=test.name,
-                passed=docker_result["passed"],
-                duration=docker_result["duration"],
-                steps_passed=0,
-                steps_failed=0 if docker_result["passed"] else 1,
-                assertions_passed=0,
-                assertions_failed=0,
-                error=docker_result.get("error"),
-                step_results=[],
-                assertion_results=[],
-            )
+                if not result.passed and stop_on_fail:
+                    console.print("\n[red]Stopping on first failure[/red]")
+                    stop_requested = True
 
-            results.append(result)
+                progress.advance(task)
+        else:
+            # Parallel execution using WorkerPool
+            completed = 0
+            progress.update(task, description=f"[0/{len(tests)}] Running {max_workers} tests in parallel...")
 
-            # Update test result in database
-            if db_test_id:
-                status = TestStatus.PASSED if result.passed else TestStatus.FAILED
-                repo.update_test_result(
-                    db_test_id,
-                    status=status,
-                    finished_at=datetime.now(),
-                    duration_ms=int(result.duration * 1000),
-                    error_message=result.error,
-                )
+            with WorkerPool(max_workers=max_workers) as pool:
+                # Submit all tests
+                futures = []
+                for test in tests:
+                    future = pool.submit(execute_single_test, test)
+                    futures.append((future, test))
 
-            # Emit SSE test_completed event
-            if current_run_id:
-                sse_manager.emit_test_completed(
-                    run_id=current_run_id,
-                    test_id=test.id,
-                    status="passed" if result.passed else "failed",
-                    duration_ms=int(result.duration * 1000),
-                    passed=result.steps_passed,
-                    failed=result.steps_failed,
-                )
+                # Collect results as they complete
+                from concurrent.futures import as_completed
+                for future in as_completed([f for f, _ in futures]):
+                    completed += 1
+                    try:
+                        result, docker_result = future.result()
+                        results.append(result)
+                        print_docker_result(docker_result, verbose)
 
-            # Print Docker output
-            print_docker_result(docker_result, verbose)
+                        if not result.passed and stop_on_fail:
+                            console.print("\n[red]Failure detected (remaining tests will complete)[/red]")
+                            stop_requested = True
 
-            if not result.passed and stop_on_fail:
-                console.print("\n[red]Stopping on first failure[/red]")
-                break
+                    except Exception as e:
+                        console.print(f"[red]Test execution error: {e}[/red]")
 
-            progress.advance(task)
+                    progress.update(task, description=f"[{completed}/{len(tests)}] Running...")
+                    progress.advance(task)
 
     return results
 
