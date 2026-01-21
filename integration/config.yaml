@@ -36,10 +36,15 @@ docker:
   # No mounts needed - packages are baked into the image
   # To test with different packages, rebuild the image via src-tests or lib-tests
 
-# Execution defaults
+# Execution settings
+execution:
+  max_workers: 3    # concurrent tests in docker mode
+  timeout: 300      # seconds per test
+
+# Legacy defaults (for compatibility)
 defaults:
   timeout: 120      # seconds per step
-  parallel: 1       # concurrent tests (Phase 3+)
+  parallel: 1       # deprecated, use execution.max_workers
   retry: 0          # retry failed tests
 
 # Report settings

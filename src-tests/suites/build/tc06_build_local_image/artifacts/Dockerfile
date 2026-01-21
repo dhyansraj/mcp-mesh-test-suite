@@ -26,9 +26,10 @@ RUN mkdir -p /wheels /packages /workspace
 COPY wheels/*.whl /wheels/
 COPY packages/*.tgz /packages/
 COPY bin/meshctl /usr/local/bin/meshctl
+COPY bin/mcp-mesh-registry /usr/local/bin/mcp-mesh-registry
 
-# Make meshctl executable
-RUN chmod +x /usr/local/bin/meshctl
+# Make binaries executable
+RUN chmod +x /usr/local/bin/meshctl /usr/local/bin/mcp-mesh-registry
 
 # Install Python packages from local wheels (direct path to ensure local version is used)
 RUN pip install --no-cache-dir /wheels/mcp_mesh_core-*.whl /wheels/mcp_mesh-*.whl
