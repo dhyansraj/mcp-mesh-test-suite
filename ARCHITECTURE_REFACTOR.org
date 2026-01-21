@@ -219,43 +219,28 @@ CLOSED: [2026-01-21]
 - Uses API server URL directly
 - Added api_url parameter
 
-** PHASE 3: Simplify API Server's Run Endpoint [0/2]
+** PHASE 3: Simplify API Server's Run Endpoint [2/2]
 
 API server becomes a dumb launcher.
 
-*** TODO Simplify api_run_suite endpoint
-#+begin_src python
-@app.route("/api/suites/<int:suite_id>/run", methods=["POST"])
-def api_run_suite(suite_id: int):
-    """Launch CLI to run tests. CLI will create run_id."""
-    suite = get_suite(suite_id)
-    data = request.get_json() or {}
+*** DONE Simplify api_run_suite endpoint
+CLOSED: [2026-01-21]
+- Removed --port flag (RunnerServer no longer used)
+- Added --api-url parameter for CLI callback
+- Added support for tags and skip_tags parameters
+- Fallback to sys.executable if venv not found
+- Cleaned up debug logging
 
-    # Build CLI command from request params
-    cmd = [sys.executable, "-m", "tsuite.cli",
-           "--suite-path", suite.folder_path,
-           "--api-url", f"http://localhost:{API_PORT}"]
-
-    if data.get("tc"):
-        cmd.extend(["--tc", data["tc"]])
-    elif data.get("uc"):
-        cmd.extend(["--uc", data["uc"]])
-    else:
-        cmd.append("--all")
-
-    if suite.mode == "docker":
-        cmd.append("--docker")
-
-    # Launch and forget - CLI will create run and update via API
-    process = subprocess.Popen(cmd, ...)
-
-    return {"started": True, "pid": process.pid}, 202
-#+end_src
-
-*** TODO Remove run_id pre-creation from API
-- API no longer creates run_id before launching CLI
-- CLI creates run_id when it starts
-- Eventual consistency: UI sees run when CLI creates it
+*** DONE Remove run_id pre-creation from API
+CLOSED: [2026-01-21]
+- Verified API never pre-created run_id (was already correct)
+- CLI creates run_id via POST /api/runs
+- Eventual consistency pattern working as designed:
+  1. UI calls POST /api/suites/{id}/run
+  2. api_run_suite launches CLI subprocess
+  3. CLI calls POST /api/runs to create run in DB
+  4. CLI updates status via PATCH /api/runs/{id}/tests/{test_id}
+  5. CLI completes via POST /api/runs/{id}/complete
 
 ** PHASE 4: Worker Pool [0/5]
 

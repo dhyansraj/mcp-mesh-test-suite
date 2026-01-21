@@ -1469,18 +1469,26 @@ def create_app() -> Flask:
     @app.route("/api/suites/<int:suite_id>/run", methods=["POST"])
     def api_run_suite(suite_id: int):
         """
-        Run tests in a suite. Can run all tests, a specific use case, or test case.
+        Run tests in a suite (dumb launcher - Phase 3).
+
+        API server just builds CLI command and launches subprocess.
+        CLI will create run_id and update status via API (eventual consistency).
 
         Request body (optional):
             uc: Use case to run (e.g., "uc01_scaffolding")
             tc: Test case to run (e.g., "uc01_scaffolding/tc01_python_agent")
+            tags: List of tags to filter by
+            skip_tags: List of tags to skip
 
         Returns:
-            run_id: ID of the started run
-            message: Status message
+            started: True if subprocess launched
+            pid: Process ID of CLI subprocess
+            description: What's being run
         """
         import subprocess
+        import sys
         import os
+        import tempfile
         from pathlib import Path
 
         suite = repo.get_suite(suite_id)
@@ -1493,21 +1501,26 @@ def create_app() -> Flask:
         data = request.get_json() or {}
         uc = data.get("uc")
         tc = data.get("tc")
+        tags = data.get("tags", [])
+        skip_tags = data.get("skip_tags", [])
 
         # Determine tsuite venv path (relative to this package)
         tsuite_dir = Path(__file__).parent.parent
         venv_python = tsuite_dir / "venv" / "bin" / "python"
 
         if not venv_python.exists():
-            return jsonify({"error": f"Python venv not found: {venv_python}"}), 500
+            # Fallback to system python
+            venv_python = sys.executable
 
-        # Build command
-        # Use a different port (9998) so it doesn't conflict with the API server (9999)
+        # Build CLI command
+        # Phase 3: No --port flag (RunnerServer removed)
+        # CLI uses --api-url to call back to this server
+        api_url = f"http://{request.host}"
         cmd = [
             str(venv_python),
             "-m", "tsuite.cli",
             "--suite-path", suite.folder_path,
-            "--port", "9998",
+            "--api-url", api_url,
         ]
 
         # Add filter flags
@@ -1518,28 +1531,21 @@ def create_app() -> Flask:
         else:
             cmd.append("--all")
 
+        # Add tag filters
+        for tag in tags:
+            cmd.extend(["--tag", tag])
+        for skip_tag in skip_tags:
+            cmd.extend(["--skip-tag", skip_tag])
+
         # Add docker flag if mode is docker
         if suite.mode.value == "docker":
             cmd.append("--docker")
 
-        # Determine the event server URL for the subprocess to send events back
-        # The subprocess runs on the host machine (not in Docker), so it can
-        # reach localhost directly. The Docker containers communicate via
-        # host.docker.internal to the test server, but SSE events are forwarded
-        # from the subprocess, not from inside Docker.
-        event_server_url = f"http://{request.host}"
-        import sys
-        print(f"[RUN DEBUG] Starting test with TSUITE_EVENT_SERVER={event_server_url}", file=sys.stderr, flush=True)
-
-        # Start subprocess (non-blocking)
+        # Start subprocess (non-blocking) - CLI will create run and update via API
         try:
-            # Write subprocess output to temp file for debugging
-            import tempfile
             output_path = tempfile.mktemp(prefix='tsuite_run_', suffix='.log')
-            print(f"[RUN DEBUG] Subprocess output will be at: {output_path}", file=sys.stderr, flush=True)
-
-            # Run subprocess directly (no shell) with file handle redirection
             output_file = open(output_path, 'w')
+
             process = subprocess.Popen(
                 cmd,
                 stdout=output_file,
@@ -1548,10 +1554,8 @@ def create_app() -> Flask:
                 env={
                     **os.environ,
                     "PYTHONUNBUFFERED": "1",
-                    "TSUITE_EVENT_SERVER": event_server_url,
                 },
             )
-            print(f"[RUN DEBUG] Subprocess started with PID {process.pid}", file=sys.stderr, flush=True)
 
             # Build description of what's running
             if tc:
@@ -1566,7 +1570,7 @@ def create_app() -> Flask:
                 "pid": process.pid,
                 "description": description,
                 "mode": suite.mode.value,
-                "command": " ".join(cmd),
+                "log_file": output_path,
             }), 202
 
         except Exception as e:
