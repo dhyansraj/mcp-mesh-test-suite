@@ -125,41 +125,59 @@ Benefits:
 
 * Implementation Phases
 
-** PHASE 1: Merge RunnerServer into API Server [0/8]
+** PHASE 1: Merge RunnerServer into API Server [8/8]
 
 Move all RunnerServer endpoints into API server under /api/runner/* prefix.
 
-*** TODO Move /config endpoint
+*** DONE Move /config endpoint
+CLOSED: [2026-01-21]
 - Current: RunnerServer serves config to containers
 - Target: API server at /api/runner/config
+- Added /api/runner/config and /api/runner/config/<path> in server.py
 
-*** TODO Move /routine/<scope>/<name> endpoint
+*** DONE Move /routine/<scope>/<name> endpoint
+CLOSED: [2026-01-21]
 - Current: RunnerServer at /routine/global/setup_environment
 - Target: API server at /api/runner/routine/<scope>/<name>
+- Added /api/runner/routine/<scope>/<name> and /api/runner/routines in server.py
 
-*** TODO Move /state/<test_id> endpoints (GET/POST)
+*** DONE Move /state/<test_id> endpoints (GET/POST)
+CLOSED: [2026-01-21]
 - Current: RunnerServer manages test state
 - Target: API server at /api/runner/state/<test_id>
+- Added /api/runner/state/<test_id> (GET/POST) in server.py
 
-*** TODO Move /capture/<test_id> endpoint (POST)
+*** DONE Move /capture/<test_id> endpoint (POST)
+CLOSED: [2026-01-21]
 - Current: RunnerServer stores captured variables
 - Target: API server at /api/runner/capture/<test_id>
+- Added /api/runner/capture/<test_id> (POST) in server.py
 
-*** TODO Move /progress/<test_id> endpoints (GET/POST)
+*** DONE Move /progress/<test_id> endpoints (GET/POST)
+CLOSED: [2026-01-21]
 - Current: RunnerServer tracks step progress
 - Target: API server at /api/runner/progress/<test_id>
+- Added /api/runner/progress/<test_id> (GET/POST) in server.py
 
-*** TODO Move /context/<test_id> endpoint (GET)
+*** DONE Move /context/<test_id> endpoint (GET)
+CLOSED: [2026-01-21]
 - Current: RunnerServer provides full test context
 - Target: API server at /api/runner/context/<test_id>
+- Added /api/runner/context/<test_id> (GET) in server.py
 
-*** TODO Add run_id association to runner endpoints
+*** DONE Add run_id association to runner endpoints
+CLOSED: [2026-01-21]
 - Runner endpoints need to know which run they're serving
 - Pass run_id via header or query param: ?run_id=xxx
+- Added run_id query param support (optional, for future use)
 
-*** TODO Update container SERVER_URL
+*** DONE Update container SERVER_URL
+CLOSED: [2026-01-21]
 - Current: http://host.docker.internal:9998
 - Target: http://host.docker.internal:9999
+- Updated cli.py to pass API server URL (9999) to DockerExecutor
+- Updated client.py to use /api/runner/* endpoints
+- Old endpoints kept for backward compatibility
 
 ** PHASE 2: Update CLI [0/6]
 

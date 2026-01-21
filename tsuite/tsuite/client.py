@@ -65,7 +65,7 @@ class RunnerClient:
         result = self._get("/health")
         return result is not None and result.get("status") == "ok"
 
-    # Configuration
+    # Configuration (uses /api/runner/* endpoints)
     def get_config(self, path: str | None = None) -> Any:
         """
         Get configuration value.
@@ -78,23 +78,23 @@ class RunnerClient:
             Configuration value or None if not found.
         """
         if path is None:
-            return self._get("/config")
+            return self._get("/api/runner/config")
 
         # Convert dot notation to URL path
         url_path = path.replace(".", "/")
-        result = self._get(f"/config/{url_path}")
+        result = self._get(f"/api/runner/config/{url_path}")
         return result.get("value") if result else None
 
-    # Routines
+    # Routines (uses /api/runner/* endpoints)
     def get_routine(self, scope: str, name: str) -> dict | None:
         """Get routine definition by scope and name."""
-        return self._get(f"/routine/{scope}/{name}")
+        return self._get(f"/api/runner/routine/{scope}/{name}")
 
     def get_all_routines(self) -> dict:
         """Get all routines."""
-        return self._get("/routines") or {}
+        return self._get("/api/runner/routines") or {}
 
-    # State management
+    # State management (uses /api/runner/* endpoints)
     def get_state(self, test_id: str | None = None) -> dict:
         """
         Get state from a test.
@@ -106,7 +106,7 @@ class RunnerClient:
             State dictionary.
         """
         tid = test_id or self.test_id
-        return self._get(f"/state/{tid}") or {}
+        return self._get(f"/api/runner/state/{tid}") or {}
 
     def set_state(self, key: str, value: Any, test_id: str | None = None) -> bool:
         """
@@ -121,7 +121,7 @@ class RunnerClient:
             True if successful.
         """
         tid = test_id or self.test_id
-        return self._post(f"/state/{tid}", {key: value})
+        return self._post(f"/api/runner/state/{tid}", {key: value})
 
     def update_state(self, state: dict, test_id: str | None = None) -> bool:
         """
@@ -135,9 +135,9 @@ class RunnerClient:
             True if successful.
         """
         tid = test_id or self.test_id
-        return self._post(f"/state/{tid}", state)
+        return self._post(f"/api/runner/state/{tid}", state)
 
-    # Captured variables
+    # Captured variables (uses /api/runner/* endpoints)
     def capture(self, name: str, value: Any, test_id: str | None = None) -> bool:
         """
         Store a captured variable.
@@ -151,9 +151,9 @@ class RunnerClient:
             True if successful.
         """
         tid = test_id or self.test_id
-        return self._post(f"/capture/{tid}", {name: value})
+        return self._post(f"/api/runner/capture/{tid}", {name: value})
 
-    # Progress reporting
+    # Progress reporting (uses /api/runner/* endpoints)
     def progress(
         self,
         step: int,
@@ -174,7 +174,7 @@ class RunnerClient:
             True if successful.
         """
         tid = test_id or self.test_id
-        return self._post(f"/progress/{tid}", {
+        return self._post(f"/api/runner/progress/{tid}", {
             "step": step,
             "status": status,
             "message": message,
@@ -183,9 +183,9 @@ class RunnerClient:
     def get_progress(self, test_id: str | None = None) -> dict:
         """Get progress for a test."""
         tid = test_id or self.test_id
-        return self._get(f"/progress/{tid}") or {}
+        return self._get(f"/api/runner/progress/{tid}") or {}
 
-    # Logging
+    # Logging (uses /api/runner/* endpoints)
     def log(
         self,
         message: str,
@@ -204,7 +204,7 @@ class RunnerClient:
             True if successful.
         """
         tid = test_id or self.test_id
-        return self._post(f"/log/{tid}", {
+        return self._post(f"/api/runner/log/{tid}", {
             "level": level,
             "message": message,
         })
@@ -225,11 +225,11 @@ class RunnerClient:
         """Log an error message."""
         return self.log(message, "error")
 
-    # Context
+    # Context (uses /api/runner/* endpoints)
     def get_context(self, test_id: str | None = None) -> dict:
         """Get full test context."""
         tid = test_id or self.test_id
-        return self._get(f"/context/{tid}") or {}
+        return self._get(f"/api/runner/context/{tid}") or {}
 
     # =========================================================================
     # New Architecture API Methods

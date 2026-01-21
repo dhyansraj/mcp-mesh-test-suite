@@ -135,6 +135,150 @@ def create_app() -> Flask:
         return jsonify(ctx.to_dict())
 
     # =========================================================================
+    # Runner API Endpoints (New Architecture)
+    # These endpoints are called by test containers/subprocesses.
+    # They support run_id for tracking which run the request belongs to.
+    # =========================================================================
+
+    @app.route("/api/runner/config", methods=["GET"])
+    def api_runner_get_config():
+        """
+        Get full configuration for runner.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
+        # run_id = request.args.get("run_id")  # For future use
+        return jsonify(runtime.get_config())
+
+    @app.route("/api/runner/config/<path:path>", methods=["GET"])
+    def api_runner_get_config_value(path: str):
+        """
+        Get specific configuration value by dot-notation path.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
+        dot_path = path.replace("/", ".")
+        value = runtime.get_config(dot_path)
+        if value is None:
+            return jsonify({"error": f"Config path not found: {dot_path}"}), 404
+        return jsonify({"value": value})
+
+    @app.route("/api/runner/routine/<scope>/<name>", methods=["GET"])
+    def api_runner_get_routine(scope: str, name: str):
+        """
+        Get routine definition by scope and name.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
+        routine = runtime.get_routine(scope, name)
+        if routine is None:
+            return jsonify({"error": f"Routine not found: {scope}.{name}"}), 404
+        return jsonify(routine)
+
+    @app.route("/api/runner/routines", methods=["GET"])
+    def api_runner_get_all_routines():
+        """
+        Get all routines.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
+        return jsonify(runtime.get_all_routines())
+
+    @app.route("/api/runner/state/<path:test_id>", methods=["GET"])
+    def api_runner_get_state(test_id: str):
+        """
+        Get state for a test.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
+        state = runtime.get_test_state(test_id)
+        return jsonify(state)
+
+    @app.route("/api/runner/state/<path:test_id>", methods=["POST"])
+    def api_runner_update_state(test_id: str):
+        """
+        Merge state into a test.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
+        data = request.get_json() or {}
+        runtime.update_test_state(test_id, data)
+        return jsonify({"status": "ok"})
+
+    @app.route("/api/runner/capture/<path:test_id>", methods=["POST"])
+    def api_runner_capture(test_id: str):
+        """
+        Store captured variables for a test.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
+        data = request.get_json() or {}
+        for name, value in data.items():
+            runtime.set_captured(test_id, name, value)
+        return jsonify({"status": "ok"})
+
+    @app.route("/api/runner/progress/<path:test_id>", methods=["POST"])
+    def api_runner_progress(test_id: str):
+        """
+        Update progress for a test.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
+        data = request.get_json() or {}
+        runtime.update_progress(
+            test_id,
+            step=data.get("step", 0),
+            status=data.get("status", "running"),
+            message=data.get("message", ""),
+        )
+        return jsonify({"status": "ok"})
+
+    @app.route("/api/runner/progress/<path:test_id>", methods=["GET"])
+    def api_runner_get_progress(test_id: str):
+        """
+        Get progress for a test.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
+        return jsonify(runtime.get_progress(test_id))
+
+    @app.route("/api/runner/log/<path:test_id>", methods=["POST"])
+    def api_runner_log_message(test_id: str):
+        """
+        Log a message from a test.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
+        data = request.get_json() or {}
+        level = data.get("level", "info")
+        message = data.get("message", "")
+        print(f"[{test_id}] [{level.upper()}] {message}")
+        return jsonify({"status": "ok"})
+
+    @app.route("/api/runner/context/<path:test_id>", methods=["GET"])
+    def api_runner_get_context(test_id: str):
+        """
+        Get full test context.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
+        ctx = runtime.get_test_context(test_id)
+        if ctx is None:
+            return jsonify({"error": f"Test context not found: {test_id}"}), 404
+        return jsonify(ctx.to_dict())
+
+    # =========================================================================
     # Dashboard API Endpoints
     # =========================================================================
 

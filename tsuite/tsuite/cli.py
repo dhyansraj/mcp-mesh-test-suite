@@ -706,12 +706,17 @@ def run_docker_mode(
 
     results = []
 
+    # New architecture: containers call API server directly (port 9999)
+    # RunnerServer (port 9998) kept for backward compatibility during transition
+    api_server_url = "http://host.docker.internal:9999"
+
     with RunnerServer(port=port) as server:
-        console.print(f"[dim]Server: {server.get_url()}[/dim]")
+        console.print(f"[dim]Runner Server: {server.get_url()} (legacy)[/dim]")
+        console.print(f"[dim]API Server: {api_server_url}[/dim]")
         console.print(f"[dim]Mode: docker ({container_config.image})[/dim]\n")
 
         executor = DockerExecutor(
-            server_url=server.get_url(),
+            server_url=api_server_url,  # Use API server for containers
             framework_path=framework_path,
             suite_path=suite,
             base_workdir=workdir,
