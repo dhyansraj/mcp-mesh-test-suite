@@ -23,6 +23,7 @@ from .models import (
 # =============================================================================
 
 def create_run(
+    suite_id: Optional[int] = None,
     cli_version: Optional[str] = None,
     sdk_python_version: Optional[str] = None,
     sdk_typescript_version: Optional[str] = None,
@@ -36,13 +37,13 @@ def create_run(
     db.execute(
         """
         INSERT INTO runs (
-            run_id, started_at, status, cli_version,
+            run_id, suite_id, started_at, status, cli_version,
             sdk_python_version, sdk_typescript_version,
             docker_image, total_tests
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            run_id, started_at.isoformat(), RunStatus.RUNNING.value,
+            run_id, suite_id, started_at.isoformat(), RunStatus.RUNNING.value,
             cli_version, sdk_python_version, sdk_typescript_version,
             docker_image, total_tests,
         ),
@@ -51,6 +52,7 @@ def create_run(
 
     return Run(
         run_id=run_id,
+        suite_id=suite_id,
         started_at=started_at,
         status=RunStatus.RUNNING,
         cli_version=cli_version,
@@ -103,21 +105,42 @@ def update_run(
 
 
 def get_run(run_id: str) -> Optional[Run]:
-    """Get a run by ID."""
-    row = db.fetchone("SELECT * FROM runs WHERE run_id = ?", (run_id,))
+    """Get a run by ID with suite name."""
+    row = db.fetchone(
+        """
+        SELECT r.*, s.suite_name
+        FROM runs r
+        LEFT JOIN suites s ON r.suite_id = s.id
+        WHERE r.run_id = ?
+        """,
+        (run_id,),
+    )
     return Run.from_row(row) if row else None
 
 
 def get_latest_run() -> Optional[Run]:
-    """Get the most recent run."""
-    row = db.fetchone("SELECT * FROM runs ORDER BY started_at DESC LIMIT 1")
+    """Get the most recent run with suite name."""
+    row = db.fetchone(
+        """
+        SELECT r.*, s.suite_name
+        FROM runs r
+        LEFT JOIN suites s ON r.suite_id = s.id
+        ORDER BY r.started_at DESC LIMIT 1
+        """
+    )
     return Run.from_row(row) if row else None
 
 
 def list_runs(limit: int = 20, offset: int = 0) -> List[Run]:
-    """List runs ordered by start time (newest first)."""
+    """List runs ordered by start time (newest first), with suite name."""
     rows = db.fetchall(
-        "SELECT * FROM runs ORDER BY started_at DESC LIMIT ? OFFSET ?",
+        """
+        SELECT r.*, s.suite_name
+        FROM runs r
+        LEFT JOIN suites s ON r.suite_id = s.id
+        ORDER BY r.started_at DESC
+        LIMIT ? OFFSET ?
+        """,
         (limit, offset),
     )
     return [Run.from_row(row) for row in rows]

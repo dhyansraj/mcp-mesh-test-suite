@@ -21,7 +21,7 @@ export default async function RunDetailPage({ params }: Props) {
     return (
       <div className="flex flex-col">
         <Header
-          title={`Run ${id}`}
+          title={run.suite_name || `Run ${id.slice(0, 8)}`}
           subtitle={`${run.total_tests} tests • ${run.status}`}
         />
 

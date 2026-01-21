@@ -104,8 +104,8 @@ export function RunsList({ initialRuns }: RunsListProps) {
                     {/* Run info */}
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-sm font-medium text-foreground">
-                          {run.run_id.slice(0, 12)}...
+                        <span className="text-sm font-medium text-foreground">
+                          {run.suite_name || `Run ${run.run_id.slice(0, 8)}`}
                         </span>
                         <Badge
                           variant="secondary"
@@ -115,6 +115,8 @@ export function RunsList({ initialRuns }: RunsListProps) {
                         </Badge>
                       </div>
                       <p className="text-xs text-muted-foreground">
+                        <span className="font-mono">{run.run_id.slice(0, 8)}</span>
+                        {" • "}
                         {formatRelativeTime(run.started_at)}
                         {run.cli_version && ` • v${run.cli_version}`}
                       </p>

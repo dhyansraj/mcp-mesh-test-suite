@@ -51,6 +51,7 @@ class Run:
     finished_at: Optional[datetime] = None
     status: RunStatus = RunStatus.PENDING
     suite_id: Optional[int] = None
+    suite_name: Optional[str] = None  # Populated from join with suites table
     cli_version: Optional[str] = None
     sdk_python_version: Optional[str] = None
     sdk_typescript_version: Optional[str] = None
@@ -69,6 +70,7 @@ class Run:
         return {
             "run_id": self.run_id,
             "suite_id": self.suite_id,
+            "suite_name": self.suite_name,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
             "status": self.status.value,
@@ -96,9 +98,17 @@ class Run:
             except json.JSONDecodeError:
                 filters = None
 
+        # Handle suite_name from joined query (may not be present in all queries)
+        suite_name = None
+        try:
+            suite_name = row["suite_name"]
+        except (KeyError, IndexError):
+            pass
+
         return cls(
             run_id=row["run_id"],
             suite_id=row["suite_id"],
+            suite_name=suite_name,
             started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
             finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
             status=RunStatus(row["status"]),

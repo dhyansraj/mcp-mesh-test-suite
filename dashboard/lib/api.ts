@@ -6,6 +6,8 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:9999";
 
 export interface Run {
   run_id: string;
+  suite_id: number | null;
+  suite_name: string | null;
   started_at: string | null;
   finished_at: string | null;
   status: "pending" | "running" | "completed" | "failed" | "cancelled";

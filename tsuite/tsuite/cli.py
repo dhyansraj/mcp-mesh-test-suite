@@ -313,12 +313,16 @@ def get_handlers() -> dict:
     }
 
 
-def sync_suite_to_db(suite_path: Path, config: dict, test_count: int) -> None:
+def sync_suite_to_db(suite_path: Path, config: dict, test_count: int):
     """
     Sync the suite configuration to the database.
     Called when running tests from CLI to keep DB in sync with YAML.
+
+    Returns:
+        Suite object with id for linking to runs
     """
     import json
+    from .models import Suite
 
     folder_path = str(suite_path.resolve())
 
@@ -333,7 +337,7 @@ def sync_suite_to_db(suite_path: Path, config: dict, test_count: int) -> None:
         mode = SuiteMode.DOCKER
 
     # Upsert suite (create or update)
-    repo.upsert_suite(
+    suite = repo.upsert_suite(
         folder_path=folder_path,
         suite_name=suite_name,
         mode=mode,
@@ -342,6 +346,7 @@ def sync_suite_to_db(suite_path: Path, config: dict, test_count: int) -> None:
     )
 
     console.print(f"[dim]Suite synced: {suite_name}[/dim]")
+    return suite
 
 
 def print_banner(config: dict, test_count: int):
@@ -665,7 +670,7 @@ def main(
     routine_sets = discovery.discover_routines()
 
     # Sync suite to database (keeps DB in sync with YAML for dashboard)
-    sync_suite_to_db(suite, config, len(all_tests))
+    suite_record = sync_suite_to_db(suite, config, len(all_tests))
 
     # Filter tests
     if retry_failed and failed_test_ids:
@@ -725,6 +730,7 @@ def main(
     # Create run record in database
     packages = config.get("packages", {})
     run = repo.create_run(
+        suite_id=suite_record.id,
         cli_version=packages.get("cli_version"),
         sdk_python_version=packages.get("sdk_python_version"),
         sdk_typescript_version=packages.get("sdk_typescript_version"),
