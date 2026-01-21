@@ -50,89 +50,11 @@ def create_app() -> Flask:
         """Health check endpoint."""
         return jsonify({"status": "ok"})
 
-    @app.route("/config", methods=["GET"])
-    def get_config():
-        """Get full configuration."""
-        return jsonify(runtime.get_config())
-
-    @app.route("/config/<path:path>", methods=["GET"])
-    def get_config_value(path: str):
-        """Get specific configuration value by dot-notation path."""
-        # Convert URL path to dot notation (config/packages/cli_version -> packages.cli_version)
-        dot_path = path.replace("/", ".")
-        value = runtime.get_config(dot_path)
-        if value is None:
-            return jsonify({"error": f"Config path not found: {dot_path}"}), 404
-        return jsonify({"value": value})
-
-    @app.route("/routine/<scope>/<name>", methods=["GET"])
-    def get_routine(scope: str, name: str):
-        """Get routine definition by scope and name."""
-        routine = runtime.get_routine(scope, name)
-        if routine is None:
-            return jsonify({"error": f"Routine not found: {scope}.{name}"}), 404
-        return jsonify(routine)
-
-    @app.route("/routines", methods=["GET"])
-    def get_all_routines():
-        """Get all routines."""
-        return jsonify(runtime.get_all_routines())
-
-    @app.route("/state/<path:test_id>", methods=["GET"])
-    def get_state(test_id: str):
-        """Get state from a test."""
-        state = runtime.get_test_state(test_id)
-        return jsonify(state)
-
-    @app.route("/state/<path:test_id>", methods=["POST"])
-    def update_state(test_id: str):
-        """Merge state into a test."""
-        data = request.get_json() or {}
-        runtime.update_test_state(test_id, data)
-        return jsonify({"status": "ok"})
-
-    @app.route("/capture/<path:test_id>", methods=["POST"])
-    def capture(test_id: str):
-        """Store a captured variable."""
-        data = request.get_json() or {}
-        for name, value in data.items():
-            runtime.set_captured(test_id, name, value)
-        return jsonify({"status": "ok"})
-
-    @app.route("/progress/<path:test_id>", methods=["POST"])
-    def progress(test_id: str):
-        """Update progress for a test."""
-        data = request.get_json() or {}
-        runtime.update_progress(
-            test_id,
-            step=data.get("step", 0),
-            status=data.get("status", "running"),
-            message=data.get("message", ""),
-        )
-        return jsonify({"status": "ok"})
-
-    @app.route("/progress/<path:test_id>", methods=["GET"])
-    def get_progress(test_id: str):
-        """Get progress for a test."""
-        return jsonify(runtime.get_progress(test_id))
-
-    @app.route("/log/<path:test_id>", methods=["POST"])
-    def log_message(test_id: str):
-        """Log a message from a test."""
-        data = request.get_json() or {}
-        level = data.get("level", "info")
-        message = data.get("message", "")
-        # For now, just print. Later can stream to UI.
-        print(f"[{test_id}] [{level.upper()}] {message}")
-        return jsonify({"status": "ok"})
-
-    @app.route("/context/<path:test_id>", methods=["GET"])
-    def get_context(test_id: str):
-        """Get full test context."""
-        ctx = runtime.get_test_context(test_id)
-        if ctx is None:
-            return jsonify({"error": f"Test context not found: {test_id}"}), 404
-        return jsonify(ctx.to_dict())
+    # =========================================================================
+    # Legacy endpoints removed in Phase 6 cleanup.
+    # All runner endpoints are now at /api/runner/* prefix.
+    # See: /api/runner/config, /api/runner/state, /api/runner/capture, etc.
+    # =========================================================================
 
     # =========================================================================
     # Runner API Endpoints (New Architecture)
@@ -514,6 +436,7 @@ def create_app() -> Flask:
                 "running": uc_data["running"],
                 "passed": uc_data["passed"],
                 "failed": uc_data["failed"],
+                "crashed": uc_data["crashed"],
                 "skipped": uc_data["skipped"],
                 "total": uc_data["total"],
             })

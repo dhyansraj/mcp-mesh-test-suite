@@ -597,6 +597,17 @@ def main(
         db.set_db_path(Path(db_path))
     db.init_db()
 
+    # Ensure API server is running (required for docker mode and SSE forwarding)
+    # Parse port from api_url
+    from urllib.parse import urlparse
+    parsed = urlparse(api_url)
+    api_port = parsed.port or 9999
+    try:
+        api_url = ensure_api_server(port=api_port, timeout=15)
+    except RuntimeError as e:
+        console.print(f"[yellow]Warning: {e}[/yellow]")
+        console.print("[dim]Continuing without API server (SSE events will not be forwarded)[/dim]")
+
     # Show history and exit
     if history:
         print_history()
@@ -957,9 +968,10 @@ def run_docker_mode(
     )
 
     # Phase 4: Get execution settings from config
-    defaults = config.get("defaults", {})
-    max_workers = defaults.get("parallel", 1)
-    test_timeout = defaults.get("timeout", 300)  # seconds per test
+    # Support both 'execution' (new) and 'defaults' (legacy) config keys
+    execution = config.get("execution", config.get("defaults", {}))
+    max_workers = execution.get("max_workers", execution.get("parallel", 1))
+    test_timeout = execution.get("timeout", 300)  # seconds per test
 
     results = []
     current_run_id = run_id or _current_run_id
@@ -1066,10 +1078,18 @@ def run_docker_mode(
 
         # Emit SSE test_completed event
         if current_run_id:
+            # Determine correct status for SSE emission
+            if result.passed:
+                sse_status = "passed"
+            elif crashed:
+                sse_status = "crashed"
+            else:
+                sse_status = "failed"
+
             sse_manager.emit_test_completed(
                 run_id=current_run_id,
                 test_id=test.id,
-                status="passed" if result.passed else "failed",
+                status=sse_status,
                 duration_ms=int(result.duration * 1000),
                 passed=result.steps_passed,
                 failed=result.steps_failed,

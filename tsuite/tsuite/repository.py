@@ -149,10 +149,14 @@ def complete_run(run_id: str, duration_ms: Optional[int] = None) -> None:
 
     passed = sum(1 for t in tests if t.status == TestStatus.PASSED)
     failed = sum(1 for t in tests if t.status == TestStatus.FAILED)
+    crashed = sum(1 for t in tests if t.status == TestStatus.CRASHED)
     skipped = sum(1 for t in tests if t.status == TestStatus.SKIPPED)
 
+    # CRASHED tests count as failures for overall status
+    total_failed = failed + crashed
+
     # Determine overall status
-    status = RunStatus.COMPLETED if failed == 0 else RunStatus.FAILED
+    status = RunStatus.COMPLETED if total_failed == 0 else RunStatus.FAILED
 
     # Calculate duration if not provided
     run = get_run(run_id)
@@ -165,7 +169,7 @@ def complete_run(run_id: str, duration_ms: Optional[int] = None) -> None:
         status=status,
         finished_at=finished_at,
         passed=passed,
-        failed=failed,
+        failed=total_failed,  # Include crashed tests in failed count
         skipped=skipped,
         duration_ms=duration_ms,
     )
@@ -351,6 +355,9 @@ def _update_run_counters(run_id: str, old_status: TestStatus, new_status: TestSt
         db.execute("UPDATE runs SET passed = passed - 1 WHERE run_id = ?", (run_id,))
     elif old_status == TestStatus.FAILED:
         db.execute("UPDATE runs SET failed = failed - 1 WHERE run_id = ?", (run_id,))
+    elif old_status == TestStatus.CRASHED:
+        # CRASHED counts as failed for run statistics
+        db.execute("UPDATE runs SET failed = failed - 1 WHERE run_id = ?", (run_id,))
     elif old_status == TestStatus.SKIPPED:
         db.execute("UPDATE runs SET skipped = skipped - 1 WHERE run_id = ?", (run_id,))
 
@@ -362,6 +369,9 @@ def _update_run_counters(run_id: str, old_status: TestStatus, new_status: TestSt
     elif new_status == TestStatus.PASSED:
         db.execute("UPDATE runs SET passed = passed + 1 WHERE run_id = ?", (run_id,))
     elif new_status == TestStatus.FAILED:
+        db.execute("UPDATE runs SET failed = failed + 1 WHERE run_id = ?", (run_id,))
+    elif new_status == TestStatus.CRASHED:
+        # CRASHED counts as failed for run statistics
         db.execute("UPDATE runs SET failed = failed + 1 WHERE run_id = ?", (run_id,))
     elif new_status == TestStatus.SKIPPED:
         db.execute("UPDATE runs SET skipped = skipped + 1 WHERE run_id = ?", (run_id,))
@@ -398,6 +408,7 @@ def get_tests_by_usecase(run_id: str) -> dict:
                 "running": 0,
                 "passed": 0,
                 "failed": 0,
+                "crashed": 0,
                 "skipped": 0,
                 "total": 0,
             }
@@ -413,6 +424,8 @@ def get_tests_by_usecase(run_id: str) -> dict:
             grouped[uc]["passed"] += 1
         elif test.status == TestStatus.FAILED:
             grouped[uc]["failed"] += 1
+        elif test.status == TestStatus.CRASHED:
+            grouped[uc]["crashed"] += 1
         elif test.status == TestStatus.SKIPPED:
             grouped[uc]["skipped"] += 1
 
