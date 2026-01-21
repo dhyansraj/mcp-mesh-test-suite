@@ -72,8 +72,10 @@ test:
     handler: shell
     command: |
       cd "${suite_path}/${config.output.packages}"
-      echo "Package contents (total files: $(tar -tzf *.tgz | wc -l))"
-      tar -tzf *.tgz | grep -E "(package.json|index.js|README)" || tar -tzf *.tgz | head -20
+      SDK_PKG=$(ls mcpmesh-sdk-*.tgz 2>/dev/null | head -1)
+      echo "Verifying SDK package: $SDK_PKG"
+      echo "Package contents (total files: $(tar -tzf $SDK_PKG | wc -l))"
+      tar -tzf $SDK_PKG | grep -E "(package.json|index.js|README)" || tar -tzf $SDK_PKG | head -20
     capture: contents_output
 
 assertions:
