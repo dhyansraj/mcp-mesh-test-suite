@@ -737,14 +737,13 @@ def main(
     # Emit SSE run_started event
     sse_manager.emit_run_started(run.run_id, len(tests))
 
-    # Create test result records for all tests
-    test_result_map = {}  # test_id -> db test_result_id
+    # Create test result records for all tests (PENDING status)
     for test in tests:
         parts = test.id.split("/")
         use_case = parts[0] if len(parts) > 0 else ""
         test_case = parts[1] if len(parts) > 1 else ""
 
-        tr = repo.create_test_result(
+        repo.create_test_result(
             run_id=run.run_id,
             test_id=test.id,
             use_case=use_case,
@@ -752,7 +751,6 @@ def main(
             name=test.name,
             tags=test.tags,
         )
-        test_result_map[test.id] = tr.id
 
     # Docker mode or local mode
     if docker:
@@ -764,7 +762,6 @@ def main(
             verbose=verbose,
             stop_on_fail=stop_on_fail,
             image_override=image,
-            test_result_map=test_result_map,
             run_id=run.run_id,
             api_url=api_url,
         )
@@ -776,7 +773,6 @@ def main(
             workdir=workdir,
             verbose=verbose,
             stop_on_fail=stop_on_fail,
-            test_result_map=test_result_map,
             run_id=run.run_id,
             api_url=api_url,
         )
@@ -829,7 +825,6 @@ def run_local_mode(
     workdir: Path,
     verbose: bool,
     stop_on_fail: bool,
-    test_result_map: dict | None = None,
     run_id: str | None = None,
     api_url: str | None = None,
 ) -> list[TestResult]:
@@ -873,30 +868,29 @@ def run_local_mode(
         for i, test in enumerate(tests):
             progress.update(task, description=f"[{i+1}/{len(tests)}] {test.id}")
 
-            # Mark test as running in database
-            db_test_id = test_result_map.get(test.id) if test_result_map else None
-            if db_test_id:
-                repo.update_test_result(
-                    db_test_id,
+            # Mark test as running in database (updates run counters)
+            current_run_id = run_id or _current_run_id
+            if current_run_id:
+                repo.update_test_status(
+                    current_run_id,
+                    test.id,
                     status=TestStatus.RUNNING,
-                    started_at=datetime.now(),
                 )
 
             # Emit SSE test_started event
-            current_run_id = run_id or _current_run_id
             if current_run_id:
                 sse_manager.emit_test_started(current_run_id, test.id, test.name)
 
             result = executor.execute(test)
             results.append(result)
 
-            # Update test result in database
-            if db_test_id:
+            # Update test result in database (updates run counters)
+            if current_run_id:
                 status = TestStatus.PASSED if result.passed else TestStatus.FAILED
-                repo.update_test_result(
-                    db_test_id,
+                repo.update_test_status(
+                    current_run_id,
+                    test.id,
                     status=status,
-                    finished_at=datetime.now(),
                     duration_ms=int(result.duration * 1000),
                     error_message=result.error,
                 )
@@ -931,7 +925,6 @@ def run_docker_mode(
     verbose: bool,
     stop_on_fail: bool,
     image_override: str | None = None,
-    test_result_map: dict | None = None,
     run_id: str | None = None,
     api_url: str | None = None,
 ) -> list[TestResult]:
@@ -951,7 +944,7 @@ def run_docker_mode(
         from .discovery import TestDiscovery
         discovery = TestDiscovery(suite)
         routine_sets = discovery.discover_routines()
-        return run_local_mode(tests, routine_sets, suite, workdir, verbose, stop_on_fail, test_result_map, run_id, api_url)
+        return run_local_mode(tests, routine_sets, suite, workdir, verbose, stop_on_fail, run_id, api_url)
 
     console.print(f"[dim]Docker: {info}[/dim]")
 
@@ -1000,13 +993,12 @@ def run_docker_mode(
         test_start = datetime.now()
         crashed = False
 
-        # Mark test as running in database
-        db_test_id = test_result_map.get(test.id) if test_result_map else None
-        if db_test_id:
-            repo.update_test_result(
-                db_test_id,
+        # Mark test as running in database (updates run counters)
+        if current_run_id:
+            repo.update_test_status(
+                current_run_id,
+                test.id,
                 status=TestStatus.RUNNING,
-                started_at=test_start,
             )
 
         # Emit SSE test_started event
@@ -1056,18 +1048,18 @@ def run_docker_mode(
             assertion_results=[],
         )
 
-        # Update test result in database (use CRASHED status for unexpected death)
-        if db_test_id:
+        # Update test result in database (updates run counters)
+        if current_run_id:
             if crashed:
                 status = TestStatus.CRASHED
             elif result.passed:
                 status = TestStatus.PASSED
             else:
                 status = TestStatus.FAILED
-            repo.update_test_result(
-                db_test_id,
+            repo.update_test_status(
+                current_run_id,
+                test.id,
                 status=status,
-                finished_at=datetime.now(),
                 duration_ms=int(result.duration * 1000),
                 error_message=result.error,
             )
