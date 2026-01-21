@@ -1,46 +1,79 @@
 # Global Routines - Available to all tests
 # Reference as: global.routine_name or just routine_name
 #
-# Modular pre-run routines - tests compose what they need:
-#   - Scaffolding tests: setup_node + install_meshctl
-#   - Python agent tests: setup_python_venv + install_meshctl + scaffold + install_pip_deps
-#   - TypeScript agent tests: setup_node + install_meshctl + scaffold + install_npm_deps
+# IMPORTANT: These routines assume tsuite-mesh image is used (from lib-tests or src-tests)
+# The image must have pre-installed: meshctl, node, mesh module
+# If any prerequisite is missing, tests will fail immediately.
 
 routines:
+  #############################################################################
+  # PREREQUISITE CHECKS
+  # These verify the image has required tools - fail fast if not
+  #############################################################################
+
+  # Verify meshctl is installed
+  check_meshctl:
+    description: "Verify meshctl CLI is available"
+    steps:
+      - handler: shell
+        command: |
+          if ! command -v meshctl &> /dev/null; then
+            echo "ERROR: meshctl not found in image"
+            echo "Use tsuite-mesh image from lib-tests or src-tests"
+            exit 1
+          fi
+          meshctl --version
+        capture: meshctl_version
+
+  # Verify Node.js is installed
+  check_node:
+    description: "Verify Node.js is available"
+    steps:
+      - handler: shell
+        command: |
+          if ! command -v node &> /dev/null; then
+            echo "ERROR: node not found in image"
+            echo "Use tsuite-mesh image from lib-tests or src-tests"
+            exit 1
+          fi
+          node --version && npm --version
+        capture: node_version
+
+  # Verify mesh module is installed
+  check_mesh_module:
+    description: "Verify mesh Python module is available"
+    steps:
+      - handler: shell
+        command: |
+          python -c "import mesh" 2>/dev/null
+          if [ $? -ne 0 ]; then
+            echo "ERROR: mesh module not found in image"
+            echo "Use tsuite-mesh image from lib-tests or src-tests"
+            exit 1
+          fi
+          python -c "import mesh; print(f'mesh module OK')"
+        capture: mesh_check
+
   #############################################################################
   # PYTHON SETUP
   #############################################################################
 
-  # Create Python virtual environment in workspace
+  # Create Python virtual environment linked to system mesh module
   setup_python_venv:
-    description: "Create .venv in workspace directory"
+    description: "Create .venv in workspace linked to system mesh module"
     steps:
       - handler: shell
         command: |
           cd /workspace
           python -m venv .venv
-          echo "Created .venv in /workspace"
+          # Link to system-installed mesh package
+          echo "import sys; sys.path.insert(0, '/usr/local/lib/python3.11/site-packages')" > /workspace/.venv/lib/python3.11/site-packages/mesh.pth
+          echo "Created .venv in /workspace (linked to system mesh)"
       - handler: shell
-        command: "/workspace/.venv/bin/python --version"
-        capture: python_version
+        command: "/workspace/.venv/bin/python -c \"import mesh; print('venv mesh OK')\""
+        capture: venv_check
 
-  # Install MCP Mesh Python SDK into venv
-  install_mcpmesh_python:
-    description: "Install mcpmesh Python package into workspace venv"
-    params:
-      version:
-        type: string
-        required: true
-    steps:
-      - handler: shell
-        command: "/workspace/.venv/bin/pip install mcp-mesh==${params.version}"
-        timeout: 120
-      - handler: shell
-        command: "/workspace/.venv/bin/python -c \"import mcpmesh; print(mcpmesh.__version__)\""
-        capture: mcpmesh_version
-
-  # Install pip dependencies from a directory (requirements.txt or pyproject.toml)
-  # Uses pip-install handler which supports local/published modes
+  # Install pip dependencies from a directory
   install_pip_deps:
     description: "Install Python dependencies for a scaffolded agent"
     params:
@@ -57,40 +90,7 @@ routines:
   # NODE.JS SETUP
   #############################################################################
 
-  # Install Node.js and npm in Python base image
-  setup_node:
-    description: "Install Node.js 20 and npm"
-    steps:
-      - handler: shell
-        command: |
-          if ! command -v node &> /dev/null; then
-            apt-get update -qq
-            apt-get install -y -qq curl
-            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-            apt-get install -y -qq nodejs
-          fi
-        timeout: 180
-      - handler: shell
-        command: "node --version && npm --version"
-        capture: node_version
-
-  # Install meshctl CLI
-  install_meshctl:
-    description: "Install meshctl CLI at specific version"
-    params:
-      version:
-        type: string
-        required: true
-    steps:
-      - handler: shell
-        command: "npm install -g @mcpmesh/cli@${params.version}"
-        timeout: 120
-      - handler: shell
-        command: "meshctl --version"
-        capture: meshctl_version
-
   # Install npm dependencies from a directory
-  # Uses npm-install handler which supports local/published modes
   install_npm_deps:
     description: "Run npm install in a directory"
     params:
@@ -103,140 +103,72 @@ routines:
         path: ${params.path}
 
   #############################################################################
-  # COMBINED SETUP (for convenience)
+  # COMBINED SETUP ROUTINES
   #############################################################################
 
-  # Setup for scaffolding tests (Node + meshctl only)
+  # Setup for scaffolding tests - just verify prerequisites
   setup_for_scaffold:
-    description: "Setup Node.js and meshctl for scaffolding tests"
-    params:
-      meshctl_version:
-        type: string
-        required: true
+    description: "Verify prerequisites for scaffolding tests"
     steps:
       - handler: shell
         command: |
-          if ! command -v node &> /dev/null; then
-            apt-get update -qq
-            apt-get install -y -qq curl
-            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-            apt-get install -y -qq nodejs
+          # Verify meshctl
+          if ! command -v meshctl &> /dev/null; then
+            echo "ERROR: meshctl not found - use tsuite-mesh image"
+            exit 1
           fi
-        timeout: 180
-      - handler: shell
-        command: "npm install -g @mcpmesh/cli@${params.meshctl_version}"
-        timeout: 120
-      - handler: shell
-        command: "meshctl --version"
-        capture: meshctl_version
+          # Verify node
+          if ! command -v node &> /dev/null; then
+            echo "ERROR: node not found - use tsuite-mesh image"
+            exit 1
+          fi
+          echo "Prerequisites OK: meshctl=$(meshctl --version 2>&1 | head -1), node=$(node --version)"
+        capture: prereq_check
 
-  # Setup for Python agent tests (venv + Node + meshctl)
-  # Supports three modes:
-  # - tsuite-mesh image: packages are pre-installed
-  # - local mode: install from /wheels and /packages (config.packages.mode=local)
-  # - published mode: install from PyPI/npm
+  # Setup for Python agent tests
   setup_for_python_agent:
-    description: "Full setup for running Python agents"
-    params:
-      meshctl_version:
-        type: string
-        required: true
-      mcpmesh_version:
-        type: string
-        required: true
+    description: "Setup for running Python agents"
     steps:
-      # Create venv and install mcpmesh
       - handler: shell
         command: |
-          cd /workspace
-          echo "DEBUG: Checking available directories..."
-          echo "  /wheels exists: $([ -d /wheels ] && echo 'yes' || echo 'no')"
-          echo "  /packages exists: $([ -d /packages ] && echo 'yes' || echo 'no')"
-          ls -la /wheels 2>/dev/null || echo "  /wheels not accessible"
-          # Check if meshctl is already installed (tsuite-mesh image)
-          if command -v meshctl &> /dev/null; then
-            echo "Using pre-built tsuite-mesh image - meshctl already installed"
-            python -m venv .venv
-            # Link to system-installed mesh package instead of reinstalling
-            echo "import sys; sys.path.insert(0, '/usr/local/lib/python3.11/site-packages')" > /workspace/.venv/lib/python3.11/site-packages/mesh.pth
-          # Check for local mode (wheels directory exists and non-empty)
-          elif [ -d "/wheels" ] && [ "$(ls -A /wheels 2>/dev/null)" ]; then
-            echo "Using local mode - installing from /wheels"
-            echo "Wheels found: $(ls /wheels/*.whl 2>/dev/null || echo 'none')"
-            python -m venv .venv
-            # Install local wheels directly (no deps), then install deps from PyPI
-            echo "Installing mcp-mesh-core..."
-            /workspace/.venv/bin/pip install /wheels/mcp_mesh_core-*.whl --no-deps
-            echo "Installing mcp-mesh..."
-            /workspace/.venv/bin/pip install /wheels/mcp_mesh-*.whl
-            echo "Local mode installation complete"
-            # Install Node.js if not present
-            if ! command -v node &> /dev/null; then
-              apt-get update -qq
-              apt-get install -y -qq curl
-              curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-              apt-get install -y -qq nodejs
-            fi
-            # Install meshctl from /packages if available
-            if [ -d "/packages" ] && [ "$(ls -A /packages/*.tgz 2>/dev/null)" ]; then
-              npm install -g /packages/mcpmesh-cli-*.tgz 2>/dev/null || npm install -g @mcpmesh/cli@${params.meshctl_version}
-            else
-              npm install -g @mcpmesh/cli@${params.meshctl_version}
-            fi
-          else
-            echo "Fresh image - installing packages from PyPI/npm..."
-            python -m venv .venv
-            /workspace/.venv/bin/pip install mcp-mesh==${params.mcpmesh_version}
-            # Install Node.js if not present
-            if ! command -v node &> /dev/null; then
-              apt-get update -qq
-              apt-get install -y -qq curl
-              curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-              apt-get install -y -qq nodejs
-            fi
-            npm install -g @mcpmesh/cli@${params.meshctl_version}
+          # Verify prerequisites
+          if ! command -v meshctl &> /dev/null; then
+            echo "ERROR: meshctl not found - use tsuite-mesh image"
+            exit 1
           fi
-        timeout: 180
+          python -c "import mesh" 2>/dev/null || {
+            echo "ERROR: mesh module not found - use tsuite-mesh image"
+            exit 1
+          }
+          # Create venv linked to system mesh
+          cd /workspace
+          python -m venv .venv
+          echo "import sys; sys.path.insert(0, '/usr/local/lib/python3.11/site-packages')" > /workspace/.venv/lib/python3.11/site-packages/mesh.pth
+          /workspace/.venv/bin/python -c "import mesh; print('Setup complete: mesh module available')"
+        capture: setup_result
+        timeout: 60
       - handler: shell
         command: "meshctl --version"
         capture: meshctl_version
 
-  # Setup for TypeScript agent tests (Node + meshctl + SDK)
-  # Supports local mode: install from /packages if available
+  # Setup for TypeScript agent tests
   setup_for_typescript_agent:
-    description: "Full setup for running TypeScript agents"
-    params:
-      meshctl_version:
-        type: string
-        required: true
-      sdk_version:
-        type: string
-        required: true
+    description: "Setup for running TypeScript agents"
     steps:
-      # Install Node.js
       - handler: shell
         command: |
+          # Verify prerequisites
+          if ! command -v meshctl &> /dev/null; then
+            echo "ERROR: meshctl not found - use tsuite-mesh image"
+            exit 1
+          fi
           if ! command -v node &> /dev/null; then
-            apt-get update -qq
-            apt-get install -y -qq curl
-            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-            apt-get install -y -qq nodejs
+            echo "ERROR: node not found - use tsuite-mesh image"
+            exit 1
           fi
-        timeout: 180
-      # Install meshctl and SDK (check for local mode)
-      - handler: shell
-        command: |
-          # Check for local mode (packages directory exists and has tarballs)
-          if [ -d "/packages" ] && [ "$(ls -A /packages/*.tgz 2>/dev/null)" ]; then
-            echo "Using local mode - installing from /packages"
-            npm install -g /packages/mcpmesh-cli-*.tgz 2>/dev/null || npm install -g @mcpmesh/cli@${params.meshctl_version}
-            npm install -g /packages/mcpmesh-sdk-*.tgz 2>/dev/null || npm install -g @mcpmesh/sdk@${params.sdk_version}
-          else
-            echo "Using published packages from npm"
-            npm install -g @mcpmesh/cli@${params.meshctl_version}
-            npm install -g @mcpmesh/sdk@${params.sdk_version}
-          fi
-        timeout: 120
+          echo "Prerequisites OK: meshctl=$(meshctl --version 2>&1 | head -1), node=$(node --version)"
+        capture: prereq_check
+        timeout: 30
       - handler: shell
         command: "meshctl --version"
         capture: meshctl_version
@@ -245,29 +177,28 @@ routines:
   # LEGACY (for backward compatibility)
   #############################################################################
 
-  # Full environment setup (alias for setup_for_scaffold)
+  # Legacy setup_environment - now just verifies prerequisites
   setup_environment:
-    description: "Setup complete test environment with Node and meshctl"
+    description: "Verify test environment prerequisites"
     params:
       meshctl_version:
         type: string
-        required: true
+        required: false  # Ignored - version comes from image
     steps:
       - handler: shell
         command: |
-          if ! command -v node &> /dev/null; then
-            apt-get update -qq
-            apt-get install -y -qq curl
-            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-            apt-get install -y -qq nodejs
+          if ! command -v meshctl &> /dev/null; then
+            echo "ERROR: meshctl not found - use tsuite-mesh image"
+            exit 1
           fi
-        timeout: 180
-      - handler: shell
-        command: "npm install -g @mcpmesh/cli@${params.meshctl_version}"
-        timeout: 120
-      - handler: shell
-        command: "meshctl --version"
+          if ! command -v node &> /dev/null; then
+            echo "ERROR: node not found - use tsuite-mesh image"
+            exit 1
+          fi
+          echo "Environment OK"
+          meshctl --version
         capture: meshctl_version
+        timeout: 30
 
   #############################################################################
   # UTILITIES
@@ -278,7 +209,7 @@ routines:
     description: "Remove all files from workspace directory"
     steps:
       - handler: shell
-        command: "rm -rf /workspace/* /workspace/.*  2>/dev/null || true"
+        command: "rm -rf /workspace/* /workspace/.* 2>/dev/null || true"
         ignore_errors: true
 
   # Verify expected files exist

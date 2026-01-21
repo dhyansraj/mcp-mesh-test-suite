@@ -346,6 +346,7 @@ def execute_shell(step: dict, context: dict) -> dict:
         result = subprocess.run(
             command,
             shell=True,
+            executable="/bin/bash",  # Use bash explicitly for bashisms like &>
             cwd=workdir,
             capture_output=True,
             text=True,
