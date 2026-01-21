@@ -855,6 +855,7 @@ def run_local_mode(
         routine_resolver=routine_resolver,
         server_url=server_url,
         base_workdir=workdir,
+        suite_path=suite,
     )
 
     with Progress(

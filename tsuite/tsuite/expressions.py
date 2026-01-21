@@ -130,6 +130,10 @@ class ExpressionEvaluator:
         if var in ("exit_code", "stdout", "stderr"):
             return self.context.get("last", {}).get(var)
 
+        # Check top-level context variables (suite_path, artifacts_path, workdir, etc.)
+        if var in self.context:
+            return self.context[var]
+
         # Then check captured
         if var in self.context.get("captured", {}):
             return self.context["captured"][var]
