@@ -29,7 +29,7 @@ export interface TestResult {
   use_case: string;
   test_case: string;
   name: string;
-  status: "pending" | "running" | "passed" | "failed" | "skipped";
+  status: "pending" | "running" | "passed" | "failed" | "crashed" | "skipped";
   started_at: string | null;
   finished_at: string | null;
   duration_ms: number | null;
@@ -293,8 +293,11 @@ export interface RunTestTreeUseCase {
   tests: TestResult[];
   passed: number;
   failed: number;
+  crashed: number;
+  skipped: number;
   pending: number;
   running: number;
+  total: number;
 }
 
 export interface RunTestTreeResponse {
@@ -361,6 +364,7 @@ export function getStatusColor(status: string): string {
     case "completed":
       return "text-success";
     case "failed":
+    case "crashed":
       return "text-destructive";
     case "running":
       return "text-primary";
@@ -380,6 +384,7 @@ export function getStatusBgColor(status: string): string {
     case "completed":
       return "bg-success/20 text-success";
     case "failed":
+    case "crashed":
       return "bg-destructive/20 text-destructive";
     case "running":
       return "bg-primary/20 text-primary";
@@ -579,10 +584,9 @@ export interface SuiteConfigStructure {
     base_image?: string;
     network?: string;
   };
-  defaults?: {
+  execution?: {
+    max_workers?: number;
     timeout?: number;
-    parallel?: number;
-    retry?: number;
   };
   reports?: {
     output_dir?: string;

@@ -295,35 +295,25 @@ export function SuiteConfigEditor({
             </CardTitle>
           </CardHeader>
           <CardContent className="px-4 pb-4">
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="max_workers">Max Workers (parallel)</Label>
+                <Input
+                  id="max_workers"
+                  type="number"
+                  value={structure.execution?.max_workers || ""}
+                  onChange={(e) => updateNestedField("execution", "max_workers", parseInt(e.target.value) || 0)}
+                  placeholder="1"
+                />
+              </div>
               <div className="grid gap-2">
                 <Label htmlFor="timeout">Timeout (seconds)</Label>
                 <Input
                   id="timeout"
                   type="number"
-                  value={structure.defaults?.timeout || ""}
-                  onChange={(e) => updateNestedField("defaults", "timeout", parseInt(e.target.value) || 0)}
-                  placeholder="120"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="parallel">Parallel</Label>
-                <Input
-                  id="parallel"
-                  type="number"
-                  value={structure.defaults?.parallel || ""}
-                  onChange={(e) => updateNestedField("defaults", "parallel", parseInt(e.target.value) || 0)}
-                  placeholder="1"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="retry">Retry</Label>
-                <Input
-                  id="retry"
-                  type="number"
-                  value={structure.defaults?.retry || ""}
-                  onChange={(e) => updateNestedField("defaults", "retry", parseInt(e.target.value) || 0)}
-                  placeholder="0"
+                  value={structure.execution?.timeout || ""}
+                  onChange={(e) => updateNestedField("execution", "timeout", parseInt(e.target.value) || 0)}
+                  placeholder="300"
                 />
               </div>
             </div>

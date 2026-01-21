@@ -235,6 +235,7 @@ function getStatusIcon(status: string) {
     case "passed":
       return <CheckCircle className="h-4 w-4 text-success" />;
     case "failed":
+    case "crashed":
       return <XCircle className="h-4 w-4 text-destructive" />;
     case "running":
       return <Loader2 className="h-4 w-4 text-primary animate-spin" />;
@@ -328,7 +329,7 @@ function TestTree({ useCases, expandedIds, onToggle, onTestClick, filter }: Test
                         className={cn(
                           "flex items-center gap-3 px-4 py-2 pl-10 hover:bg-muted/30 transition-colors w-full text-left",
                           test.status === "running" && "bg-primary/10",
-                          test.status === "failed" && "bg-destructive/5",
+                          (test.status === "failed" || test.status === "crashed") && "bg-destructive/5",
                           onTestClick && "cursor-pointer"
                         )}
                       >
@@ -439,14 +440,14 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetai
                         className={cn(
                           "rounded-md border p-3",
                           step.status === "passed" && "border-success/30 bg-success/5",
-                          step.status === "failed" && "border-destructive/30 bg-destructive/5"
+                          (step.status === "failed" || step.status === "crashed") && "border-destructive/30 bg-destructive/5"
                         )}
                       >
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
                             {step.status === "passed" ? (
                               <CheckCircle className="h-4 w-4 text-success" />
-                            ) : step.status === "failed" ? (
+                            ) : step.status === "failed" || step.status === "crashed" ? (
                               <XCircle className="h-4 w-4 text-destructive" />
                             ) : (
                               <Circle className="h-4 w-4 text-muted-foreground" />
