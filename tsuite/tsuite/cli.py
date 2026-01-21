@@ -988,8 +988,14 @@ def run_docker_mode(
 
     # Helper function to execute a single test (for parallel execution)
     def execute_single_test(test):
-        """Execute a single test and return result."""
+        """
+        Execute a single test and return result.
+
+        Phase 5: Reports CRASHED status on unexpected container/process death.
+        Timeout is reported as FAILED (not CRASHED).
+        """
         test_start = datetime.now()
+        crashed = False
 
         # Mark test as running in database
         db_test_id = test_result_map.get(test.id) if test_result_map else None
@@ -1004,13 +1010,14 @@ def run_docker_mode(
         if current_run_id:
             sse_manager.emit_test_started(current_run_id, test.id, test.name)
 
-        # Execute test with timeout
+        # Execute test with timeout and crash detection
         try:
             docker_result = execute_with_timeout(
                 lambda: executor.execute_test(test),
                 test_timeout
             )
         except TestTimeoutError as e:
+            # Phase 5: Timeout is FAILED, not CRASHED
             docker_result = {
                 "test_id": test.id,
                 "passed": False,
@@ -1018,6 +1025,17 @@ def run_docker_mode(
                 "error": str(e),
                 "stdout": "",
                 "stderr": f"Test exceeded {test_timeout}s timeout",
+            }
+        except Exception as e:
+            # Phase 5: Unexpected error = container/process crashed
+            crashed = True
+            docker_result = {
+                "test_id": test.id,
+                "passed": False,
+                "duration": (datetime.now() - test_start).total_seconds(),
+                "error": f"Container/process crashed: {e}",
+                "stdout": "",
+                "stderr": str(e),
             }
 
         # Convert to TestResult
@@ -1036,8 +1054,14 @@ def run_docker_mode(
         )
 
         # Update test result in database
+        # Phase 5: Use CRASHED status for unexpected death
         if db_test_id:
-            status = TestStatus.PASSED if result.passed else TestStatus.FAILED
+            if crashed:
+                status = TestStatus.CRASHED
+            elif result.passed:
+                status = TestStatus.PASSED
+            else:
+                status = TestStatus.FAILED
             repo.update_test_result(
                 db_test_id,
                 status=status,

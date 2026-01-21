@@ -280,11 +280,12 @@ CLOSED: [2026-01-21]
 - Raises TestTimeoutError on timeout
 - Timeout read from config.defaults.timeout (default 300s)
 
-** PHASE 5: Idempotent Status Updates [0/4]
+** PHASE 5: Idempotent Status Updates [4/4]
 
 Ensure status updates are safe for retries and race conditions.
 
-*** TODO Add 'crashed' to TestStatus enum
+*** DONE Add 'crashed' to TestStatus enum
+CLOSED: [2026-01-21]
 #+begin_src python
 class TestStatus(enum.Enum):
     PENDING = "pending"
@@ -295,50 +296,24 @@ class TestStatus(enum.Enum):
     SKIPPED = "skipped"
 #+end_src
 
-*** TODO Implement idempotent update logic
-#+begin_src python
-TERMINAL_STATES = {TestStatus.PASSED, TestStatus.FAILED, TestStatus.CRASHED, TestStatus.SKIPPED}
+*** DONE Implement idempotent update logic
+CLOSED: [2026-01-21]
+- Added TERMINAL_STATES constant in models.py
+- Added idempotent check in update_test_status() and update_test_result()
+- Terminal states (passed/failed/crashed/skipped) cannot be overwritten
+- Updated SSE emission to include CRASHED status
 
-def update_test_status(run_id, test_id, new_status, **kwargs):
-    """Update test status, ignoring updates to terminal states."""
-    test = get_test(run_id, test_id)
+*** DONE CLI reports 'crashed' on unexpected death
+CLOSED: [2026-01-21]
+- execute_single_test() catches unexpected exceptions
+- Reports CRASHED status with error message "Container/process crashed: {e}"
+- Uses try/except around execute_with_timeout() call
 
-    if test.status in TERMINAL_STATES:
-        # Already in terminal state, ignore update
-        return test
-
-    test.status = new_status
-    test.duration_ms = kwargs.get("duration_ms")
-    test.error_message = kwargs.get("error_message")
-
-    save(test)
-    emit_sse_event(run_id, test_id, new_status)
-    return test
-#+end_src
-
-*** TODO CLI reports 'crashed' on unexpected death
-#+begin_src python
-def execute_test(test, api_url, run_id):
-    """Execute test, handle crashes."""
-    update_status(api_url, run_id, test.id, "running")
-
-    try:
-        result = run_in_container(test) if docker_mode else run_in_subprocess(test)
-        status = "passed" if result.success else "failed"
-        error = result.error if not result.success else None
-    except (ContainerDied, ProcessDied) as e:
-        status = "crashed"
-        error = f"Died unexpectedly: {e}"
-    except TimeoutError:
-        status = "failed"
-        error = "Test exceeded timeout"
-
-    update_status(api_url, run_id, test.id, status, error_message=error)
-#+end_src
-
-*** TODO Handle timeout as failure
-- Timeout is a type of failure, not crash
-- Report with clear error message: "Test exceeded Xs timeout"
+*** DONE Handle timeout as failure
+CLOSED: [2026-01-21]
+- Timeout raises TestTimeoutError, caught separately from crashes
+- Reports FAILED status (not CRASHED) for timeouts
+- Error message: "Test exceeded {timeout}s timeout"
 
 ** PHASE 6: Cleanup [0/4]
 

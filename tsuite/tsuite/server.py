@@ -574,7 +574,7 @@ def create_app() -> Flask:
         # Emit SSE event
         if status == TestStatus.RUNNING:
             sse_manager.emit_test_started(run_id, test_id, test.name or test_id)
-        elif status in (TestStatus.PASSED, TestStatus.FAILED, TestStatus.SKIPPED):
+        elif status in (TestStatus.PASSED, TestStatus.FAILED, TestStatus.CRASHED, TestStatus.SKIPPED):
             sse_manager.emit_test_completed(
                 run_id, test_id, status.value,
                 data.get("duration_ms", 0),

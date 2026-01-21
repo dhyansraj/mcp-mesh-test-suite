@@ -10,7 +10,7 @@ import uuid
 from . import db
 from .models import (
     Run, RunStatus, RunSummary,
-    TestResult, TestStatus, TestDetail,
+    TestResult, TestStatus, TestDetail, TERMINAL_STATES,
     StepResult, StepStatus,
     AssertionResult,
     CapturedValue,
@@ -267,6 +267,10 @@ def update_test_status(
 
     This is the main method called by test runners to report progress.
     It also updates the run's counters.
+
+    Phase 5: Idempotent - ignores updates if test is already in a terminal state
+    (passed, failed, crashed, skipped). This prevents race conditions in parallel
+    execution and ensures crashed tests aren't overwritten.
     """
     # Get current test state
     test = get_test_result_by_test_id(run_id, test_id)
@@ -274,6 +278,12 @@ def update_test_status(
         return None
 
     old_status = test.status
+
+    # Phase 5: Idempotent - don't update terminal states
+    if old_status in TERMINAL_STATES:
+        # Already in terminal state, ignore update
+        return test
+
     now = datetime.now()
 
     # Build update
@@ -284,7 +294,7 @@ def update_test_status(
         updates.append("started_at = ?")
         params.append(now.isoformat())
 
-    if status in (TestStatus.PASSED, TestStatus.FAILED, TestStatus.SKIPPED):
+    if status in (TestStatus.PASSED, TestStatus.FAILED, TestStatus.CRASHED, TestStatus.SKIPPED):
         updates.append("finished_at = ?")
         params.append(now.isoformat())
 
@@ -455,7 +465,20 @@ def update_test_result(
     error_message: Optional[str] = None,
     error_step: Optional[int] = None,
 ) -> None:
-    """Update a test result record."""
+    """
+    Update a test result record.
+
+    Phase 5: Idempotent - ignores status updates if test is already in a
+    terminal state (passed, failed, crashed, skipped).
+    """
+    # Phase 5: Check current status for idempotency
+    if status is not None:
+        current = get_test_result(test_result_id)
+        if current and current.status in TERMINAL_STATES:
+            # Already in terminal state, ignore status update
+            # But still allow other field updates (duration, error_message, etc.)
+            status = None
+
     updates = []
     params = []
 
