@@ -10,7 +10,7 @@ ENV/
 *.egg-info/
 .eggs/
 dist/
-build/
+/build/
 
 # Node
 node_modules/
