@@ -179,68 +179,45 @@ CLOSED: [2026-01-21]
 - Updated client.py to use /api/runner/* endpoints
 - Old endpoints kept for backward compatibility
 
-** PHASE 2: Update CLI [0/6]
+** PHASE 2: Update CLI [6/6]
 
 CLI owns the workflow. Remove RunnerServer, add API integration.
 
-*** TODO Add health_check() function
-#+begin_src python
-def health_check(api_url: str, timeout: int = 5) -> bool:
-    """Check if API server is running."""
-    try:
-        resp = requests.get(f"{api_url}/health", timeout=timeout)
-        return resp.status_code == 200
-    except:
-        return False
-#+end_src
+*** DONE Add health_check() function
+CLOSED: [2026-01-21]
+- Added health_check(api_url, timeout) to cli.py
+- Returns True if server responds to /health endpoint
 
-*** TODO Add ensure_api_server() function
-#+begin_src python
-def ensure_api_server(port: int = 9999) -> str:
-    """Start API server if not running, return URL."""
-    api_url = f"http://localhost:{port}"
+*** DONE Add ensure_api_server() function
+CLOSED: [2026-01-21]
+- Added ensure_api_server(port, timeout) to cli.py
+- Starts API server in background if not running
+- Waits for server to be ready with retry loop
 
-    if health_check(api_url):
-        return api_url
+*** DONE CLI creates run via API
+CLOSED: [2026-01-21]
+- Added create_run_via_api() function
+- Added start_run_via_api() function
+- Added complete_run_via_api() function
+- Added update_test_status_via_api() function
 
-    # Start server in background
-    subprocess.Popen(
-        [sys.executable, "-m", "tsuite.server", "--port", str(port)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+*** DONE Remove RunnerServer class from cli.py
+CLOSED: [2026-01-21]
+- Removed RunnerServer import
+- run_local_mode and run_docker_mode no longer use RunnerServer
+- API server URL (port 9999) used directly
 
-    # Wait for server to be ready
-    for _ in range(30):
-        if health_check(api_url):
-            return api_url
-        time.sleep(0.1)
+*** DONE Update run_docker_mode()
+CLOSED: [2026-01-21]
+- Removed RunnerServer context manager
+- Uses http://host.docker.internal:9999 for containers
+- Added api_url parameter
 
-    raise RuntimeError("Failed to start API server")
-#+end_src
-
-*** TODO CLI creates run via API
-#+begin_src python
-def create_run(api_url: str, suite_id: int, tests: list) -> str:
-    """Create run in DB via API, return run_id."""
-    resp = requests.post(f"{api_url}/api/runs", json={
-        "suite_id": suite_id,
-        "tests": [{"test_id": t.id, "name": t.name, ...} for t in tests]
-    })
-    return resp.json()["run_id"]
-#+end_src
-
-*** TODO Remove RunnerServer class from cli.py
-- Delete RunnerServer import and usage
-- Replace with ensure_api_server() + API calls
-
-*** TODO Update run_docker_mode()
-- Use API server URL instead of RunnerServer URL
-- Pass URL to containers via environment variable
-
-*** TODO Update run_local_mode()
-- Use API server URL for state/capture/progress
-- Same endpoints, just different server
+*** DONE Update run_local_mode()
+CLOSED: [2026-01-21]
+- Removed RunnerServer context manager
+- Uses API server URL directly
+- Added api_url parameter
 
 ** PHASE 3: Simplify API Server's Run Endpoint [0/2]
 
