@@ -6,13 +6,15 @@ A YAML-driven integration test framework with container isolation, real-time mon
 
 - **YAML-based test definitions** - Tests as configuration, not code
 - **Container isolation** - Each test runs in a fresh Docker container
+- **Parallel execution** - Worker pool for concurrent test execution (Docker mode)
 - **Pluggable handlers** - Extensible test actions (shell, file, http, wait, llm)
 - **Expression language** - Flexible assertions without Python
 - **Reusable routines** - Define once, use anywhere (global/UC/TC scopes)
-- **REST API server** - Full API for dashboard integration and test management
+- **REST API server** - Single API server for dashboard and container communication
 - **Real-time SSE streaming** - Live test execution updates via Server-Sent Events
 - **SQLite database** - Persistent storage for runs, results, and suite management
 - **Web dashboard** - Monitor tests, view history, edit test cases
+- **Idempotent updates** - Terminal states (passed/failed/crashed) are protected
 
 ## Installation
 
@@ -55,6 +57,27 @@ Run the API server for the dashboard without running tests:
 ```bash
 python -m tsuite.server --port 9999
 python -m tsuite.server --port 9999 --suites path/to/suite1,path/to/suite2
+```
+
+## Execution Modes
+
+### Docker Mode (Recommended)
+
+Tests run in isolated Docker containers with optional parallel execution:
+
+```yaml
+# config.yaml
+defaults:
+  parallel: 4    # Number of concurrent tests (default: 1)
+  timeout: 300   # Per-test timeout in seconds (default: 300)
+```
+
+### Standalone Mode
+
+Tests run locally in sequential order. Use for development or when Docker is unavailable:
+
+```bash
+tsuite --all  # Runs without --docker flag
 ```
 
 ## Architecture
@@ -175,7 +198,7 @@ class RunStatus(Enum):
     PENDING, RUNNING, COMPLETED, FAILED, CANCELLED
 
 class TestStatus(Enum):
-    PENDING, RUNNING, PASSED, FAILED, SKIPPED
+    PENDING, RUNNING, PASSED, FAILED, CRASHED, SKIPPED
 
 class SuiteMode(Enum):
     DOCKER, STANDALONE
@@ -278,7 +301,7 @@ Run Selection:
 Execution:
   --docker              Run in Docker containers
   --image TEXT          Override Docker image
-  --port INTEGER        Server port [default: 9999]
+  --api-url TEXT        API server URL [default: http://localhost:9999]
   --stop-on-fail        Stop on first failure
   --retry-failed        Retry failed tests from last run
   --mock-llm            Use mock LLM responses

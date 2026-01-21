@@ -315,28 +315,33 @@ CLOSED: [2026-01-21]
 - Reports FAILED status (not CRASHED) for timeouts
 - Error message: "Test exceeded {timeout}s timeout"
 
-** PHASE 6: Cleanup [0/4]
+** PHASE 6: Cleanup [3/4]
 
 Remove old code, update documentation.
 
-*** TODO Remove RunnerServer class entirely
-- Delete from server.py
-- Remove from imports
+*** DONE Remove RunnerServer class entirely
+CLOSED: [2026-01-21]
+- Deleted RunnerServer class from server.py
+- Class was no longer used after Phase 2
 
-*** TODO Remove --port flag from CLI
-- No longer needed (single server on 9999)
-- Keep --api-url for flexibility
+*** DONE Remove --port flag from CLI
+CLOSED: [2026-01-21]
+- Removed --port CLI option (was for old RunnerServer)
+- Removed port parameter from run_local_mode and run_docker_mode
+- --api-url remains for flexibility (default: http://localhost:9999)
 
-*** TODO Update README documentation
-- Document new architecture
-- Update CLI usage examples
-- Add worker pool configuration
+*** DONE Update README documentation
+CLOSED: [2026-01-21]
+- Added CRASHED status to TestStatus enum docs
+- Updated CLI options (removed --port, documented --api-url)
+- Added parallel execution feature
+- Added Execution Modes section with config examples
+- Added idempotent updates feature
 
-*** TODO Add/update tests
-- Test API server auto-start
-- Test worker pool execution
-- Test idempotent status updates
-- Test crash detection
+*** DEFERRED Add/update tests
+- No existing test infrastructure for tsuite package
+- Would require significant effort to set up test framework
+- Recommend as future enhancement when time permits
 
 * CLI Workflow (Main Entry Point)
 

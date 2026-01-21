@@ -1735,48 +1735,6 @@ def _parse_suite_config(folder_path: str) -> dict:
     }
 
 
-class RunnerServer:
-    """
-    Manages the Flask server lifecycle.
-
-    Runs in a background thread so tests can execute concurrently.
-    """
-
-    def __init__(self, host: str = "0.0.0.0", port: int = 9999):
-        self.host = host
-        self.port = port
-        self.app = create_app()
-        self.server = None
-        self.thread = None
-
-    def start(self):
-        """Start the server in a background thread."""
-        self.server = make_server(self.host, self.port, self.app, threaded=True)
-        self.thread = threading.Thread(target=self.server.serve_forever)
-        self.thread.daemon = True
-        self.thread.start()
-
-    def stop(self):
-        """Stop the server."""
-        if self.server:
-            self.server.shutdown()
-        if self.thread:
-            self.thread.join(timeout=5)
-
-    def get_url(self) -> str:
-        """Get the server URL for containers to use."""
-        # For Docker containers on Mac/Windows, use host.docker.internal
-        # On Linux, we'd need to use the host's IP or --network=host
-        return f"http://host.docker.internal:{self.port}"
-
-    def __enter__(self):
-        self.start()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.stop()
-
-
 def main():
     """
     Run the API server standalone for the dashboard.

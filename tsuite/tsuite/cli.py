@@ -28,7 +28,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 from .context import runtime
 from .discovery import TestDiscovery, load_config
-# RunnerServer removed in Phase 2 - CLI uses API server directly
+# Phase 6: RunnerServer removed - CLI uses single API server (port 9999)
 from .executor import TestExecutor, TestResult
 from .routines import RoutineResolver
 from . import db
@@ -542,7 +542,6 @@ def generate_comparison(
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.option("--stop-on-fail", is_flag=True, help="Stop on first failure")
 @click.option("--suite-path", type=click.Path(exists=True), help="Path to test suite")
-@click.option("--port", default=9998, help="Internal runner server port")
 @click.option("--docker", is_flag=True, help="Run tests in Docker containers")
 @click.option("--image", default=None, help="Docker image to use (overrides config)")
 @click.option("--db-path", type=click.Path(), help="Path to results database")
@@ -566,7 +565,6 @@ def main(
     verbose: bool,
     stop_on_fail: bool,
     suite_path: str | None,
-    port: int,
     docker: bool,
     image: str | None,
     db_path: str | None,
@@ -753,7 +751,6 @@ def main(
             config=config,
             suite=suite,
             workdir=workdir,
-            port=port,
             verbose=verbose,
             stop_on_fail=stop_on_fail,
             image_override=image,
@@ -767,7 +764,6 @@ def main(
             routine_sets=routine_sets,
             suite=suite,
             workdir=workdir,
-            port=port,
             verbose=verbose,
             stop_on_fail=stop_on_fail,
             test_result_map=test_result_map,
@@ -821,7 +817,6 @@ def run_local_mode(
     routine_sets: dict,
     suite: Path,
     workdir: Path,
-    port: int,
     verbose: bool,
     stop_on_fail: bool,
     test_result_map: dict | None = None,
@@ -845,8 +840,8 @@ def run_local_mode(
 
     results = []
 
-    # Use API server URL (Phase 2: no more RunnerServer)
-    server_url = api_url or f"http://localhost:{port}"
+    # Use API server URL (Phase 6: port parameter removed)
+    server_url = api_url or "http://localhost:9999"
     console.print(f"[dim]API Server: {server_url}[/dim]")
     console.print(f"[dim]Mode: local (standalone)[/dim]\n")
 
@@ -923,7 +918,6 @@ def run_docker_mode(
     config: dict,
     suite: Path,
     workdir: Path,
-    port: int,
     verbose: bool,
     stop_on_fail: bool,
     image_override: str | None = None,
@@ -947,7 +941,7 @@ def run_docker_mode(
         from .discovery import TestDiscovery
         discovery = TestDiscovery(suite)
         routine_sets = discovery.discover_routines()
-        return run_local_mode(tests, routine_sets, suite, workdir, port, verbose, stop_on_fail, test_result_map, run_id, api_url)
+        return run_local_mode(tests, routine_sets, suite, workdir, verbose, stop_on_fail, test_result_map, run_id, api_url)
 
     console.print(f"[dim]Docker: {info}[/dim]")
 
