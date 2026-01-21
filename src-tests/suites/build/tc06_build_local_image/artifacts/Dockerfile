@@ -30,8 +30,8 @@ COPY bin/meshctl /usr/local/bin/meshctl
 # Make meshctl executable
 RUN chmod +x /usr/local/bin/meshctl
 
-# Install Python packages from local wheels
-RUN pip install --no-cache-dir --find-links /wheels mcp-mesh-core mcp-mesh
+# Install Python packages from local wheels (direct path to ensure local version is used)
+RUN pip install --no-cache-dir /wheels/mcp_mesh_core-*.whl /wheels/mcp_mesh-*.whl
 
 # Verify mesh module installation
 RUN python -c "import mesh; print('mesh module imported successfully')"
