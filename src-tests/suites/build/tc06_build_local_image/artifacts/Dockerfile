@@ -46,6 +46,9 @@ RUN if ls /packages/mcpmesh-cli-*.tgz 1> /dev/null 2>&1; then \
 # Verify meshctl installation
 RUN meshctl --version
 
+# Install TypeScript core bindings globally (SDK depends on this)
+RUN npm install -g /packages/mcpmesh-core-*.tgz
+
 # Install TypeScript SDK globally from local tarball
 RUN npm install -g /packages/mcpmesh-sdk-*.tgz
 
