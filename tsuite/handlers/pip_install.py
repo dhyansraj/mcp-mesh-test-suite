@@ -11,8 +11,15 @@ Step configuration:
 Context configuration (from suite config.yaml):
     packages:
       mode: "auto"              # "local", "published", or "auto"
+      sdk_python_version: "0.8.0b9"  # Version for published mode
       local:
         wheels_dir: "/wheels"   # Directory containing local .whl files
+
+Flow:
+    1. Run `pip install -r requirements.txt` to install baseline dependencies
+    2. Override mcp-mesh packages with target version:
+       - local mode: pip install --force-reinstall /wheels/mcp_mesh*.whl
+       - published mode: pip install --force-reinstall mcp-mesh=={version}
 """
 
 import subprocess
@@ -28,12 +35,13 @@ from .base import success, failure
 
 def execute(step: dict, context: dict) -> StepResult:
     """
-    Install Python dependencies from requirements.txt.
+    Install Python dependencies from requirements.txt, then override mcp-mesh packages.
 
-    Checks config.packages.mode:
-    - "local": Uses --find-links with wheels directory
-    - "published": Normal pip install from PyPI
-    - "auto": Auto-detect (local if wheels dir exists and non-empty)
+    Steps:
+    1. Run pip install -r requirements.txt (baseline)
+    2. Override mcp-mesh packages based on mode:
+       - local: pip install --force-reinstall --no-deps /wheels/mcp_mesh*.whl
+       - published: pip install --force-reinstall mcp-mesh=={version}
     """
     path = step.get("path", "/workspace")
     venv = step.get("venv", "/workspace/.venv")
@@ -42,10 +50,11 @@ def execute(step: dict, context: dict) -> StepResult:
     packages_config = config.get("packages", {})
     mode = packages_config.get("mode", "auto")
     wheels_dir = packages_config.get("local", {}).get("wheels_dir", "/wheels")
+    sdk_version = packages_config.get("sdk_python_version", "")
 
     # Auto-detect mode
     if mode == "auto":
-        if os.path.exists(wheels_dir) and os.listdir(wheels_dir):
+        if os.path.exists(wheels_dir) and _has_whl_files(wheels_dir):
             mode = "local"
         else:
             mode = "published"
@@ -56,34 +65,103 @@ def execute(step: dict, context: dict) -> StepResult:
     if not requirements_file.exists():
         return success(f"No requirements.txt found in {path} (mode={mode})")
 
-    # Build command
-    cmd = [pip_bin, "install", "-r", str(requirements_file)]
+    output_lines = [f"[mode={mode}]"]
 
-    if mode == "local":
-        cmd.extend(["--find-links", wheels_dir])
-        # Prefer local packages but fallback to PyPI for other deps
-        cmd.extend(["--extra-index-url", "https://pypi.org/simple/"])
-
+    # Step 1: Run baseline pip install
     try:
+        cmd = [pip_bin, "install", "-r", str(requirements_file)]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
-        if result.returncode == 0:
-            return StepResult(
-                exit_code=0,
-                stdout=f"[mode={mode}] {result.stdout}",
-                stderr=result.stderr,
-                success=True,
-            )
-        else:
+        output_lines.append("Step 1: pip install -r requirements.txt (baseline)")
+        output_lines.append(result.stdout)
+
+        if result.returncode != 0:
             return StepResult(
                 exit_code=result.returncode,
-                stdout=result.stdout,
+                stdout="\n".join(output_lines),
                 stderr=result.stderr,
                 success=False,
-                error=f"pip install failed (mode={mode}): {result.stderr}",
+                error=f"pip install failed: {result.stderr}",
             )
 
     except subprocess.TimeoutExpired:
         return failure("pip install timed out after 300s", exit_code=124)
     except Exception as e:
         return failure(f"pip install failed: {e}")
+
+    # Step 2: Override mcp-mesh packages
+    try:
+        if mode == "local":
+            # Find all mcp_mesh wheels in wheels_dir
+            wheels = _find_all_mcpmesh_wheels(wheels_dir)
+            if wheels:
+                output_lines.append(f"Step 2: Override with local wheels: {', '.join(os.path.basename(w) for w in wheels)}")
+                cmd = [pip_bin, "install", "--force-reinstall", "--no-deps"] + wheels
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                output_lines.append(result.stdout)
+
+                if result.returncode != 0:
+                    return StepResult(
+                        exit_code=result.returncode,
+                        stdout="\n".join(output_lines),
+                        stderr=result.stderr,
+                        success=False,
+                        error=f"pip install (local override) failed: {result.stderr}",
+                    )
+            else:
+                output_lines.append("Step 2: No mcp_mesh wheels found in wheels_dir, skipping override")
+
+        elif mode == "published" and sdk_version:
+            # Install specific version from PyPI
+            packages_to_install = [f"mcp-mesh=={sdk_version}"]
+            output_lines.append(f"Step 2: Override with published packages: {', '.join(packages_to_install)}")
+            cmd = [pip_bin, "install", "--force-reinstall"] + packages_to_install
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            output_lines.append(result.stdout)
+
+            if result.returncode != 0:
+                return StepResult(
+                    exit_code=result.returncode,
+                    stdout="\n".join(output_lines),
+                    stderr=result.stderr,
+                    success=False,
+                    error=f"pip install (published override) failed: {result.stderr}",
+                )
+        else:
+            output_lines.append("Step 2: No override configured, using baseline versions")
+
+    except subprocess.TimeoutExpired:
+        return failure("pip install (override) timed out after 300s", exit_code=124)
+    except Exception as e:
+        return failure(f"pip install (override) failed: {e}")
+
+    return StepResult(
+        exit_code=0,
+        stdout="\n".join(output_lines),
+        stderr="",
+        success=True,
+    )
+
+
+def _has_whl_files(wheels_dir: str) -> bool:
+    """Check if directory contains any .whl files."""
+    try:
+        return any(
+            f.endswith('.whl')
+            for f in os.listdir(wheels_dir)
+            if os.path.isfile(os.path.join(wheels_dir, f))
+        )
+    except OSError:
+        return False
+
+
+def _find_all_mcpmesh_wheels(wheels_dir: str) -> list[str]:
+    """Find all mcp_mesh wheels in the wheels directory."""
+    wheels = []
+    try:
+        for file in os.listdir(wheels_dir):
+            if file.startswith("mcp_mesh") and file.endswith(".whl"):
+                wheels.append(os.path.join(wheels_dir, file))
+    except OSError:
+        pass
+    return sorted(wheels)
