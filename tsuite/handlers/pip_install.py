@@ -53,6 +53,7 @@ def execute(step: dict, context: dict) -> StepResult:
     sdk_version = packages_config.get("sdk_python_version", "")
 
     # Auto-detect mode
+    original_mode = mode
     if mode == "auto":
         if os.path.exists(wheels_dir) and _has_whl_files(wheels_dir):
             mode = "local"
@@ -65,7 +66,24 @@ def execute(step: dict, context: dict) -> StepResult:
     if not requirements_file.exists():
         return success(f"No requirements.txt found in {path} (mode={mode})")
 
-    output_lines = [f"[mode={mode}]"]
+    # Build informative header
+    output_lines = [
+        "=" * 60,
+        "pip-install handler",
+        "=" * 60,
+        f"  Path: {path}",
+        f"  Venv: {venv}",
+        f"  Mode: {mode}" + (f" (auto-detected from '{original_mode}')" if original_mode == "auto" else ""),
+    ]
+
+    if mode == "local":
+        output_lines.append(f"  Wheels dir: {wheels_dir}")
+        wheels = _find_all_mcpmesh_wheels(wheels_dir)
+        output_lines.append(f"  Local wheels: {', '.join(os.path.basename(w) for w in wheels) if wheels else 'none'}")
+    else:
+        output_lines.append(f"  Target version: {sdk_version or 'not specified'}")
+
+    output_lines.append("-" * 60)
 
     # Step 1: Run baseline pip install
     try:

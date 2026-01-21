@@ -52,6 +52,7 @@ def execute(step: dict, context: dict) -> StepResult:
     sdk_version = packages_config.get("sdk_typescript_version", "")
 
     # Auto-detect mode
+    original_mode = mode
     if mode == "auto":
         if os.path.exists(packages_dir) and _has_tgz_files(packages_dir):
             mode = "local"
@@ -63,7 +64,23 @@ def execute(step: dict, context: dict) -> StepResult:
     if not package_json_path.exists():
         return success(f"No package.json found in {path} (mode={mode})")
 
-    output_lines = [f"[mode={mode}]"]
+    # Build informative header
+    output_lines = [
+        "=" * 60,
+        "npm-install handler",
+        "=" * 60,
+        f"  Path: {path}",
+        f"  Mode: {mode}" + (f" (auto-detected from '{original_mode}')" if original_mode == "auto" else ""),
+    ]
+
+    if mode == "local":
+        output_lines.append(f"  Packages dir: {packages_dir}")
+        tarballs = _find_all_mcpmesh_tarballs(packages_dir)
+        output_lines.append(f"  Local tarballs: {', '.join(os.path.basename(t) for t in tarballs) if tarballs else 'none'}")
+    else:
+        output_lines.append(f"  Target version: {sdk_version or 'not specified'}")
+
+    output_lines.append("-" * 60)
 
     # Step 1: Run baseline npm install
     try:
