@@ -19,29 +19,22 @@ pre_run:
       meshctl_version: "${config.packages.cli_version}"
 
 test:
-  # Copy and setup TypeScript artifacts
-  - name: "Copy and setup TypeScript artifacts"
+  # Copy TypeScript artifacts
+  - name: "Copy TypeScript artifacts"
     handler: shell
     command: |
       cp -r /uc-artifacts/ts-fast-provider /workspace/
       cp -r /uc-artifacts/ts-tag-consumer /workspace/
-      VERSION="${config.packages.sdk_typescript_version}"
-      sed -i "s/__SDK_VERSION__/$VERSION/g" /workspace/ts-fast-provider/package.json
-      sed -i "s/__SDK_VERSION__/$VERSION/g" /workspace/ts-tag-consumer/package.json
     capture: copy_output
 
-  # Install npm dependencies
+  # Install npm dependencies (handler auto-detects local/published mode)
   - name: "Install fast provider dependencies"
-    handler: shell
-    command: "cd ts-fast-provider && npm install --silent"
-    workdir: /workspace
-    timeout: 120
+    handler: npm-install
+    path: /workspace/ts-fast-provider
 
   - name: "Install tag consumer dependencies"
-    handler: shell
-    command: "cd ts-tag-consumer && npm install --silent"
-    workdir: /workspace
-    timeout: 120
+    handler: npm-install
+    path: /workspace/ts-tag-consumer
 
   # Start provider
   - name: "Start TS fast provider"

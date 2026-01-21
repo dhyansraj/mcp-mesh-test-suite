@@ -21,24 +21,19 @@ pre_run:
       mcpmesh_version: "${config.packages.sdk_python_version}"
 
 test:
-  # Copy UC-level artifacts to workspace and replace version placeholders
+  # Copy UC-level artifacts to workspace
   - name: "Copy UC-level artifacts to workspace"
     handler: shell
     command: |
       cp -r /uc-artifacts/py-simple-agent /workspace/
       cp -r /uc-artifacts/ts-simple-agent /workspace/
-      # Replace version placeholders
-      sed -i "s/__SDK_VERSION__/${config.packages.sdk_typescript_version}/g" /workspace/ts-simple-agent/package.json
       ls -la /workspace/
     capture: copy_output
 
-  # Install TypeScript dependencies
+  # Install TypeScript dependencies (handler auto-detects local/published mode)
   - name: "Install TypeScript dependencies"
-    handler: shell
-    command: "cd ts-simple-agent && npm install --silent"
-    workdir: /workspace
-    timeout: 120
-    capture: npm_install
+    handler: npm-install
+    path: /workspace/ts-simple-agent
 
   # Start Python agent in detached mode using meshctl (auto-starts registry)
   - name: "Start Python agent in detached mode"

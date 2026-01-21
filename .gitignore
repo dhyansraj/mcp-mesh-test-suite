@@ -36,3 +36,12 @@ reports/
 .env
 .env.local
 *.db*
+
+# External repos
+mcp-mesh/
+
+# Claude Code
+.claude/
+
+# Build outputs
+src-tests/out/

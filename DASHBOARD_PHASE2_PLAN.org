@@ -1,0 +1,501 @@
+#+TITLE: tsuite Dashboard Phase 2 - Settings & Test Execution
+#+AUTHOR: MCP Mesh Team
+#+DATE: 2026-01-19
+#+OPTIONS: toc:3 num:t
+
+* Overview
+
+Extend the tsuite dashboard with settings management and test execution capabilities.
+
+** Goals
+- Unified configuration between CLI and UI
+- Browse available tests organized by suite/uc/tc
+- Execute tests from the dashboard
+- YAML remains source of truth
+
+** Architecture
+
+#+BEGIN_SRC
+┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
+│   tsuite.yaml   │ ──────► │  Settings Table │ ◄────── │   Dashboard UI  │
+│ (source of truth)│  sync   │    (DB cache)   │   add   │  (Settings page)│
+└─────────────────┘         └─────────────────┘         └─────────────────┘
+                                    │
+                                    ▼
+                            ┌─────────────────┐
+                            │   Run Tests     │
+                            │  (CLI or UI)    │
+                            └─────────────────┘
+#+END_SRC
+
+* Database Schema
+
+** Settings Table
+
+#+BEGIN_SRC sql
+CREATE TABLE IF NOT EXISTS suites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    folder_path TEXT UNIQUE NOT NULL,
+    suite_name TEXT NOT NULL,
+    mode TEXT DEFAULT 'docker' CHECK(mode IN ('standalone', 'docker')),
+    config_json TEXT,              -- cached tsuite.yaml as JSON
+    test_count INTEGER DEFAULT 0,  -- number of discovered tests
+    last_synced_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_suites_folder_path ON suites(folder_path);
+#+END_SRC
+
+** Fields Description
+
+| Field          | Type      | Description                                    |
+|----------------+-----------+------------------------------------------------|
+| folder_path    | TEXT      | Absolute path to suite folder (unique key)     |
+| suite_name     | TEXT      | Display name (from yaml or folder name)        |
+| mode           | TEXT      | 'standalone' or 'docker'                       |
+| config_json    | TEXT      | Full tsuite.yaml cached as JSON                |
+| test_count     | INTEGER   | Number of test cases discovered                |
+| last_synced_at | TIMESTAMP | When config was last read from yaml            |
+| created_at     | TIMESTAMP | When suite was first added                     |
+| updated_at     | TIMESTAMP | Last modification time                         |
+
+* API Specification
+
+** Suite Management
+
+*** GET /api/suites
+List all registered test suites.
+
+#+BEGIN_SRC json
+{
+  "suites": [
+    {
+      "id": 1,
+      "folder_path": "/Users/dev/mcp-mesh-test-suite/integration",
+      "suite_name": "MCP Mesh Integration Tests",
+      "mode": "docker",
+      "test_count": 29,
+      "last_synced_at": "2026-01-19T10:00:00Z",
+      "created_at": "2026-01-19T09:00:00Z"
+    }
+  ],
+  "count": 1
+}
+#+END_SRC
+
+*** POST /api/suites
+Add a new test suite by folder path.
+
+Request:
+#+BEGIN_SRC json
+{
+  "folder_path": "/path/to/test/suite",
+  "mode": "docker"
+}
+#+END_SRC
+
+Response:
+#+BEGIN_SRC json
+{
+  "id": 2,
+  "folder_path": "/path/to/test/suite",
+  "suite_name": "My Test Suite",
+  "mode": "docker",
+  "test_count": 15,
+  "tests": [
+    {
+      "use_case": "uc01_setup",
+      "test_case": "tc01_install",
+      "name": "Install CLI",
+      "tags": ["setup", "smoke"]
+    }
+  ]
+}
+#+END_SRC
+
+Errors:
+- 400: Invalid path or not a valid tsuite folder
+- 409: Suite already exists (folder_path conflict)
+
+*** GET /api/suites/:id
+Get suite details with full test list.
+
+#+BEGIN_SRC json
+{
+  "id": 1,
+  "folder_path": "/Users/dev/mcp-mesh-test-suite/integration",
+  "suite_name": "MCP Mesh Integration Tests",
+  "mode": "docker",
+  "config": {
+    "packages": {
+      "cli_version": "0.8.0-beta.8"
+    },
+    "environment": {}
+  },
+  "tests": [
+    {
+      "use_case": "uc00_setup",
+      "test_case": "tc01_install_meshctl",
+      "name": "Install meshctl CLI",
+      "tags": ["setup", "smoke", "install"],
+      "steps_count": 5
+    },
+    {
+      "use_case": "uc01_registry",
+      "test_case": "tc01_agent_registration",
+      "name": "Agent Registration",
+      "tags": ["registry", "registration", "python"],
+      "steps_count": 12
+    }
+  ],
+  "test_count": 29,
+  "use_cases": [
+    { "id": "uc00_setup", "name": "Setup", "test_count": 1 },
+    { "id": "uc01_registry", "name": "Registry", "test_count": 5 }
+  ]
+}
+#+END_SRC
+
+*** PUT /api/suites/:id
+Update suite settings.
+
+Request:
+#+BEGIN_SRC json
+{
+  "mode": "standalone",
+  "suite_name": "Updated Name"
+}
+#+END_SRC
+
+*** DELETE /api/suites/:id
+Remove suite from settings (does not delete files).
+
+*** POST /api/suites/:id/sync
+Re-read tsuite.yaml and update cached config.
+
+Response:
+#+BEGIN_SRC json
+{
+  "synced": true,
+  "test_count": 29,
+  "last_synced_at": "2026-01-19T12:00:00Z"
+}
+#+END_SRC
+
+** Test Discovery
+
+*** GET /api/suites/:id/tests
+List all tests in a suite, organized by use case.
+
+Query params:
+- =uc= - Filter by use case (e.g., =uc01_registry=)
+- =tag= - Filter by tag (e.g., =smoke=)
+
+#+BEGIN_SRC json
+{
+  "suite_id": 1,
+  "tests": [
+    {
+      "test_id": "uc00_setup/tc01_install_meshctl",
+      "use_case": "uc00_setup",
+      "test_case": "tc01_install_meshctl",
+      "name": "Install meshctl CLI",
+      "description": "Downloads and installs the meshctl CLI",
+      "tags": ["setup", "smoke", "install"],
+      "steps_count": 5,
+      "estimated_duration_ms": 6400
+    }
+  ],
+  "count": 29
+}
+#+END_SRC
+
+** Test Execution
+
+*** POST /api/suites/:id/run
+Start a test run for a suite.
+
+Request:
+#+BEGIN_SRC json
+{
+  "tests": ["uc01_registry/tc01_agent_registration"],  // optional, runs all if empty
+  "tags": ["smoke"],                                    // optional, filter by tags
+  "mode": "docker"                                      // optional, override suite mode
+}
+#+END_SRC
+
+Response:
+#+BEGIN_SRC json
+{
+  "run_id": "abc-123-def",
+  "status": "started",
+  "tests_to_run": 5,
+  "stream_url": "/api/runs/abc-123-def/stream"
+}
+#+END_SRC
+
+*** GET /api/runs/:id/cancel
+Cancel a running test (future).
+
+* Frontend Pages
+
+** Settings Page (/settings)
+
+*** Layout
+#+BEGIN_SRC
+┌────────────────────────────────────────────────────────────────────┐
+│ Settings                                              [+ Add Suite] │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  Test Suites                                                        │
+│  ┌───────────────────────────────────────────────────────────────┐ │
+│  │ 📁 MCP Mesh Integration Tests                                  │ │
+│  │    /Users/dev/mcp-mesh-test-suite/integration                  │ │
+│  │    29 tests • docker mode • synced 10 min ago                  │ │
+│  │    [Sync] [Edit] [Delete]                          [Run Tests] │ │
+│  └───────────────────────────────────────────────────────────────┘ │
+│                                                                     │
+│  ┌───────────────────────────────────────────────────────────────┐ │
+│  │ 📁 Library Unit Tests                                          │ │
+│  │    /Users/dev/mcp-mesh-test-suite/lib-tests                    │ │
+│  │    12 tests • standalone mode • synced 2 hours ago             │ │
+│  │    [Sync] [Edit] [Delete]                          [Run Tests] │ │
+│  └───────────────────────────────────────────────────────────────┘ │
+│                                                                     │
+└────────────────────────────────────────────────────────────────────┘
+#+END_SRC
+
+*** Add Suite Dialog
+#+BEGIN_SRC
+┌─────────────────────────────────────────────┐
+│ Add Test Suite                          [X] │
+├─────────────────────────────────────────────┤
+│                                             │
+│  Folder Path                                │
+│  ┌─────────────────────────────────────┐   │
+│  │ /path/to/test/suite                 │   │
+│  └─────────────────────────────────────┘   │
+│                                             │
+│  Mode                                       │
+│  ○ Docker (recommended)                     │
+│  ○ Standalone                               │
+│                                             │
+│  [Cancel]                      [Add Suite]  │
+└─────────────────────────────────────────────┘
+#+END_SRC
+
+** Tests Page (/tests)
+
+Browse all tests across registered suites.
+
+*** Layout
+#+BEGIN_SRC
+┌────────────────────────────────────────────────────────────────────┐
+│ Tests                                          [Filter] [Run Selected]│
+├────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  Suite: [All Suites ▼]  Tags: [smoke ×] [registry ×]  [Clear]      │
+│                                                                     │
+│  ▼ MCP Mesh Integration Tests (29 tests)                           │
+│    ▼ uc00_setup (1 test)                                           │
+│      ☐ tc01_install_meshctl - Install meshctl CLI      [6.4s]     │
+│                                                                     │
+│    ▼ uc01_registry (5 tests)                                       │
+│      ☑ tc01_agent_registration - Agent Registration    [47.9s]    │
+│      ☐ tc02_agent_discovery - Agent Discovery          [40.5s]    │
+│      ☐ tc03_agent_heartbeat - Agent Heartbeat          [35.2s]    │
+│                                                                     │
+│    ▶ uc02_messaging (8 tests)                                      │
+│    ▶ uc03_capabilities (10 tests)                                  │
+│                                                                     │
+│  ▶ Library Unit Tests (12 tests)                                   │
+│                                                                     │
+└────────────────────────────────────────────────────────────────────┘
+#+END_SRC
+
+** Enhanced Run Dialog
+
+When clicking "Run Tests" or "Run Selected":
+
+#+BEGIN_SRC
+┌─────────────────────────────────────────────┐
+│ Run Tests                               [X] │
+├─────────────────────────────────────────────┤
+│                                             │
+│  Suite: MCP Mesh Integration Tests          │
+│  Tests: 5 selected                          │
+│                                             │
+│  Mode                                       │
+│  ● Docker (suite default)                   │
+│  ○ Standalone                               │
+│                                             │
+│  Options                                    │
+│  ☐ Mock LLM (--mock-llm)                   │
+│  ☐ Verbose output                          │
+│                                             │
+│  [Cancel]                      [Start Run]  │
+└─────────────────────────────────────────────┘
+#+END_SRC
+
+* Implementation Phases
+
+** Phase 2.1: Database & API [0/3]
+*** TODO Add suites table to schema
+- [ ] Create migration for suites table
+- [ ] Add to repository.py
+- [ ] Test CRUD operations
+
+*** TODO Implement suite management API
+- [ ] GET /api/suites - list suites
+- [ ] POST /api/suites - add suite (validates folder, reads yaml)
+- [ ] GET /api/suites/:id - get suite with tests
+- [ ] PUT /api/suites/:id - update suite
+- [ ] DELETE /api/suites/:id - remove suite
+- [ ] POST /api/suites/:id/sync - re-sync from yaml
+
+*** TODO Implement test discovery
+- [ ] Read tsuite.yaml from folder
+- [ ] Parse test definitions
+- [ ] Extract use cases and test cases
+- [ ] Return structured test tree
+
+** Phase 2.2: Settings UI [0/3]
+*** TODO Settings page layout
+- [ ] Create /settings route
+- [ ] Add to sidebar navigation
+- [ ] Suite list component
+- [ ] Empty state
+
+*** TODO Add Suite dialog
+- [ ] Folder path input
+- [ ] Mode selector (docker/standalone)
+- [ ] Validation feedback
+- [ ] Success/error states
+
+*** TODO Suite card component
+- [ ] Display suite info
+- [ ] Sync button
+- [ ] Edit mode toggle
+- [ ] Delete confirmation
+- [ ] Run button
+
+** Phase 2.3: Tests Browser [0/2]
+*** TODO Tests page layout
+- [ ] Create /tests route
+- [ ] Tree view component (suite → uc → tc)
+- [ ] Expandable/collapsible sections
+- [ ] Test selection checkboxes
+
+*** TODO Filtering
+- [ ] Suite filter dropdown
+- [ ] Tag filter chips
+- [ ] Search by test name
+- [ ] Clear filters
+
+** Phase 2.4: Test Execution [0/3]
+*** TODO Run API
+- [ ] POST /api/suites/:id/run endpoint
+- [ ] Spawn tsuite subprocess
+- [ ] Connect to SSE events
+- [ ] Return run_id
+
+*** TODO Run dialog
+- [ ] Mode override
+- [ ] Options (mock-llm, verbose)
+- [ ] Start button
+- [ ] Redirect to live view
+
+*** TODO CLI sync
+- [ ] Sync suite to DB on CLI run
+- [ ] Upsert by folder_path
+- [ ] Update config_json and test_count
+
+** Phase 2.5: Polish [0/2]
+*** TODO Error handling
+- [ ] Invalid folder path
+- [ ] YAML parse errors
+- [ ] Run failures
+- [ ] Network errors
+
+*** TODO UX improvements
+- [ ] Loading states
+- [ ] Optimistic updates
+- [ ] Toast notifications
+- [ ] Keyboard shortcuts
+
+* File Structure
+
+#+BEGIN_SRC
+dashboard/
+├── app/
+│   ├── settings/
+│   │   └── page.tsx              # Settings page
+│   └── tests/
+│       └── page.tsx              # Tests browser
+├── components/
+│   ├── settings/
+│   │   ├── SuiteList.tsx         # List of registered suites
+│   │   ├── SuiteCard.tsx         # Individual suite card
+│   │   ├── AddSuiteDialog.tsx    # Add suite modal
+│   │   └── EditSuiteDialog.tsx   # Edit suite modal
+│   └── tests/
+│       ├── TestTree.tsx          # Tree view component
+│       ├── UseCaseNode.tsx       # Use case expandable
+│       ├── TestCaseNode.tsx      # Test case row
+│       └── RunDialog.tsx         # Run configuration modal
+├── lib/
+│   └── api.ts                    # Add suite API functions
+
+tsuite/tsuite/
+├── models.py                     # Add Suite model
+├── repository.py                 # Add suite CRUD
+└── server.py                     # Add suite endpoints
+#+END_SRC
+
+* CLI Integration
+
+** Sync on Run
+
+When tsuite runs from CLI, sync suite config to DB:
+
+#+BEGIN_SRC python
+# In cli.py, before running tests
+def sync_suite_to_db(folder_path: str, config: dict):
+    """Upsert suite config to settings table."""
+    suite = Suite(
+        folder_path=os.path.abspath(folder_path),
+        suite_name=config.get('name', os.path.basename(folder_path)),
+        mode='docker' if args.docker else 'standalone',
+        config_json=json.dumps(config),
+        test_count=len(discovered_tests),
+        last_synced_at=datetime.utcnow()
+    )
+    repo.upsert_suite(suite)
+#+END_SRC
+
+** Mode Flag Behavior
+
+| Suite Mode | CLI Flag   | Behavior                    |
+|------------+------------+-----------------------------|
+| docker     | (default)  | Runs with --docker          |
+| docker     | --no-docker| Overrides to standalone     |
+| standalone | (default)  | Runs without --docker       |
+| standalone | --docker   | Overrides to docker         |
+
+* Future Enhancements (Phase 3+)
+
+- Edit test parameters in UI → write back to YAML
+- Schedule recurring test runs
+- Test result comparison between runs
+- Flaky test detection dashboard
+- Slack/webhook notifications
+- Multi-user support with auth
+- Remote test execution (cloud runners)
+
+* References
+
+- [[file:DASHBOARD_PLAN.org][Phase 1 Plan - Dashboard Implementation]]
+- [[file:tsuite/tsuite/models.py][tsuite Models]]
+- [[file:tsuite/tsuite/repository.py][tsuite Repository]]

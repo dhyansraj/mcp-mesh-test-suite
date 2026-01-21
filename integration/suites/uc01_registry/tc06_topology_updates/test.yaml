@@ -29,16 +29,12 @@ test:
     command: |
       cp -r /uc-artifacts/py-simple-agent /workspace/
       cp -r /uc-artifacts/ts-simple-agent /workspace/
-      VERSION="${config.packages.sdk_typescript_version}"
-      sed -i "s/__SDK_VERSION__/$VERSION/g" /workspace/ts-simple-agent/package.json
     capture: copy_output
 
-  # Install TypeScript dependencies
+  # Install TypeScript dependencies (handler auto-detects local/published mode)
   - name: "Install TypeScript dependencies"
-    handler: shell
-    command: "cd ts-simple-agent && npm install --silent"
-    workdir: /workspace
-    timeout: 120
+    handler: npm-install
+    path: /workspace/ts-simple-agent
 
   # === STEP 1: Start agent 1, verify 1 agent in list ===
   - name: "Start first agent (py-simple-agent)"

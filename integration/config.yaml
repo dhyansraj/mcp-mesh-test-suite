@@ -6,18 +6,42 @@ suite:
   name: "MCP Mesh Integration Tests"
   mode: "docker"  # 'docker' or 'standalone'
 
-# Package versions to test (released packages only)
+# Package versions to test
 packages:
-  cli_version: "0.8.0-beta.8"     # @mcpmesh/cli (npm)
-  sdk_python_version: "0.8.0b8"   # mcp-mesh (pip) - matches CLI version
-  sdk_typescript_version: "0.8.0-beta.8"  # @mcpmesh/sdk (npm)
+  # Mode: "local", "published", or "auto"
+  # - local: Use /wheels and /packages from SDK image
+  # - published: Pull from PyPI/npm
+  # - auto: Auto-detect based on presence of /wheels, /packages
+  mode: "auto"
+
+  # Published versions (used when mode=published or as fallback)
+  cli_version: "0.8.0-beta.9"     # @mcpmesh/cli (npm)
+  sdk_python_version: "0.8.0b9"   # mcp-mesh (pip) - matches CLI version
+  sdk_typescript_version: "0.8.0-beta.9"  # @mcpmesh/sdk (npm)
+
+  # Local paths (used when mode=local)
+  local:
+    wheels_dir: "/wheels"
+    packages_dir: "/packages"
 
 # Docker settings
 # Use tsuite-mesh image built by mcp-mesh-lib-test-suites for faster tests
 # Run lib-test-suites first: tsuite --all --suite-path ../mcp-mesh-lib-test-suites
 docker:
-  base_image: "tsuite-mesh:0.8.0-beta.8"
+  base_image: "tsuite-mesh:0.8.0-beta.9"
   network: "bridge"
+
+  # Mounts for locally built SDK packages (from src-tests)
+  # Run src-tests first: cd src-tests && tsuite --all --docker
+  mounts:
+    - type: host
+      host_path: "/Users/dhyanraj/workspace/github/mcp-mesh-test-suite/src-tests/out/wheels"
+      container_path: "/wheels"
+      readonly: true
+    - type: host
+      host_path: "/Users/dhyanraj/workspace/github/mcp-mesh-test-suite/src-tests/out/packages"
+      container_path: "/packages"
+      readonly: true
 
 # Execution defaults
 defaults:

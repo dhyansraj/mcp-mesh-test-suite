@@ -1,0 +1,491 @@
+#+TITLE: tsuite Architecture Refactor - Simplified
+#+AUTHOR: Claude & Dhyanraj
+#+DATE: 2026-01-21
+#+STARTUP: overview
+
+* Goal
+
+Simplify tsuite by merging RunnerServer into API server, enabling single source
+of truth and parallel test execution in docker mode.
+
+* Key Principle: CLI Owns the Workflow
+
+The CLI is the single orchestrator. API server is just:
+1. A database/state store
+2. SSE broadcaster for UI
+3. A "dumb launcher" that invokes CLI with parameters
+
+#+begin_src text
+Eventual Consistency:
+- UI triggers run → API launches CLI → CLI creates run via API → UI sees run
+- Milliseconds delay, but clean separation of concerns
+#+end_src
+
+* Current vs Target
+
+** Current Architecture (Problematic)
+
+#+begin_src text
+┌─────────────┐     ┌──────────────┐     ┌────────────┐
+│ CLI         │────▶│ RunnerServer │     │ API Server │
+│             │     │ (9998)       │     │ (9999)     │
+└─────────────┘     └──────────────┘     └────────────┘
+       │                   ▲                   ▲
+       │                   │                   │
+       └──────────────────►│  Container        │
+                           └───────────────────┘
+                           CLI forwards SSE events
+
+Problems:
+- Two servers (port 9998 hardcoded = conflicts)
+- CLI is orchestrator AND event forwarder
+- No parallel execution
+- Complex state flow
+#+end_src
+
+** Target Architecture
+
+#+begin_src text
+┌─────────────────────────────────────────────────────────────────────────┐
+│  UI: Click "Run Tests"                                                  │
+│  POST /api/suites/1/run {tc: "uc01/tc01"}                              │
+└────────────────────────────────┬────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  API Server: Dumb Launcher                                              │
+│  - Just builds CLI command from request params                          │
+│  - subprocess.Popen(["tsuite", "--tc", "uc01/tc01", "--api-url", ...]) │
+│  - Returns {started: true, pid: 12345}                                  │
+│  - Does NOT create run_id (CLI will do that)                            │
+└────────────────────────────────┬────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  CLI: Owns the Workflow                                                 │
+│                                                                         │
+│  1. Ensure API server running (health check, start if needed)           │
+│  2. Read YAML, discover tests                                           │
+│  3. POST /api/runs → create run in DB, get run_id                       │
+│  4. Worker pool executes tests (1 for standalone, N for docker)         │
+│     - PATCH /api/runs/{id}/tests/{test_id} {status: running}            │
+│     - Execute in subprocess (standalone) or container (docker)          │
+│     - Container calls API for /config, /state, /capture                 │
+│     - PATCH /api/runs/{id}/tests/{test_id} {status: passed/failed}      │
+│  5. POST /api/runs/{id}/complete                                        │
+└────────────────────────────────┬────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  API Server: Emits SSE on Each PATCH                                    │
+│  - PATCH triggers sse_manager.emit()                                    │
+│  - UI receives updates via EventSource(/api/events)                     │
+└─────────────────────────────────────────────────────────────────────────┘
+
+Benefits:
+- Single server (no port conflicts)
+- CLI owns workflow (same code path: terminal or API-triggered)
+- Eventual consistency (UI sees run when CLI creates it)
+- Direct updates (containers → API)
+- Worker pool enables parallelism
+#+end_src
+
+* Design Decisions
+
+| Aspect              | Decision                                               |
+|---------------------+--------------------------------------------------------|
+| Run creation        | CLI creates run via API (not API pre-creating)         |
+| API server role     | DB + SSE + launcher (dumb, no workflow logic)          |
+| CLI role            | Read YAML, create run, execute, update status          |
+| API server startup  | CLI starts if not running, or run standalone           |
+| Parallelism         | Standalone = sequential only; Docker = configurable    |
+| Status reporting    | CLI reports final status; API is idempotent            |
+| Crash handling      | CLI detects subprocess/container death, reports crash  |
+| Worker pool         | Local to CLI process                                   |
+
+* Component Responsibilities
+
+| Component      | Responsibilities                                            |
+|----------------+-------------------------------------------------------------|
+| API Server     | - Serve DB operations (CRUD for runs, tests, suites)        |
+|                | - Broadcast SSE events on state changes                     |
+|                | - Serve /config, /state, /capture for test containers       |
+|                | - Launch CLI subprocess when triggered from UI              |
+|----------------+-------------------------------------------------------------|
+| CLI            | - Read YAML config and discover tests                       |
+|                | - Ensure API server is running                              |
+|                | - Create run via POST /api/runs                             |
+|                | - Execute tests (subprocess or docker)                      |
+|                | - Update status via PATCH /api/runs/{id}/tests/{test_id}    |
+|                | - Complete run via POST /api/runs/{id}/complete             |
+|----------------+-------------------------------------------------------------|
+| UI/Dashboard   | - Subscribe to SSE for live updates                         |
+|                | - Trigger runs via POST /api/suites/{id}/run                |
+|                | - Display run/test status                                   |
+
+* Implementation Phases
+
+** PHASE 1: Merge RunnerServer into API Server [0/8]
+
+Move all RunnerServer endpoints into API server under /api/runner/* prefix.
+
+*** TODO Move /config endpoint
+- Current: RunnerServer serves config to containers
+- Target: API server at /api/runner/config
+
+*** TODO Move /routine/<scope>/<name> endpoint
+- Current: RunnerServer at /routine/global/setup_environment
+- Target: API server at /api/runner/routine/<scope>/<name>
+
+*** TODO Move /state/<test_id> endpoints (GET/POST)
+- Current: RunnerServer manages test state
+- Target: API server at /api/runner/state/<test_id>
+
+*** TODO Move /capture/<test_id> endpoint (POST)
+- Current: RunnerServer stores captured variables
+- Target: API server at /api/runner/capture/<test_id>
+
+*** TODO Move /progress/<test_id> endpoints (GET/POST)
+- Current: RunnerServer tracks step progress
+- Target: API server at /api/runner/progress/<test_id>
+
+*** TODO Move /context/<test_id> endpoint (GET)
+- Current: RunnerServer provides full test context
+- Target: API server at /api/runner/context/<test_id>
+
+*** TODO Add run_id association to runner endpoints
+- Runner endpoints need to know which run they're serving
+- Pass run_id via header or query param: ?run_id=xxx
+
+*** TODO Update container SERVER_URL
+- Current: http://host.docker.internal:9998
+- Target: http://host.docker.internal:9999
+
+** PHASE 2: Update CLI [0/6]
+
+CLI owns the workflow. Remove RunnerServer, add API integration.
+
+*** TODO Add health_check() function
+#+begin_src python
+def health_check(api_url: str, timeout: int = 5) -> bool:
+    """Check if API server is running."""
+    try:
+        resp = requests.get(f"{api_url}/health", timeout=timeout)
+        return resp.status_code == 200
+    except:
+        return False
+#+end_src
+
+*** TODO Add ensure_api_server() function
+#+begin_src python
+def ensure_api_server(port: int = 9999) -> str:
+    """Start API server if not running, return URL."""
+    api_url = f"http://localhost:{port}"
+
+    if health_check(api_url):
+        return api_url
+
+    # Start server in background
+    subprocess.Popen(
+        [sys.executable, "-m", "tsuite.server", "--port", str(port)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    # Wait for server to be ready
+    for _ in range(30):
+        if health_check(api_url):
+            return api_url
+        time.sleep(0.1)
+
+    raise RuntimeError("Failed to start API server")
+#+end_src
+
+*** TODO CLI creates run via API
+#+begin_src python
+def create_run(api_url: str, suite_id: int, tests: list) -> str:
+    """Create run in DB via API, return run_id."""
+    resp = requests.post(f"{api_url}/api/runs", json={
+        "suite_id": suite_id,
+        "tests": [{"test_id": t.id, "name": t.name, ...} for t in tests]
+    })
+    return resp.json()["run_id"]
+#+end_src
+
+*** TODO Remove RunnerServer class from cli.py
+- Delete RunnerServer import and usage
+- Replace with ensure_api_server() + API calls
+
+*** TODO Update run_docker_mode()
+- Use API server URL instead of RunnerServer URL
+- Pass URL to containers via environment variable
+
+*** TODO Update run_local_mode()
+- Use API server URL for state/capture/progress
+- Same endpoints, just different server
+
+** PHASE 3: Simplify API Server's Run Endpoint [0/2]
+
+API server becomes a dumb launcher.
+
+*** TODO Simplify api_run_suite endpoint
+#+begin_src python
+@app.route("/api/suites/<int:suite_id>/run", methods=["POST"])
+def api_run_suite(suite_id: int):
+    """Launch CLI to run tests. CLI will create run_id."""
+    suite = get_suite(suite_id)
+    data = request.get_json() or {}
+
+    # Build CLI command from request params
+    cmd = [sys.executable, "-m", "tsuite.cli",
+           "--suite-path", suite.folder_path,
+           "--api-url", f"http://localhost:{API_PORT}"]
+
+    if data.get("tc"):
+        cmd.extend(["--tc", data["tc"]])
+    elif data.get("uc"):
+        cmd.extend(["--uc", data["uc"]])
+    else:
+        cmd.append("--all")
+
+    if suite.mode == "docker":
+        cmd.append("--docker")
+
+    # Launch and forget - CLI will create run and update via API
+    process = subprocess.Popen(cmd, ...)
+
+    return {"started": True, "pid": process.pid}, 202
+#+end_src
+
+*** TODO Remove run_id pre-creation from API
+- API no longer creates run_id before launching CLI
+- CLI creates run_id when it starts
+- Eventual consistency: UI sees run when CLI creates it
+
+** PHASE 4: Worker Pool [0/5]
+
+Enable parallel test execution in docker mode.
+
+*** TODO Add execution config to schema
+#+begin_src yaml
+# config.yaml
+execution:
+  max_workers: 4      # Only effective in docker mode
+  timeout: 300        # Per-test timeout in seconds
+#+end_src
+
+*** TODO Create WorkerPool class
+#+begin_src python
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+class WorkerPool:
+    def __init__(self, max_workers: int = 1):
+        self.max_workers = max_workers
+        self.executor = None
+
+    def __enter__(self):
+        self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
+        return self
+
+    def __exit__(self, *args):
+        self.executor.shutdown(wait=True)
+
+    def submit(self, fn, *args, **kwargs):
+        return self.executor.submit(fn, *args, **kwargs)
+
+    def map(self, fn, items):
+        futures = {self.submit(fn, item): item for item in items}
+        for future in as_completed(futures):
+            yield future.result()
+#+end_src
+
+*** TODO Update run_docker_mode() to use pool
+#+begin_src python
+def run_docker_mode(tests, config, api_url, run_id):
+    max_workers = config.get("execution", {}).get("max_workers", 1)
+
+    with WorkerPool(max_workers=max_workers) as pool:
+        for result in pool.map(lambda t: execute_test(t, api_url, run_id), tests):
+            pass  # Status already updated in execute_test
+#+end_src
+
+*** TODO Force max_workers=1 in standalone mode
+#+begin_src python
+def run_local_mode(tests, config, api_url, run_id):
+    # Standalone mode: always sequential (shared filesystem)
+    for test in tests:
+        execute_test(test, api_url, run_id)
+#+end_src
+
+*** TODO Add test execution timeout
+#+begin_src python
+def execute_with_timeout(fn, timeout_seconds):
+    """Execute function with timeout."""
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(fn)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except TimeoutError:
+            raise TestTimeoutError(f"Test exceeded {timeout_seconds}s timeout")
+#+end_src
+
+** PHASE 5: Idempotent Status Updates [0/4]
+
+Ensure status updates are safe for retries and race conditions.
+
+*** TODO Add 'crashed' to TestStatus enum
+#+begin_src python
+class TestStatus(enum.Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    PASSED = "passed"
+    FAILED = "failed"
+    CRASHED = "crashed"    # NEW: subprocess/container died unexpectedly
+    SKIPPED = "skipped"
+#+end_src
+
+*** TODO Implement idempotent update logic
+#+begin_src python
+TERMINAL_STATES = {TestStatus.PASSED, TestStatus.FAILED, TestStatus.CRASHED, TestStatus.SKIPPED}
+
+def update_test_status(run_id, test_id, new_status, **kwargs):
+    """Update test status, ignoring updates to terminal states."""
+    test = get_test(run_id, test_id)
+
+    if test.status in TERMINAL_STATES:
+        # Already in terminal state, ignore update
+        return test
+
+    test.status = new_status
+    test.duration_ms = kwargs.get("duration_ms")
+    test.error_message = kwargs.get("error_message")
+
+    save(test)
+    emit_sse_event(run_id, test_id, new_status)
+    return test
+#+end_src
+
+*** TODO CLI reports 'crashed' on unexpected death
+#+begin_src python
+def execute_test(test, api_url, run_id):
+    """Execute test, handle crashes."""
+    update_status(api_url, run_id, test.id, "running")
+
+    try:
+        result = run_in_container(test) if docker_mode else run_in_subprocess(test)
+        status = "passed" if result.success else "failed"
+        error = result.error if not result.success else None
+    except (ContainerDied, ProcessDied) as e:
+        status = "crashed"
+        error = f"Died unexpectedly: {e}"
+    except TimeoutError:
+        status = "failed"
+        error = "Test exceeded timeout"
+
+    update_status(api_url, run_id, test.id, status, error_message=error)
+#+end_src
+
+*** TODO Handle timeout as failure
+- Timeout is a type of failure, not crash
+- Report with clear error message: "Test exceeded Xs timeout"
+
+** PHASE 6: Cleanup [0/4]
+
+Remove old code, update documentation.
+
+*** TODO Remove RunnerServer class entirely
+- Delete from server.py
+- Remove from imports
+
+*** TODO Remove --port flag from CLI
+- No longer needed (single server on 9999)
+- Keep --api-url for flexibility
+
+*** TODO Update README documentation
+- Document new architecture
+- Update CLI usage examples
+- Add worker pool configuration
+
+*** TODO Add/update tests
+- Test API server auto-start
+- Test worker pool execution
+- Test idempotent status updates
+- Test crash detection
+
+* CLI Workflow (Main Entry Point)
+
+#+begin_src python
+def main(suite_path, tc, uc, all_tests, docker, api_url):
+    # 1. Ensure API server is running
+    api_url = ensure_api_server(api_url or "http://localhost:9999")
+
+    # 2. Load config and discover tests
+    config = load_config(suite_path)
+    tests = discover_tests(suite_path, tc=tc, uc=uc, all_tests=all_tests)
+
+    # 3. Create run via API
+    run_id = create_run(api_url, suite_id, tests)
+    emit_run_started(api_url, run_id)
+
+    # 4. Execute tests
+    if docker:
+        run_docker_mode(tests, config, api_url, run_id)
+    else:
+        run_local_mode(tests, config, api_url, run_id)
+
+    # 5. Complete run
+    complete_run(api_url, run_id)
+#+end_src
+
+* Config Schema
+
+#+begin_src yaml
+# config.yaml
+suite:
+  name: "Integration Tests"
+  mode: docker  # or standalone
+
+execution:
+  max_workers: 4        # Parallel workers (docker mode only)
+  timeout: 300          # Per-test timeout in seconds
+
+docker:
+  base_image: "tsuite-mesh:latest"
+  network: "bridge"
+
+packages:
+  mode: "auto"          # local, published, or auto
+#+end_src
+
+* File Changes Summary
+
+| File                            | Changes                                       |
+|---------------------------------+-----------------------------------------------|
+| tsuite/tsuite/server.py         | Add /api/runner/* endpoints, simplify run API |
+| tsuite/tsuite/cli.py            | Remove RunnerServer, add API integration      |
+| tsuite/tsuite/models.py         | Add CRASHED to TestStatus                     |
+| tsuite/tsuite/docker_executor.py| Update SERVER_URL to 9999                     |
+| tsuite/tsuite/container_runner.py| Update server URL references                 |
+| Config files                    | Add execution.max_workers, execution.timeout  |
+
+* Testing Checklist
+
+- [ ] API server health check works
+- [ ] API server auto-starts when CLI runs
+- [ ] CLI creates run via API (not pre-created)
+- [ ] RunnerServer endpoints work at /api/runner/*
+- [ ] Containers can reach API server at host.docker.internal:9999
+- [ ] Worker pool executes tests in parallel (docker mode)
+- [ ] Standalone mode remains sequential
+- [ ] Idempotent status updates (can't overwrite terminal states)
+- [ ] Crash detection works (container dies unexpectedly)
+- [ ] Timeout handling works
+- [ ] SSE events reach dashboard when CLI updates status
+- [ ] UI-triggered runs work (eventual consistency)
+
+* Rollback Plan
+
+If issues arise:
+1. Keep RunnerServer code commented initially (don't delete)
+2. Add --legacy flag to use old dual-server architecture
+3. Remove legacy code after stable operation confirmed

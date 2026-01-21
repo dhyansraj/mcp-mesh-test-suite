@@ -58,7 +58,7 @@ class DockerTestResult:
 
 def get_handlers() -> dict:
     """Load all available handlers."""
-    from handlers import shell, file, routine, http, wait, llm
+    from handlers import shell, file, routine, http, wait, llm, pip_install, npm_install
 
     return {
         "shell": shell.execute,
@@ -67,6 +67,8 @@ def get_handlers() -> dict:
         "http": http.execute,
         "wait": wait.execute,
         "llm": llm.execute,
+        "pip-install": pip_install.execute,
+        "npm-install": npm_install.execute,
     }
 
 
@@ -699,6 +701,7 @@ def run_docker_mode(
     container_config = ContainerConfig(
         image=image_override or docker_config.get("base_image", "python:3.11-slim"),
         network=docker_config.get("network", "bridge"),
+        mounts=docker_config.get("mounts", []),
     )
 
     results = []

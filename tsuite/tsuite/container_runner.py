@@ -22,6 +22,20 @@ from tsuite.expressions import ExpressionEvaluator
 from tsuite.client import RunnerClient
 from tsuite.discovery import load_config
 
+# Import handlers from the handlers module
+from handlers import pip_install, npm_install
+
+
+def _step_result_to_dict(result: StepResult) -> dict:
+    """Convert StepResult to dict for compatibility with existing code."""
+    return {
+        "success": result.success,
+        "exit_code": result.exit_code,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "error": result.error,
+    }
+
 
 def run_test(test_yaml_path: str, suite_path: str):
     """
@@ -238,6 +252,10 @@ def execute_step(step: dict, context: dict, routines: dict, client: RunnerClient
         return execute_http(interpolated, context)
     elif handler_name == "wait":
         return execute_wait(interpolated, context)
+    elif handler_name == "pip-install":
+        return _step_result_to_dict(pip_install.execute(interpolated, context))
+    elif handler_name == "npm-install":
+        return _step_result_to_dict(npm_install.execute(interpolated, context))
     else:
         return {"success": False, "error": f"Unknown handler: {handler_name}"}
 

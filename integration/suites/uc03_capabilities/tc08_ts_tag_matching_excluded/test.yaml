@@ -19,28 +19,27 @@ pre_run:
       meshctl_version: "${config.packages.cli_version}"
 
 test:
-  # Copy and setup TypeScript artifacts
-  - name: "Copy and setup TypeScript artifacts"
+  # Copy TypeScript artifacts
+  - name: "Copy TypeScript artifacts"
     handler: shell
     command: |
       cp -r /uc-artifacts/ts-deprecated-provider /workspace/
       cp -r /uc-artifacts/ts-fast-provider /workspace/
       cp -r /uc-artifacts/ts-tag-consumer /workspace/
-      VERSION="${config.packages.sdk_typescript_version}"
-      sed -i "s/__SDK_VERSION__/$VERSION/g" /workspace/ts-deprecated-provider/package.json
-      sed -i "s/__SDK_VERSION__/$VERSION/g" /workspace/ts-fast-provider/package.json
-      sed -i "s/__SDK_VERSION__/$VERSION/g" /workspace/ts-tag-consumer/package.json
     capture: copy_output
 
-  # Install npm dependencies
-  - name: "Install npm dependencies for all TS agents"
-    handler: shell
-    command: |
-      cd ts-deprecated-provider && npm install --silent
-      cd ../ts-fast-provider && npm install --silent
-      cd ../ts-tag-consumer && npm install --silent
-    workdir: /workspace
-    timeout: 180
+  # Install npm dependencies (handler auto-detects local/published mode)
+  - name: "Install deprecated provider dependencies"
+    handler: npm-install
+    path: /workspace/ts-deprecated-provider
+
+  - name: "Install fast provider dependencies"
+    handler: npm-install
+    path: /workspace/ts-fast-provider
+
+  - name: "Install tag consumer dependencies"
+    handler: npm-install
+    path: /workspace/ts-tag-consumer
 
   # Start both providers
   - name: "Start both TS providers"
