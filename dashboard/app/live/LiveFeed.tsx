@@ -179,12 +179,12 @@ function ProgressBarSection({ completed, total, passed, failed }: ProgressBarPro
 // ============================================================================
 
 interface CurrentlyRunningProps {
-  test: TestResult | null;
-  elapsed?: number;
+  tests: TestResult[];
+  getElapsed: (test: TestResult) => number;
 }
 
-function CurrentlyRunning({ test, elapsed }: CurrentlyRunningProps) {
-  if (!test) {
+function CurrentlyRunning({ tests, getElapsed }: CurrentlyRunningProps) {
+  if (tests.length === 0) {
     return (
       <Card className="border-dashed">
         <CardContent className="flex items-center justify-center py-8 text-muted-foreground">
@@ -200,18 +200,22 @@ function CurrentlyRunning({ test, elapsed }: CurrentlyRunningProps) {
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
           <Loader2 className="h-5 w-5 animate-spin text-primary" />
-          Currently Running
+          Currently Running ({tests.length})
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="space-y-2">
-          <p className="font-medium">{test.name || test.test_id}</p>
-          <p className="text-sm text-muted-foreground font-mono">{test.test_id}</p>
-          {elapsed !== undefined && (
-            <p className="font-mono text-sm text-primary">
-              {formatDuration(elapsed)}
-            </p>
-          )}
+        <div className="space-y-3">
+          {tests.map((test) => (
+            <div key={test.test_id} className="flex items-center justify-between border-b border-primary/20 pb-2 last:border-0 last:pb-0">
+              <div className="min-w-0 flex-1">
+                <p className="font-medium truncate">{test.name || test.test_id}</p>
+                <p className="text-sm text-muted-foreground font-mono truncate">{test.test_id}</p>
+              </div>
+              <p className="font-mono text-sm text-primary ml-4">
+                {formatDuration(getElapsed(test))}
+              </p>
+            </div>
+          ))}
         </div>
       </CardContent>
     </Card>
@@ -580,7 +584,6 @@ export function LiveFeed() {
   const [testTree, setTestTree] = useState<RunTestTreeResponse | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [statusFilter, setStatusFilter] = useState<string>("");
-  const [runningElapsed, setRunningElapsed] = useState<number>(0);
   // Track the displayed run ID separately - persists after run completes
   const [displayedRunId, setDisplayedRunId] = useState<string | null>(null);
   // Test detail dialog state
@@ -650,25 +653,22 @@ export function LiveFeed() {
     }
   }, [events, displayedRunId]);
 
-  // Track elapsed time for running test
+  // Track elapsed time for running tests (force re-render every 100ms)
+  const [, setTick] = useState(0);
   useEffect(() => {
     if (!displayedRunId || !testTree) return;
 
-    const runningTest = testTree.use_cases
+    const runningTests = testTree.use_cases
       .flatMap((uc) => uc.tests)
-      .find((t) => t.status === "running");
+      .filter((t) => t.status === "running");
 
-    if (!runningTest) {
-      setRunningElapsed(0);
+    if (runningTests.length === 0) {
       return;
     }
 
-    const startTime = runningTest.started_at
-      ? new Date(runningTest.started_at).getTime()
-      : Date.now();
-
+    // Force re-render every 100ms to update elapsed times
     const interval = setInterval(() => {
-      setRunningElapsed(Date.now() - startTime);
+      setTick((t) => t + 1);
     }, 100);
 
     return () => clearInterval(interval);
@@ -717,13 +717,21 @@ export function LiveFeed() {
     };
   }, [run]);
 
-  // Find currently running test
-  const runningTest = useMemo(() => {
-    if (!testTree) return null;
+  // Find all currently running tests
+  const runningTests = useMemo(() => {
+    if (!testTree) return [];
     return testTree.use_cases
       .flatMap((uc) => uc.tests)
-      .find((t) => t.status === "running") || null;
+      .filter((t) => t.status === "running");
   }, [testTree]);
+
+  // Calculate elapsed time for a test
+  const getTestElapsed = useCallback((test: TestResult) => {
+    const startTime = test.started_at
+      ? new Date(test.started_at).getTime()
+      : Date.now();
+    return Date.now() - startTime;
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -798,7 +806,7 @@ export function LiveFeed() {
 
           {/* Currently Running - only show when run is in progress */}
           {(run.status === "running" || run.status === "pending") && (
-            <CurrentlyRunning test={runningTest} elapsed={runningElapsed} />
+            <CurrentlyRunning tests={runningTests} getElapsed={getTestElapsed} />
           )}
 
           {/* Run Info */}
