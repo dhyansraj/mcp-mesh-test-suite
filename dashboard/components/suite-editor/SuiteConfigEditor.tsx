@@ -77,7 +77,19 @@ export function SuiteConfigEditor({
     setError(null);
     setSaveSuccess(false);
     try {
-      await updateSuiteConfig(suiteId, structure);
+      // Prepare structure for saving
+      // When mode is "local", mark version fields for deletion
+      const saveStructure = { ...structure };
+      if (saveStructure.packages?.mode === "local") {
+        saveStructure.packages = {
+          ...saveStructure.packages,
+          cli_version: "__DELETE__" as string,
+          sdk_python_version: "__DELETE__" as string,
+          sdk_typescript_version: "__DELETE__" as string,
+        };
+      }
+
+      await updateSuiteConfig(suiteId, saveStructure);
       setHasChanges(false);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -218,40 +230,69 @@ export function SuiteConfigEditor({
           <CardHeader className="py-3 px-4">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
               <Package className="h-4 w-4" />
-              Package Versions
+              Package Settings
             </CardTitle>
           </CardHeader>
           <CardContent className="px-4 pb-4 space-y-4">
             <div className="grid gap-2">
-              <Label htmlFor="cli-version">CLI Version</Label>
-              <Input
-                id="cli-version"
-                value={structure.packages?.cli_version || ""}
-                onChange={(e) => updateNestedField("packages", "cli_version", e.target.value)}
-                placeholder="0.8.0-beta.8"
-                className="font-mono"
-              />
+              <Label htmlFor="packages-mode">Package Mode</Label>
+              <Select
+                value={structure.packages?.mode || "auto"}
+                onValueChange={(value) => updateNestedField("packages", "mode", value)}
+              >
+                <SelectTrigger id="packages-mode">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Auto (detect from image)</SelectItem>
+                  <SelectItem value="local">Local (from /wheels, /packages)</SelectItem>
+                  <SelectItem value="published">Published (from PyPI/npm)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {structure.packages?.mode === "local"
+                  ? "Uses packages baked into the Docker image (/wheels, /packages)"
+                  : structure.packages?.mode === "published"
+                  ? "Installs specific versions from PyPI and npm"
+                  : "Auto-detects based on presence of /wheels and /packages in container"}
+              </p>
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="sdk-python-version">SDK Python Version</Label>
-              <Input
-                id="sdk-python-version"
-                value={structure.packages?.sdk_python_version || ""}
-                onChange={(e) => updateNestedField("packages", "sdk_python_version", e.target.value)}
-                placeholder="0.8.0b8"
-                className="font-mono"
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="sdk-typescript-version">SDK TypeScript Version</Label>
-              <Input
-                id="sdk-typescript-version"
-                value={structure.packages?.sdk_typescript_version || ""}
-                onChange={(e) => updateNestedField("packages", "sdk_typescript_version", e.target.value)}
-                placeholder="0.8.0-beta.8"
-                className="font-mono"
-              />
-            </div>
+
+            {/* Version fields - only show when not in local mode */}
+            {structure.packages?.mode !== "local" && (
+              <>
+                <div className="grid gap-2">
+                  <Label htmlFor="cli-version">CLI Version</Label>
+                  <Input
+                    id="cli-version"
+                    value={structure.packages?.cli_version || ""}
+                    onChange={(e) => updateNestedField("packages", "cli_version", e.target.value)}
+                    placeholder="0.8.0-beta.9"
+                    className="font-mono"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="sdk-python-version">SDK Python Version</Label>
+                  <Input
+                    id="sdk-python-version"
+                    value={structure.packages?.sdk_python_version || ""}
+                    onChange={(e) => updateNestedField("packages", "sdk_python_version", e.target.value)}
+                    placeholder="0.8.0b9"
+                    className="font-mono"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="sdk-typescript-version">SDK TypeScript Version</Label>
+                  <Input
+                    id="sdk-typescript-version"
+                    value={structure.packages?.sdk_typescript_version || ""}
+                    onChange={(e) => updateNestedField("packages", "sdk_typescript_version", e.target.value)}
+                    placeholder="0.8.0-beta.9"
+                    className="font-mono"
+                  />
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
 

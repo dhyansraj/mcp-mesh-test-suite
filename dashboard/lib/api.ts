@@ -578,9 +578,14 @@ export interface SuiteConfigStructure {
     mode?: "docker" | "standalone";
   };
   packages?: {
+    mode?: "auto" | "local" | "published";
     cli_version?: string;
     sdk_python_version?: string;
     sdk_typescript_version?: string;
+    local?: {
+      wheels_dir?: string;
+      packages_dir?: string;
+    };
   };
   docker?: {
     base_image?: string;
