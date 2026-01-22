@@ -14,6 +14,7 @@ export interface Run {
   run_id: string;
   suite_id: number | null;
   suite_name: string | null;
+  display_name: string | null;  // Computed: tc name, uc name, or suite name
   started_at: string | null;
   finished_at: string | null;
   status: "pending" | "running" | "completed" | "failed" | "cancelled";

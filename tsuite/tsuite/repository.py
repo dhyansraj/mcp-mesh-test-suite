@@ -105,10 +105,17 @@ def update_run(
 
 
 def get_run(run_id: str) -> Optional[Run]:
-    """Get a run by ID with suite name."""
+    """Get a run by ID with suite name and computed display_name."""
     row = db.fetchone(
         """
-        SELECT r.*, s.suite_name
+        SELECT r.*, s.suite_name,
+            CASE
+                WHEN (SELECT COUNT(*) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+                    THEN (SELECT tr.test_id FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+                WHEN (SELECT COUNT(DISTINCT tr.use_case) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+                    THEN (SELECT tr.use_case FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+                ELSE NULL
+            END as display_name
         FROM runs r
         LEFT JOIN suites s ON r.suite_id = s.id
         WHERE r.run_id = ?
@@ -119,10 +126,17 @@ def get_run(run_id: str) -> Optional[Run]:
 
 
 def get_latest_run() -> Optional[Run]:
-    """Get the most recent run with suite name."""
+    """Get the most recent run with suite name and computed display_name."""
     row = db.fetchone(
         """
-        SELECT r.*, s.suite_name
+        SELECT r.*, s.suite_name,
+            CASE
+                WHEN (SELECT COUNT(*) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+                    THEN (SELECT tr.test_id FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+                WHEN (SELECT COUNT(DISTINCT tr.use_case) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+                    THEN (SELECT tr.use_case FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+                ELSE NULL
+            END as display_name
         FROM runs r
         LEFT JOIN suites s ON r.suite_id = s.id
         ORDER BY r.started_at DESC LIMIT 1
@@ -132,10 +146,17 @@ def get_latest_run() -> Optional[Run]:
 
 
 def list_runs(limit: int = 20, offset: int = 0) -> List[Run]:
-    """List runs ordered by start time (newest first), with suite name."""
+    """List runs ordered by start time (newest first), with suite name and computed display_name."""
     rows = db.fetchall(
         """
-        SELECT r.*, s.suite_name
+        SELECT r.*, s.suite_name,
+            CASE
+                WHEN (SELECT COUNT(*) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+                    THEN (SELECT tr.test_id FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+                WHEN (SELECT COUNT(DISTINCT tr.use_case) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+                    THEN (SELECT tr.use_case FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+                ELSE NULL
+            END as display_name
         FROM runs r
         LEFT JOIN suites s ON r.suite_id = s.id
         ORDER BY r.started_at DESC
@@ -739,15 +760,16 @@ def create_assertion_result(
     message: Optional[str] = None,
     passed: bool = False,
     actual_value: Optional[str] = None,
+    expected_value: Optional[str] = None,
 ) -> AssertionResult:
     """Create a new assertion result record."""
     cursor = db.execute(
         """
         INSERT INTO assertion_results (
-            test_result_id, assertion_index, expression, message, passed, actual_value
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            test_result_id, assertion_index, expression, message, passed, actual_value, expected_value
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (test_result_id, assertion_index, expression, message, 1 if passed else 0, actual_value),
+        (test_result_id, assertion_index, expression, message, 1 if passed else 0, actual_value, expected_value),
     )
     db.commit()
 
@@ -759,6 +781,7 @@ def create_assertion_result(
         message=message,
         passed=passed,
         actual_value=actual_value,
+        expected_value=expected_value,
     )
 
 

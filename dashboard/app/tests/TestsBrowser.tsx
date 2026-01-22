@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   ChevronRight,
   ChevronDown,
@@ -57,6 +58,7 @@ function groupTestsByHierarchy(tests: SuiteTest[]): UseCaseGroup[] {
 }
 
 export function TestsBrowser({ suites }: TestsBrowserProps) {
+  const router = useRouter();
   const [expandedSuites, setExpandedSuites] = useState<Set<number>>(new Set());
   const [expandedUseCases, setExpandedUseCases] = useState<Set<string>>(
     new Set()
@@ -118,10 +120,8 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
     setRunningSuite(suiteId);
     setRunMessage(null);
     try {
-      const result = await runTests(suiteId);
-      setRunMessage(`Started: ${result.description}`);
-      // Clear message after 3 seconds
-      setTimeout(() => setRunMessage(null), 3000);
+      await runTests(suiteId);
+      router.push("/live");
     } catch (err) {
       setRunMessage(
         `Error: ${err instanceof Error ? err.message : "Failed to start"}`
@@ -142,9 +142,8 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
     setRunningUc(key);
     setRunMessage(null);
     try {
-      const result = await runTests(suiteId, { uc });
-      setRunMessage(`Started: ${result.description}`);
-      setTimeout(() => setRunMessage(null), 3000);
+      await runTests(suiteId, { uc });
+      router.push("/live");
     } catch (err) {
       setRunMessage(
         `Error: ${err instanceof Error ? err.message : "Failed to start"}`
@@ -165,9 +164,8 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
     setRunningTc(key);
     setRunMessage(null);
     try {
-      const result = await runTests(suiteId, { tc });
-      setRunMessage(`Started: ${result.description}`);
-      setTimeout(() => setRunMessage(null), 3000);
+      await runTests(suiteId, { tc });
+      router.push("/live");
     } catch (err) {
       setRunMessage(
         `Error: ${err instanceof Error ? err.message : "Failed to start"}`

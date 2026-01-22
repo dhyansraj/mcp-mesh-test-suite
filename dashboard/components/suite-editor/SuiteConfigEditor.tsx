@@ -24,6 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   getSuiteConfig,
   updateSuiteConfig,
@@ -188,7 +189,8 @@ export function SuiteConfigEditor({
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-6">
+      <ScrollArea className="flex-1 h-0">
+        <div className="p-4 space-y-6">
         {/* Suite Section */}
         <Card className="rounded-md">
           <CardHeader className="py-3 px-4">
@@ -416,7 +418,8 @@ export function SuiteConfigEditor({
             </div>
           </CardContent>
         </Card>
-      </div>
+        </div>
+      </ScrollArea>
     </div>
   );
 }

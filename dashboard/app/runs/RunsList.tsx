@@ -151,7 +151,9 @@ export function RunsList({ initialRuns }: RunsListProps) {
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium text-foreground">
-                          {run.suite_name || `Run ${run.run_id.slice(0, 8)}`}
+                          {run.display_name
+                            ? `${run.suite_name} / ${run.display_name}`
+                            : run.suite_name || `Run ${run.run_id.slice(0, 8)}`}
                         </span>
                         <Badge
                           variant="secondary"

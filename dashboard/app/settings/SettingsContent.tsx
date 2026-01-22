@@ -477,7 +477,7 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
                 <div className="p-2 border-b bg-muted/30">
                   <span className="text-sm font-medium">Test Cases</span>
                 </div>
-                <ScrollArea className="flex-1">
+                <ScrollArea className="flex-1 h-0">
                   <div className="p-2">
                     <TestCaseTree
                       suiteId={editingSuiteId}

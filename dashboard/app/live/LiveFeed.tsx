@@ -406,8 +406,8 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetai
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
         ) : testDetail ? (
-          <div className="overflow-y-auto max-h-[calc(85vh-120px)] pr-2">
-            <div className="space-y-6">
+          <ScrollArea className="h-[calc(85vh-120px)]">
+            <div className="space-y-6 pr-4">
               {/* Test Info */}
               <div className="flex flex-wrap gap-4 text-sm">
                 <div>
@@ -570,7 +570,7 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetai
                 </div>
               )}
             </div>
-          </div>
+          </ScrollArea>
         ) : null}
       </DialogContent>
     </Dialog>

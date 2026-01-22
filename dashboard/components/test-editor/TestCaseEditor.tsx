@@ -41,6 +41,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   getTestCaseYaml,
   updateTestCaseYaml,
@@ -290,7 +291,8 @@ export function TestCaseEditor({
           </TabsTrigger>
         </TabsList>
 
-        <div className="flex-1 overflow-y-auto p-4 min-h-0">
+        <ScrollArea className="flex-1 h-0">
+          <div className="p-4">
           {/* Metadata Tab */}
           <TabsContent value="metadata" className="m-0 space-y-4">
             <div className="grid gap-4">
@@ -465,7 +467,8 @@ export function TestCaseEditor({
               Add Assertion
             </Button>
           </TabsContent>
-        </div>
+          </div>
+        </ScrollArea>
       </Tabs>
     </div>
   );
