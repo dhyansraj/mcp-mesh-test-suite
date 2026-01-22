@@ -4,6 +4,12 @@
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:9999";
 
+export interface RunFilters {
+  uc?: string[];
+  tc?: string[];
+  tags?: string[];
+}
+
 export interface Run {
   run_id: string;
   suite_id: number | null;
@@ -12,12 +18,17 @@ export interface Run {
   finished_at: string | null;
   status: "pending" | "running" | "completed" | "failed" | "cancelled";
   total_tests: number;
+  pending_count: number;
+  running_count: number;
   passed: number;
   failed: number;
   skipped: number;
   duration_ms: number | null;
   cli_version: string | null;
   docker_image: string | null;
+  filters: RunFilters | null;
+  mode: string | null;
+  cancel_requested: boolean;
 }
 
 export interface RunSummary extends Run {
@@ -274,7 +285,7 @@ export interface RunResponse {
 
 export async function runTests(
   suiteId: number,
-  options?: { uc?: string; tc?: string }
+  options?: { uc?: string; tc?: string; tags?: string[] }
 ): Promise<RunResponse> {
   const res = await fetch(`${API_BASE}/api/suites/${suiteId}/run`, {
     method: "POST",
@@ -284,6 +295,39 @@ export async function runTests(
   if (!res.ok) {
     const error = await res.json();
     throw new Error(error.error || "Failed to start test run");
+  }
+  return res.json();
+}
+
+export interface RerunResponse extends RunResponse {
+  original_run_id: string;
+}
+
+export async function rerunFromRun(run: Run | RunExtended): Promise<RerunResponse> {
+  // Use the dedicated rerun endpoint - API determines filters from run_id
+  const res = await fetch(`${API_BASE}/api/runs/${run.run_id}/rerun`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "Failed to start rerun");
+  }
+  return res.json();
+}
+
+export interface CancelResponse {
+  success: boolean;
+  run_id: string;
+  cancel_requested: boolean;
+}
+
+export async function cancelRun(runId: string): Promise<CancelResponse> {
+  const res = await fetch(`${API_BASE}/api/runs/${runId}/cancel`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "Failed to cancel run");
   }
   return res.json();
 }
@@ -316,13 +360,8 @@ export async function getRunTestsTree(runId: string): Promise<RunTestTreeRespons
   return res.json();
 }
 
-export interface RunExtended extends Run {
-  pending_count: number;
-  running_count: number;
-  suite_id: number | null;
-  filters: Record<string, unknown> | null;
-  mode: string;
-}
+// RunExtended is now the same as Run (all fields included in Run)
+export type RunExtended = Run;
 
 export async function getRunExtended(runId: string): Promise<RunExtended> {
   const res = await fetch(`${API_BASE}/api/runs/${runId}`, {

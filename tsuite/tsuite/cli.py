@@ -215,6 +215,30 @@ def update_test_status_via_api(
         console.print(f"[yellow]Warning: Failed to update test status: {e}[/yellow]")
 
 
+def check_cancel_requested(api_url: str, run_id: str) -> bool:
+    """
+    Check if cancellation has been requested for a run.
+
+    Called before starting each test for cooperative cancellation.
+    """
+    try:
+        resp = requests.get(f"{api_url}/api/runner/should-cancel/{run_id}", timeout=5)
+        if resp.status_code == 200:
+            return resp.json().get("cancel_requested", False)
+    except requests.RequestException:
+        pass  # On error, continue execution
+    return False
+
+
+def finalize_cancelled_run(run_id: str, skip_reason: str = "Run cancelled") -> int:
+    """
+    Mark all pending tests as skipped and complete the run as cancelled.
+
+    Returns the number of tests that were skipped.
+    """
+    return repo.cancel_run_with_skip(run_id, skip_reason)
+
+
 # =============================================================================
 # Worker Pool for Parallel Execution
 # =============================================================================
@@ -236,6 +260,7 @@ class WorkerPool:
         from concurrent.futures import ThreadPoolExecutor
         self.max_workers = max(1, max_workers)
         self.executor: ThreadPoolExecutor | None = None
+        self._cancelled = False
 
     def __enter__(self):
         from concurrent.futures import ThreadPoolExecutor
@@ -244,7 +269,12 @@ class WorkerPool:
 
     def __exit__(self, *args):
         if self.executor:
-            self.executor.shutdown(wait=True)
+            # If cancelled, don't wait for running tasks
+            self.executor.shutdown(wait=not self._cancelled, cancel_futures=self._cancelled)
+
+    def cancel(self):
+        """Mark the pool as cancelled - exit won't wait for futures."""
+        self._cancelled = True
 
     def submit(self, fn, *args, **kwargs):
         """Submit a task to the pool."""
@@ -783,20 +813,22 @@ def main(
             api_url=api_url,
         )
 
-    # Complete run record
-    repo.complete_run(run.run_id)
+    # Complete run record (unless already cancelled)
+    current_run = repo.get_run(run.run_id)
+    if current_run and current_run.status != RunStatus.CANCELLED:
+        repo.complete_run(run.run_id)
 
-    # Emit SSE run_completed event
-    passed_count = sum(1 for r in results if r.passed)
-    failed_count = sum(1 for r in results if not r.passed)
-    total_duration_ms = int(sum(r.duration for r in results) * 1000)
-    sse_manager.emit_run_completed(
-        run_id=run.run_id,
-        passed=passed_count,
-        failed=failed_count,
-        skipped=0,
-        duration_ms=total_duration_ms,
-    )
+        # Emit SSE run_completed event
+        passed_count = sum(1 for r in results if r.passed)
+        failed_count = sum(1 for r in results if not r.passed)
+        total_duration_ms = int(sum(r.duration for r in results) * 1000)
+        sse_manager.emit_run_completed(
+            run_id=run.run_id,
+            passed=passed_count,
+            failed=failed_count,
+            skipped=0,
+            duration_ms=total_duration_ms,
+        )
 
     # Print summary
     print_summary(results, run.run_id)
@@ -864,6 +896,8 @@ def run_local_mode(
         suite_path=suite,
     )
 
+    cancel_requested = False
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -873,10 +907,17 @@ def run_local_mode(
         task = progress.add_task("Running tests...", total=len(tests))
 
         for i, test in enumerate(tests):
+            current_run_id = run_id or _current_run_id
+
+            # Check for cancellation before starting each test
+            if current_run_id and check_cancel_requested(server_url, current_run_id):
+                console.print("\n[yellow]Cancellation requested - skipping remaining tests[/yellow]")
+                cancel_requested = True
+                break
+
             progress.update(task, description=f"[{i+1}/{len(tests)}] {test.id}")
 
             # Mark test as running in database (updates run counters)
-            current_run_id = run_id or _current_run_id
             if current_run_id:
                 repo.update_test_status(
                     current_run_id,
@@ -920,6 +961,17 @@ def run_local_mode(
                 break
 
             progress.advance(task)
+
+    # If cancelled, finalize the run with skipped tests
+    if cancel_requested and current_run_id:
+        skipped = finalize_cancelled_run(current_run_id)
+        console.print(f"[yellow]Skipped {skipped} remaining test(s)[/yellow]")
+        # Emit SSE event for cancellation
+        from .sse import SSEEvent
+        sse_manager.emit(
+            SSEEvent(type="run_cancelled", data={"run_id": current_run_id, "skipped_count": skipped}),
+            run_id=current_run_id,
+        )
 
     return results
 
@@ -1094,6 +1146,10 @@ def run_docker_mode(
 
     # Execute tests with worker pool
     stop_requested = False
+    cancel_requested = False
+
+    # API URL for cancellation checks (use host URL, not container URL)
+    host_api_url = api_url or "http://localhost:9999"
 
     with Progress(
         SpinnerColumn(),
@@ -1106,7 +1162,13 @@ def run_docker_mode(
         if max_workers == 1:
             # Sequential execution (same as before)
             for i, test in enumerate(tests):
-                if stop_requested:
+                if stop_requested or cancel_requested:
+                    break
+
+                # Check for cancellation before starting each test
+                if current_run_id and check_cancel_requested(host_api_url, current_run_id):
+                    console.print("\n[yellow]Cancellation requested - skipping remaining tests[/yellow]")
+                    cancel_requested = True
                     break
 
                 progress.update(task, description=f"[{i+1}/{len(tests)}] {test.id}")
@@ -1123,34 +1185,83 @@ def run_docker_mode(
                 progress.advance(task)
         else:
             # Parallel execution using WorkerPool
+            # Interleave submission and collection - submit new tests only as workers become free
+            from concurrent.futures import as_completed
+
             completed = 0
+            submitted = 0
+            test_iter = iter(tests)
             progress.update(task, description=f"[0/{len(tests)}] Running {max_workers} tests in parallel...")
 
             with WorkerPool(max_workers=max_workers) as pool:
-                # Submit all tests
-                futures = []
-                for test in tests:
-                    future = pool.submit(execute_single_test, test)
-                    futures.append((future, test))
+                pending_futures = {}  # future -> test mapping
 
-                # Collect results as they complete
-                from concurrent.futures import as_completed
-                for future in as_completed([f for f, _ in futures]):
-                    completed += 1
+                # Submit initial batch (up to max_workers)
+                for _ in range(max_workers):
                     try:
-                        result, docker_result = future.result()
-                        results.append(result)
-                        print_docker_result(docker_result, verbose)
+                        test = next(test_iter)
+                        # Check for cancellation before submitting
+                        if current_run_id and check_cancel_requested(host_api_url, current_run_id):
+                            console.print("\n[yellow]Cancellation requested - not submitting more tests[/yellow]")
+                            cancel_requested = True
+                            break
+                        future = pool.submit(execute_single_test, test)
+                        pending_futures[future] = test
+                        submitted += 1
+                    except StopIteration:
+                        break  # No more tests to submit
 
-                        if not result.passed and stop_on_fail:
-                            console.print("\n[red]Failure detected (remaining tests will complete)[/red]")
-                            stop_requested = True
+                # Process results and submit new tests as workers become free
+                while pending_futures:
+                    # Wait for any future to complete
+                    done_futures = as_completed(pending_futures.keys())
+                    for future in done_futures:
+                        completed += 1
+                        test = pending_futures.pop(future)
 
-                    except Exception as e:
-                        console.print(f"[red]Test execution error: {e}[/red]")
+                        try:
+                            result, docker_result = future.result()
+                            results.append(result)
+                            print_docker_result(docker_result, verbose)
 
-                    progress.update(task, description=f"[{completed}/{len(tests)}] Running...")
-                    progress.advance(task)
+                            if not result.passed and stop_on_fail:
+                                console.print("\n[red]Failure detected (remaining tests will complete)[/red]")
+                                stop_requested = True
+
+                        except Exception as e:
+                            console.print(f"[red]Test execution error: {e}[/red]")
+
+                        progress.update(task, description=f"[{completed}/{len(tests)}] Running...")
+                        progress.advance(task)
+
+                        # Check for cancellation - if cancelled, don't submit new tests
+                        if not cancel_requested and current_run_id and check_cancel_requested(host_api_url, current_run_id):
+                            console.print("\n[yellow]Cancellation requested - waiting for running tests to complete[/yellow]")
+                            cancel_requested = True
+
+                        # Submit next test if not cancelled/stopped and there are more tests
+                        if not cancel_requested and not stop_requested:
+                            try:
+                                next_test = next(test_iter)
+                                future = pool.submit(execute_single_test, next_test)
+                                pending_futures[future] = next_test
+                                submitted += 1
+                            except StopIteration:
+                                pass  # No more tests
+
+                        # Break inner loop to re-check pending_futures
+                        break
+
+    # If cancelled, finalize the run with skipped tests
+    if cancel_requested and current_run_id:
+        skipped = finalize_cancelled_run(current_run_id)
+        console.print(f"[yellow]Skipped {skipped} remaining test(s)[/yellow]")
+        # Emit SSE event for cancellation
+        from .sse import SSEEvent
+        sse_manager.emit(
+            SSEEvent(type="run_cancelled", data={"run_id": current_run_id, "skipped_count": skipped}),
+            run_id=current_run_id,
+        )
 
     return results
 

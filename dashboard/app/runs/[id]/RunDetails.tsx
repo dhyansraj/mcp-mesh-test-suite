@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -17,6 +19,8 @@ import {
   formatRelativeTime,
   getStatusBgColor,
   getTestDetail,
+  rerunFromRun,
+  cancelRun,
 } from "@/lib/api";
 import {
   CheckCircle,
@@ -31,6 +35,8 @@ import {
   FolderOpen,
   Folder,
   FileText,
+  RotateCcw,
+  StopCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -74,13 +80,45 @@ function groupTestsByUseCase(tests: TestResult[]): UseCaseGroup[] {
 }
 
 export function RunDetails({ run, tests }: RunDetailsProps) {
+  const router = useRouter();
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<string | null>(null);
   const [selectedTest, setSelectedTest] = useState<TestResult | null>(null);
   const [testDetail, setTestDetail] = useState<TestDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [rerunning, setRerunning] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   const useCases = useMemo(() => groupTestsByUseCase(tests), [tests]);
+
+  const handleRerun = async () => {
+    if (!run.suite_id) return;
+
+    setRerunning(true);
+    try {
+      await rerunFromRun(run);
+      router.push("/live");
+    } catch (error) {
+      console.error("Failed to rerun:", error);
+    } finally {
+      setRerunning(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    setCancelling(true);
+    try {
+      await cancelRun(run.run_id);
+      router.refresh();
+    } catch (error) {
+      console.error("Failed to cancel:", error);
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  const canCancel = run.status === "pending" || run.status === "running";
+  const isCancelRequested = run.cancel_requested;
 
   const toggleExpand = (id: string) => {
     setExpandedIds((prev) => {
@@ -122,14 +160,61 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
       {/* Run Summary Card */}
       <Card className="border-border bg-card rounded-md">
         <CardContent className="p-6">
+          {/* Header with Rerun/Cancel buttons */}
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-lg font-medium">Run Summary</h3>
+            <div className="flex items-center gap-2">
+              {/* Cancel button - show for running/pending runs */}
+              {canCancel && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCancel}
+                  disabled={cancelling || isCancelRequested}
+                  className="gap-2 text-destructive border-destructive/50 hover:bg-destructive/10"
+                >
+                  {cancelling ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <StopCircle className="h-4 w-4" />
+                  )}
+                  {isCancelRequested ? "Cancelling..." : "Cancel"}
+                </Button>
+              )}
+              {/* Rerun button */}
+              {run.suite_id && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRerun}
+                  disabled={rerunning}
+                  className="gap-2"
+                >
+                  {rerunning ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RotateCcw className="h-4 w-4" />
+                  )}
+                  Rerun
+                </Button>
+              )}
+            </div>
+          </div>
+
           <div className="grid gap-6 md:grid-cols-4">
             <div>
               <p className="text-sm text-muted-foreground">Status</p>
               <Badge
                 variant="secondary"
-                className={`mt-1 ${getStatusBgColor(run.status)}`}
+                className={`mt-1 ${getStatusBgColor(
+                  isCancelRequested && run.status === "running"
+                    ? "cancelled"
+                    : run.status
+                )}`}
               >
-                {run.status}
+                {isCancelRequested && run.status === "running"
+                  ? "cancelling"
+                  : run.status}
               </Badge>
             </div>
             <div>

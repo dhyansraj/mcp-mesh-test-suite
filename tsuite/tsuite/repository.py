@@ -1032,3 +1032,62 @@ def delete_suite(suite_id: int) -> bool:
     cursor = db.execute("DELETE FROM suites WHERE id = ?", (suite_id,))
     db.commit()
     return cursor.rowcount > 0
+
+
+# =============================================================================
+# Cancellation Operations
+# =============================================================================
+
+def request_cancel(run_id: str) -> None:
+    """Set the cancel_requested flag on a run."""
+    db.execute(
+        "UPDATE runs SET cancel_requested = 1 WHERE run_id = ?",
+        (run_id,),
+    )
+    db.commit()
+
+
+def is_cancel_requested(run_id: str) -> bool:
+    """Check if cancellation has been requested for a run."""
+    row = db.fetchone(
+        "SELECT cancel_requested FROM runs WHERE run_id = ?",
+        (run_id,),
+    )
+    return bool(row["cancel_requested"]) if row else False
+
+
+def cancel_run_with_skip(run_id: str, skip_reason: str = "Run cancelled") -> int:
+    """
+    Mark all pending tests as skipped and complete the run as cancelled.
+
+    Returns the number of tests that were skipped.
+    """
+    # Get all pending tests
+    pending_tests = db.fetchall(
+        "SELECT test_id FROM test_results WHERE run_id = ? AND status = ?",
+        (run_id, TestStatus.PENDING.value),
+    )
+
+    skipped_count = 0
+    for row in pending_tests:
+        update_test_status(
+            run_id=run_id,
+            test_id=row["test_id"],
+            status=TestStatus.SKIPPED,
+            skip_reason=skip_reason,
+        )
+        skipped_count += 1
+
+    # Mark the run as cancelled
+    db.execute(
+        """
+        UPDATE runs SET
+            status = ?,
+            finished_at = ?
+        WHERE run_id = ?
+        """,
+        (RunStatus.CANCELLED.value, datetime.now().isoformat(), run_id),
+    )
+    db.commit()
+
+    return skipped_count

@@ -65,6 +65,7 @@ class Run:
     duration_ms: Optional[int] = None
     filters: Optional[dict] = None
     mode: str = "docker"
+    cancel_requested: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -87,6 +88,7 @@ class Run:
             "duration_ms": self.duration_ms,
             "filters": self.filters,
             "mode": self.mode,
+            "cancel_requested": self.cancel_requested,
         }
 
     @classmethod
@@ -102,6 +104,13 @@ class Run:
         suite_name = None
         try:
             suite_name = row["suite_name"]
+        except (KeyError, IndexError):
+            pass
+
+        # Handle cancel_requested (may not exist in older DBs before migration)
+        cancel_requested = False
+        try:
+            cancel_requested = bool(row["cancel_requested"])
         except (KeyError, IndexError):
             pass
 
@@ -125,6 +134,7 @@ class Run:
             duration_ms=row["duration_ms"],
             filters=filters,
             mode=row["mode"] or "docker",
+            cancel_requested=cancel_requested,
         )
 
 

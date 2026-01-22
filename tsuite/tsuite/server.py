@@ -192,6 +192,19 @@ def create_app() -> Flask:
             return jsonify({"error": f"Test context not found: {test_id}"}), 404
         return jsonify(ctx.to_dict())
 
+    @app.route("/api/runner/should-cancel/<run_id>", methods=["GET"])
+    def api_runner_should_cancel(run_id: str):
+        """
+        Check if a run has been requested to cancel.
+
+        CLI calls this before starting each test to support cooperative cancellation.
+
+        Returns:
+            cancel_requested: bool - True if cancellation has been requested
+        """
+        cancel_requested = repo.is_cancel_requested(run_id)
+        return jsonify({"cancel_requested": cancel_requested})
+
     # =========================================================================
     # Dashboard API Endpoints
     # =========================================================================
@@ -529,6 +542,32 @@ def create_app() -> Flask:
         )
 
         return jsonify(run.to_dict())
+
+    @app.route("/api/runs/<run_id>/cancel", methods=["POST"])
+    def api_cancel_run(run_id: str):
+        """
+        Request cancellation of a running test run.
+
+        Sets cancel_requested flag. CLI will check this before starting each test.
+        """
+        run = repo.get_run(run_id)
+        if not run:
+            return jsonify({"error": f"Run not found: {run_id}"}), 404
+
+        if run.status not in (RunStatus.PENDING, RunStatus.RUNNING):
+            return jsonify({"error": f"Cannot cancel run with status: {run.status.value}"}), 400
+
+        # Set cancel_requested flag
+        repo.request_cancel(run_id)
+
+        # Emit SSE event for UI update
+        from .sse import SSEEvent
+        sse_manager.emit(
+            SSEEvent(type="cancel_requested", data={"run_id": run_id}),
+            run_id=run_id,
+        )
+
+        return jsonify({"success": True, "run_id": run_id, "cancel_requested": True})
 
     @app.route("/api/stats", methods=["GET"])
     def api_stats():
@@ -1380,6 +1419,126 @@ def create_app() -> Flask:
             })
         except Exception as e:
             return jsonify({"error": f"Failed to delete step: {str(e)}"}), 500
+
+    @app.route("/api/runs/<run_id>/rerun", methods=["POST"])
+    def api_rerun(run_id: str):
+        """
+        Rerun a previous test run with the same filters.
+
+        Reads the original run's suite_id and filters, then launches CLI
+        with the same configuration.
+
+        Returns:
+            started: True if subprocess launched
+            pid: Process ID of CLI subprocess
+            description: What's being run
+            original_run_id: The run being rerun
+        """
+        import subprocess
+        import sys
+        import os
+        import tempfile
+        from pathlib import Path
+
+        # Get original run
+        run = repo.get_run(run_id)
+        if not run:
+            return jsonify({"error": f"Run not found: {run_id}"}), 404
+
+        if not run.suite_id:
+            return jsonify({"error": "Cannot rerun: no suite_id associated with this run"}), 400
+
+        suite = repo.get_suite(run.suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {run.suite_id}"}), 404
+
+        if not os.path.isdir(suite.folder_path):
+            return jsonify({"error": f"Directory not found: {suite.folder_path}"}), 400
+
+        # Get test IDs from original run's test_results
+        original_tests = repo.list_test_results(run_id)
+        if not original_tests:
+            return jsonify({"error": "No tests found in original run"}), 400
+
+        # Determine the scope: single tc, single uc, or full suite
+        test_ids = [t.test_id for t in original_tests]
+        use_cases = set(t.use_case for t in original_tests)
+
+        if len(test_ids) == 1:
+            # Single test case
+            run_scope = ("tc", test_ids[0])
+        elif len(use_cases) == 1:
+            # Multiple tests but all in same use case
+            run_scope = ("uc", list(use_cases)[0])
+        else:
+            # Multiple use cases - run full suite
+            run_scope = ("all", None)
+
+        # Determine tsuite venv path (relative to this package)
+        tsuite_dir = Path(__file__).parent.parent
+        venv_python = tsuite_dir / "venv" / "bin" / "python"
+
+        if not venv_python.exists():
+            # Fallback to system python
+            venv_python = sys.executable
+
+        # Build CLI command (uses --api-url to call back to this server)
+        api_url = f"http://{request.host}"
+        cmd = [
+            str(venv_python),
+            "-m", "tsuite.cli",
+            "--suite-path", suite.folder_path,
+            "--api-url", api_url,
+        ]
+
+        # Add scope flag based on original run
+        scope_type, scope_value = run_scope
+        if scope_type == "tc":
+            cmd.extend(["--tc", scope_value])
+        elif scope_type == "uc":
+            cmd.extend(["--uc", scope_value])
+        else:
+            cmd.append("--all")
+
+        # Add docker flag if mode is docker
+        if suite.mode.value == "docker":
+            cmd.append("--docker")
+
+        # Start subprocess (non-blocking) - CLI will create run and update via API
+        try:
+            output_path = tempfile.mktemp(prefix='tsuite_run_', suffix='.log')
+            output_file = open(output_path, 'w')
+
+            process = subprocess.Popen(
+                cmd,
+                stdout=output_file,
+                stderr=subprocess.STDOUT,
+                cwd=suite.folder_path,
+                env={
+                    **os.environ,
+                    "PYTHONUNBUFFERED": "1",
+                },
+            )
+
+            # Build description of what's running
+            if scope_type == "tc":
+                description = f"Rerunning test case: {scope_value}"
+            elif scope_type == "uc":
+                description = f"Rerunning use case: {scope_value}"
+            else:
+                description = f"Rerunning all tests in: {suite.suite_name}"
+
+            return jsonify({
+                "started": True,
+                "pid": process.pid,
+                "description": description,
+                "mode": suite.mode.value,
+                "log_file": output_path,
+                "original_run_id": run_id,
+            }), 202
+
+        except Exception as e:
+            return jsonify({"error": f"Failed to start rerun: {str(e)}"}), 500
 
     @app.route("/api/suites/<int:suite_id>/run", methods=["POST"])
     def api_run_suite(suite_id: int):

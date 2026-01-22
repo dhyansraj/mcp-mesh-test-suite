@@ -16,6 +16,7 @@ import {
   getRunExtended,
   getRunTestsTree,
   getTestDetail,
+  cancelRun,
   RunExtended,
   RunTestTreeResponse,
   TestResult,
@@ -23,6 +24,7 @@ import {
   StepResult,
   AssertionResult,
 } from "@/lib/api";
+import { Button } from "@/components/ui/button";
 import {
   CheckCircle,
   XCircle,
@@ -38,6 +40,7 @@ import {
   Folder,
   Terminal,
   FileText,
+  StopCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -590,6 +593,8 @@ export function LiveFeed() {
   const [selectedTest, setSelectedTest] = useState<TestResult | null>(null);
   const [testDetail, setTestDetail] = useState<TestDetail | null>(null);
   const [testDetailLoading, setTestDetailLoading] = useState(false);
+  // Cancel state
+  const [cancelling, setCancelling] = useState(false);
 
   // Update displayed run ID when a new run starts (but don't clear on completion)
   useEffect(() => {
@@ -704,6 +709,23 @@ export function LiveFeed() {
     }
   }, [displayedRunId]);
 
+  // Handle cancel
+  const handleCancel = useCallback(async () => {
+    if (!displayedRunId) return;
+
+    setCancelling(true);
+    try {
+      await cancelRun(displayedRunId);
+      // Refetch run data to update status
+      const runData = await getRunExtended(displayedRunId);
+      setRun(runData);
+    } catch (err) {
+      console.error("Failed to cancel run:", err);
+    } finally {
+      setCancelling(false);
+    }
+  }, [displayedRunId]);
+
   // Calculate stats
   const stats = useMemo(() => {
     if (!run) {
@@ -768,7 +790,7 @@ export function LiveFeed() {
 
           {displayedRunId && (
             <div className="flex items-center gap-2 rounded bg-primary/10 px-4 py-2">
-              {currentRunId === displayedRunId ? (
+              {currentRunId === displayedRunId && !run?.cancel_requested ? (
                 <span className="relative flex h-3 w-3">
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75"></span>
                   <span className="relative inline-flex h-3 w-3 rounded-full bg-primary"></span>
@@ -779,6 +801,12 @@ export function LiveFeed() {
               <span className="font-mono text-sm font-medium text-primary">
                 Run: {displayedRunId.slice(0, 8)}...
               </span>
+              {run?.status === "cancelled" && (
+                <span className="text-xs text-warning">(cancelled)</span>
+              )}
+              {run?.cancel_requested && run?.status === "running" && (
+                <span className="text-xs text-warning">(cancelling...)</span>
+              )}
               {currentRunId !== displayedRunId && run?.status === "completed" && (
                 <span className="text-xs text-muted-foreground">(completed)</span>
               )}
@@ -804,8 +832,8 @@ export function LiveFeed() {
             failed={stats.failed}
           />
 
-          {/* Currently Running - only show when run is in progress */}
-          {(run.status === "running" || run.status === "pending") && (
+          {/* Currently Running - show as long as there are running tests */}
+          {(run.status === "running" || run.status === "pending") && runningTests.length > 0 && (
             <CurrentlyRunning tests={runningTests} getElapsed={getTestElapsed} />
           )}
 
@@ -817,16 +845,40 @@ export function LiveFeed() {
                   <span className="text-muted-foreground">
                     Run: <span className="font-mono">{displayedRunId.slice(0, 12)}</span>
                   </span>
+                  <Badge variant="outline">
+                    {run.cancel_requested && run.status === "running"
+                      ? "cancelling"
+                      : run.status}
+                  </Badge>
                   <Badge variant="outline">{run.mode}</Badge>
                   <span className="text-muted-foreground">
                     {run.total_tests} tests
                   </span>
                 </div>
-                {run.started_at && (
-                  <span className="text-muted-foreground">
-                    Started: {new Date(run.started_at).toLocaleTimeString()}
-                  </span>
-                )}
+                <div className="flex items-center gap-4">
+                  {run.started_at && (
+                    <span className="text-muted-foreground">
+                      Started: {new Date(run.started_at).toLocaleTimeString()}
+                    </span>
+                  )}
+                  {/* Cancel button - show for running/pending runs */}
+                  {(run.status === "running" || run.status === "pending") && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCancel}
+                      disabled={cancelling || run.cancel_requested}
+                      className="gap-2 text-destructive border-destructive/50 hover:bg-destructive/10"
+                    >
+                      {cancelling ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <StopCircle className="h-4 w-4" />
+                      )}
+                      {run.cancel_requested ? "Cancelling..." : "Cancel"}
+                    </Button>
+                  )}
+                </div>
               </div>
             </CardContent>
           </Card>
