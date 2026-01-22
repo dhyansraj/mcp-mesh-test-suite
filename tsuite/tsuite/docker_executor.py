@@ -148,6 +148,15 @@ class DockerExecutor:
             if uc_artifacts_path.exists() and uc_artifacts_path.is_dir():
                 volumes[str(uc_artifacts_path)] = {"bind": "/uc-artifacts", "mode": "ro"}
 
+        # Create and mount logs directory for meshctl output
+        # Structure: ~/.tsuite/runs/<run_id>/<uc>/<tc>/logs/
+        if self.run_id:
+            uc_name = test.id.split("/")[0] if "/" in test.id else test.id
+            tc_name = test.id.split("/")[1] if "/" in test.id else "default"
+            logs_path = Path.home() / ".tsuite" / "runs" / self.run_id / uc_name / tc_name / "logs"
+            logs_path.mkdir(parents=True, exist_ok=True)
+            volumes[str(logs_path)] = {"bind": "/root/.mcp-mesh/logs", "mode": "rw"}
+
         # Add suite-level mounts from config.yaml docker.mounts
         for mount in self.config.mounts:
             mount_type = mount.get("type", "host")

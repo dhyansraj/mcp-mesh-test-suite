@@ -12,14 +12,9 @@ packages:
   # - local: Use /wheels and /packages from SDK image
   # - published: Pull from PyPI/npm
   # - auto: Auto-detect based on presence of /wheels, /packages
-  mode: "auto"
+  mode: "local"
 
   # Published versions (used when mode=published or as fallback)
-  cli_version: "0.8.0-beta.9"     # @mcpmesh/cli (npm)
-  sdk_python_version: "0.8.0b9"   # mcp-mesh (pip) - matches CLI version
-  sdk_typescript_version: "0.8.0-beta.9"  # @mcpmesh/sdk (npm)
-
-  # Local paths (used when mode=local)
   local:
     wheels_dir: "/wheels"
     packages_dir: "/packages"
@@ -32,7 +27,7 @@ docker:
   # Both images have meshctl, mesh module, and node pre-installed
   # - tsuite-mesh:local     -> local mode (packages from /wheels, /packages)
   # - tsuite-mesh:0.8.0-beta.9 -> published mode (packages from PyPI/npm)
-  base_image: "tsuite-mesh:0.8.0-beta.9"
+  base_image: "tsuite-mesh:local"
   network: "bridge"
 
   # No mounts needed - packages are baked into the image
@@ -40,7 +35,7 @@ docker:
 
 # Execution settings
 execution:
-  max_workers: 3    # concurrent tests in docker mode
+  max_workers: 6    # concurrent tests in docker mode
   timeout: 300      # seconds per test
 
 # Legacy defaults (for compatibility)

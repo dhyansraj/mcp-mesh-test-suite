@@ -30,11 +30,8 @@ class LlmAgentContext(BaseModel):
 
 @app.tool()
 @mesh.llm(
-    filter=[{"tags": ["math"]}],
-    filter_mode="all",
     provider={"capability": "llm", "tags": ["+claude", "+provider"]},
     max_iterations=5,
-    system_prompt="file://prompts/llm-agent.jinja2",
     context_param="ctx",
 )
 @mesh.tool(

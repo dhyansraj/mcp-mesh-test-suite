@@ -35,7 +35,7 @@ test:
   # Start the gemini-provider with env file
   - name: "Start gemini-provider"
     handler: shell
-    command: "meshctl start gemini-provider/main.py --env-file .env --env MCP_MESH_HTTP_PORT=3022 -d"
+    command: "meshctl start gemini-provider/main.py --env-file .env --env MCP_MESH_HTTP_PORT=3022 -d --debug"
     workdir: /workspace
     capture: start_output
 

@@ -13,7 +13,7 @@ tags:
   - tags
   - or-logic
   - typescript
-timeout: 300
+timeout: 180
 
 pre_run:
   # TypeScript-only test - just need Node.js + meshctl (no Python venv)
@@ -53,7 +53,7 @@ test:
 
   - name: "Wait for fast provider registration"
     handler: wait
-    seconds: 20
+    seconds: 8
 
   - name: "Test 1: Start consumer"
     handler: shell
@@ -63,24 +63,17 @@ test:
 
   - name: "Wait for consumer registration"
     handler: wait
-    seconds: 20
+    seconds: 10
 
   - name: "Test 1: Call fetch_required with only fast available"
     handler: shell
     command: |
-      echo "=== DEBUG: Before call ==="
-      meshctl list 2>&1 || echo "meshctl list failed"
-      echo "=== DEBUG: Calling fetch_required ==="
       RESULT=$(meshctl call fetch_required '{"query": "test1"}' 2>&1)
       echo "With only fast: $RESULT"
       if echo "$RESULT" | grep -q "TS_FAST"; then
         echo "PASS: Matched TS fast when only fast available"
-      elif echo "$RESULT" | grep -q "NO_PROVIDER"; then
-        echo "FAIL: Got NO_PROVIDER - dependency not injected"
-        exit 1
       else
         echo "FAIL: Should match fast provider"
-        echo "Full result: $RESULT"
         exit 1
       fi
     workdir: /workspace
@@ -98,13 +91,6 @@ test:
     seconds: 5
 
   # === TEST 2: Only accurate provider available ===
-  # Debug: Check registry state before starting
-  - name: "Debug: Check registry state before test 2"
-    handler: shell
-    command: "meshctl list 2>&1 || echo 'No agents registered'"
-    workdir: /workspace
-    capture: debug_before_test2
-
   - name: "Test 2: Start accurate provider only"
     handler: shell
     command: "meshctl start ts-accurate-provider/src/index.ts -d"
@@ -113,7 +99,7 @@ test:
 
   - name: "Wait for accurate provider registration"
     handler: wait
-    seconds: 25
+    seconds: 8
 
   - name: "Test 2: Start consumer"
     handler: shell
@@ -121,17 +107,9 @@ test:
     workdir: /workspace
     capture: start_consumer_2
 
-  # Wait longer for registry to clear stale agents (heartbeat interval is 5s)
-  - name: "Wait for registry to clear stale agents"
+  - name: "Wait for consumer registration"
     handler: wait
-    seconds: 25
-
-  # Debug: Check registry state before call
-  - name: "Debug: Check registry state before call"
-    handler: shell
-    command: "meshctl list 2>&1"
-    workdir: /workspace
-    capture: debug_list_test2
+    seconds: 10
 
   - name: "Test 2: Call fetch_required with only accurate available"
     handler: shell
@@ -142,7 +120,6 @@ test:
         echo "PASS: Matched TS accurate when only accurate available"
       else
         echo "FAIL: Should match accurate provider"
-        echo "DEBUG: Result was: $RESULT"
         exit 1
       fi
     workdir: /workspace
@@ -168,7 +145,7 @@ test:
 
   - name: "Wait for providers registration"
     handler: wait
-    seconds: 25
+    seconds: 10
 
   - name: "Test 3: Start consumer"
     handler: shell
@@ -176,10 +153,9 @@ test:
     workdir: /workspace
     capture: start_consumer_3
 
-  # Wait longer for registry to clear stale agents
-  - name: "Wait for registry to clear stale agents"
+  - name: "Wait for consumer registration"
     handler: wait
-    seconds: 25
+    seconds: 10
 
   - name: "Test 3: Call fetch_required with both available"
     handler: shell

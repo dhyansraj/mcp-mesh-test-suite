@@ -1,0 +1,4 @@
+mcp-mesh
+fastmcp
+pydantic
+httpx

@@ -25,6 +25,7 @@ show_help() {
     echo "  --ui           Start dashboard UI (port 3000)"
     echo "  --cli [args]   Run CLI with optional arguments"
     echo "  --all          Start API and UI in background"
+    echo "  --clear        Clear all data (database + run logs)"
     echo "  --help         Show this help message"
     echo ""
     echo "CLI Examples:"
@@ -32,6 +33,9 @@ show_help() {
     echo "  ./start.sh --cli --uc uc01_registry           # Run specific use case"
     echo "  ./start.sh --cli --tc tc01_simple             # Run specific test case"
     echo "  ./start.sh --cli --standalone                 # Run without Docker"
+    echo ""
+    echo "Maintenance:"
+    echo "  ./start.sh --clear                            # Clear DB and logs"
     echo ""
 }
 
@@ -75,6 +79,29 @@ case "$1" in
         ;;
     --help|-h)
         show_help
+        ;;
+    --clear)
+        echo "Clearing tsuite data..."
+
+        # Remove database
+        if [ -f "$HOME/.tsuite/results.db" ]; then
+            rm -f "$HOME/.tsuite/results.db"
+            echo "  Removed: ~/.tsuite/results.db"
+        fi
+
+        # Remove run logs
+        if [ -d "$HOME/.tsuite/runs" ]; then
+            rm -rf "$HOME/.tsuite/runs"
+            echo "  Removed: ~/.tsuite/runs/"
+        fi
+
+        # Remove meshctl logs (standalone mode logs)
+        if [ -d "$HOME/.mcp-mesh/logs" ]; then
+            rm -rf "$HOME/.mcp-mesh/logs"/*
+            echo "  Cleared: ~/.mcp-mesh/logs/"
+        fi
+
+        echo "Done."
         ;;
     *)
         echo "Unknown option: $1"

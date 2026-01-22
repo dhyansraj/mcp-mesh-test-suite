@@ -32,6 +32,11 @@ def create_app() -> Flask:
     """Create the Flask application."""
     app = Flask(__name__)
 
+    @app.teardown_appcontext
+    def close_db_connection(exception=None):
+        """Close database connection at end of each request to prevent FD leaks."""
+        db.close_connection()
+
     @app.after_request
     def add_cors_headers(response):
         """Add CORS headers to all responses for dashboard access."""
@@ -1520,6 +1525,9 @@ def create_app() -> Flask:
                 },
             )
 
+            # Close file handle - subprocess inherits the FD and can write independently
+            output_file.close()
+
             # Build description of what's running
             if scope_type == "tc":
                 description = f"Rerunning test case: {scope_value}"
@@ -1628,6 +1636,9 @@ def create_app() -> Flask:
                     "PYTHONUNBUFFERED": "1",
                 },
             )
+
+            # Close file handle - subprocess inherits the FD and can write independently
+            output_file.close()
 
             # Build description of what's running
             if tc:
