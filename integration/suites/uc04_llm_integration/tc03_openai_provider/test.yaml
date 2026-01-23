@@ -42,7 +42,7 @@ test:
   # Wait for provider to register
   - name: "Wait for provider to register"
     handler: wait
-    seconds: 5
+    seconds: 15
 
   # Verify provider is running
   - name: "Verify provider is running"

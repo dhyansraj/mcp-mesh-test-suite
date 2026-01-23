@@ -492,7 +492,7 @@ function TestTree({ useCases, expandedIds, onToggle, onTestClick, onRerunTest, f
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                onRerunTest(test.test_case);
+                                onRerunTest(test.test_id);
                               }}
                               className="p-1 rounded hover:bg-primary/20 opacity-0 group-hover:opacity-100 transition-opacity"
                               title="Rerun this test"
