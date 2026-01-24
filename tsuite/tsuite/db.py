@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS assertion_results (
     message TEXT,
     passed INTEGER NOT NULL,
     actual_value TEXT,
+    expected_value TEXT,
     UNIQUE(test_result_id, assertion_index)
 );
 
@@ -175,6 +176,10 @@ def get_connection() -> sqlite3.Connection:
         _local.connection.row_factory = sqlite3.Row
         # Enable foreign keys
         _local.connection.execute("PRAGMA foreign_keys = ON")
+        # Wait up to 30s for locks instead of failing immediately
+        _local.connection.execute("PRAGMA busy_timeout = 30000")
+        # Enable WAL mode for better concurrency (allows concurrent reads during writes)
+        _local.connection.execute("PRAGMA journal_mode = WAL")
 
     return _local.connection
 

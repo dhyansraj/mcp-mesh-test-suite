@@ -214,27 +214,144 @@ class SuiteMode(Enum):
 | `step_completed` | `run_id`, `test_id`, `step_index`, `phase`, `status`, `duration_ms`, `handler` | Step finished |
 | `run_completed` | `run_id`, `passed`, `failed`, `skipped`, `duration_ms` | Run finished |
 
+## Output Capture
+
+Capture command output for use in assertions:
+
+```yaml
+test:
+  - name: "Call API"
+    handler: shell
+    command: "curl http://localhost:8080/api/data"
+    capture: api_response    # Captures stdout to ${captured.api_response}
+
+  - name: "Get version"
+    handler: shell
+    command: "meshctl version"
+    capture: version_output
+
+assertions:
+  - expr: ${captured.api_response} contains 'success'
+  - expr: ${captured.version_output} contains '0.8'
+```
+
+### Capture Behavior
+
+- `capture: <name>` stores **stdout** of the step in `${captured.<name>}`
+- Captured values persist for the entire test execution
+- Can be used in subsequent steps and assertions
+- Available in routines (propagates to parent context)
+
 ## Expression Language
+
+### Variable Types
+
+| Prefix | Description | Example |
+|--------|-------------|---------|
+| `last.*` | Last step result | `${last.exit_code}`, `${last.stdout}`, `${last.stderr}` |
+| `captured.*` | Captured output | `${captured.api_response}` |
+| `config.*` | Suite configuration | `${config.packages.sdk_version}` |
+| `state.*` | Shared test state | `${state.agent_port}` |
+| `params.*` | Routine parameters | `${params.version}` |
+| `env:*` | Environment variable | `${env:HOME}` |
+
+### Data Access Prefixes
+
+| Prefix | Description | Example |
+|--------|-------------|---------|
+| `json:` | JSONPath on last.stdout | `${json:$.data.count}` |
+| `jq:` | jq query on last.stdout | `${jq:.structuredContent.content}` |
+| `jq:captured.*:` | jq query on captured var | `${jq:captured.response:.data.id}` |
+| `jsonfile:` | JSONPath on file | `${jsonfile:/path/file.json:$.key}` |
+| `file:` | File contents | `${file:/path/to/file}` |
+| `fixture:` | Fixture file contents | `${fixture:expected/output.json}` |
+
+### jq Queries
+
+Use `jq:` prefix for powerful JSON querying, including nested JSON parsing:
 
 ```yaml
 assertions:
-  # Exact match
-  - expr: ${exit_code} == 0
+  # Simple path query
+  - expr: ${jq:.structuredContent.content} == 'Paris'
 
-  # String contains
-  - expr: ${stdout} contains 'success'
+  # Nested JSON with fromjson (parse JSON string inside JSON)
+  - expr: ${jq:.content[0].text | fromjson | .content} contains 'Paris'
 
-  # Captured variable
-  - expr: ${captured.my_var} contains 'expected'
+  # Query captured variable
+  - expr: ${jq:captured.api_response:.data.items[0].name} == 'test'
 
-  # File exists
-  - expr: ${file:/path/to/file} exists
+  # Boolean check
+  - expr: ${jq:.isError} == 'false'
 
-  # JSONPath
-  - expr: ${json:$.data.count} >= 5
+  # Numeric value
+  - expr: ${jq:.usage.tokens} > 0
+```
 
-  # Regex match
-  - expr: ${stderr} matches 'Error:.*'
+### Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `==` | Equals | `${exit_code} == 0` |
+| `!=` | Not equals | `${status} != 'error'` |
+| `>`, `<`, `>=`, `<=` | Numeric comparison | `${json:$.count} >= 5` |
+| `contains` | Substring match | `${stdout} contains 'success'` |
+| `not contains` | Substring not present | `${stderr} not contains 'error'` |
+| `iequal` / `ieq` | Case-insensitive equals (trims whitespace) | `${jq:.content} iequal 'paris'` |
+| `icontains` | Case-insensitive contains | `${stdout} icontains 'SUCCESS'` |
+| `startswith` | String starts with | `${jq:.content} startswith 'Paris'` |
+| `endswith` | String ends with | `${stdout} endswith 'done'` |
+| `matches` | Regex match | `${stderr} matches 'Error:.*timeout'` |
+| `exists` | Value is not null | `${json:$.data} exists` |
+| `not exists` | Value is null | `${json:$.error} not exists` |
+| `is` | Type check | `${json:$.items} is array` |
+| `length` | Length comparison | `${json:$.items} length > 0` |
+
+### Type Checking with `is`
+
+```yaml
+assertions:
+  - expr: ${json:$.name} is string
+  - expr: ${json:$.count} is number
+  - expr: ${json:$.items} is array
+  - expr: ${json:$.config} is object
+  - expr: ${json:$.enabled} is boolean
+  - expr: ${json:$.optional} is null
+```
+
+### Complete Example
+
+```yaml
+test:
+  - name: "Call LLM provider"
+    handler: shell
+    command: "meshctl call gemini_provider '{\"request\": {\"messages\": [{\"role\": \"user\", \"content\": \"What is 2+2?\"}]}}'"
+    capture: llm_response
+
+assertions:
+  # Basic string check
+  - expr: ${captured.llm_response} contains '4'
+    message: "Response should contain 4"
+
+  # jq with case-insensitive comparison
+  - expr: ${jq:captured.llm_response:.structuredContent.content} icontains 'four'
+    message: "Content should mention four"
+
+  # Nested JSON parsing
+  - expr: ${jq:captured.llm_response:.content[0].text | fromjson | .role} == 'assistant'
+    message: "Role should be assistant"
+
+  # Boolean check
+  - expr: ${jq:captured.llm_response:.isError} == 'false'
+    message: "Should not be an error"
+
+  # Numeric check
+  - expr: ${jq:captured.llm_response:.structuredContent._mesh_usage.prompt_tokens} > 0
+    message: "Should have prompt tokens"
+
+  # Model validation
+  - expr: ${jq:captured.llm_response:.structuredContent._mesh_usage.model} startswith 'gemini'
+    message: "Model should be gemini"
 ```
 
 ## Routines
@@ -265,24 +382,211 @@ pre_run:
 
 ## Handlers
 
-| Handler | Description |
-|---------|-------------|
-| `shell` | Execute shell commands |
-| `file` | File operations (create, copy, delete) |
-| `http` | HTTP requests |
-| `wait` | Wait for duration or condition |
-| `routine` | Invoke a routine |
-| `llm` | LLM-based operations |
+### shell
+
+Execute shell commands with bash:
+
+```yaml
+- name: "Run command"
+  handler: shell
+  command: "meshctl list -t"
+  workdir: /workspace           # Optional: working directory
+  timeout: 120                  # Optional: timeout in seconds (default: 120)
+  capture: output               # Optional: capture stdout
+
+- name: "Multi-line command"
+  handler: shell
+  command: |
+    echo "Step 1"
+    meshctl start agent/main.py -d
+    echo "Step 2"
+```
+
+### wait
+
+Wait for time duration or HTTP endpoint:
+
+```yaml
+# Wait for seconds
+- name: "Wait for agent startup"
+  handler: wait
+  seconds: 5
+
+# Wait for HTTP endpoint
+- name: "Wait for API ready"
+  handler: wait
+  type: http
+  url: "http://localhost:8080/health"
+  timeout: 30                   # Max wait time in seconds
+  interval: 2                   # Polling interval in seconds
+```
+
+### file
+
+File operations:
+
+```yaml
+# Check if file exists
+- name: "Check config exists"
+  handler: file
+  operation: exists
+  path: "/workspace/config.yaml"
+
+# Read file contents
+- name: "Read config"
+  handler: file
+  operation: read
+  path: "/workspace/config.yaml"
+  capture: config_content
+
+# Write file
+- name: "Create config"
+  handler: file
+  operation: write
+  path: "/workspace/config.yaml"
+  content: |
+    name: test
+    version: 1.0
+```
+
+### http
+
+HTTP requests:
+
+```yaml
+# GET request
+- name: "Health check"
+  handler: http
+  method: GET
+  url: "http://localhost:8080/health"
+  timeout: 10
+  capture: health_response
+
+# POST request with JSON body
+- name: "Create resource"
+  handler: http
+  method: POST
+  url: "http://localhost:8080/api/items"
+  headers:
+    Content-Type: "application/json"
+    Authorization: "Bearer ${env:API_TOKEN}"
+  body:
+    name: "test-item"
+    value: 42
+  capture: create_response
+
+# PUT request
+- name: "Update resource"
+  handler: http
+  method: PUT
+  url: "http://localhost:8080/api/items/1"
+  body:
+    name: "updated-item"
+```
+
+### pip-install
+
+Install Python packages:
+
+```yaml
+# Install from requirements.txt
+- name: "Install dependencies"
+  handler: pip-install
+  requirements: "/workspace/requirements.txt"
+
+# Install specific packages
+- name: "Install packages"
+  handler: pip-install
+  packages:
+    - requests>=2.28.0
+    - pyyaml
+```
+
+### npm-install
+
+Install Node.js packages:
+
+```yaml
+# Install from package.json
+- name: "Install dependencies"
+  handler: npm-install
+  workdir: /workspace/my-agent
+
+# Install specific packages
+- name: "Install packages"
+  handler: npm-install
+  packages:
+    - typescript
+    - "@mcpmesh/sdk@0.8.0"
+```
+
+### routine
+
+Invoke reusable routines:
+
+```yaml
+# Call global routine with parameters
+- routine: global.setup_for_python_agent
+  params:
+    meshctl_version: "0.8.0"
+    sdk_version: "0.8.0"
+
+# Call use-case level routine
+- routine: uc01.start_registry
+  params:
+    port: 8000
+```
+
+### Handler Summary
+
+| Handler | Description | Key Parameters |
+|---------|-------------|----------------|
+| `shell` | Execute bash commands | `command`, `workdir`, `timeout`, `capture` |
+| `wait` | Wait for time/condition | `seconds`, `type`, `url`, `timeout`, `interval` |
+| `file` | File operations | `operation`, `path`, `content` |
+| `http` | HTTP requests | `method`, `url`, `headers`, `body`, `timeout` |
+| `pip-install` | Install Python packages | `requirements`, `packages` |
+| `npm-install` | Install Node.js packages | `workdir`, `packages` |
+| `routine` | Invoke routines | `params` |
 
 ### Adding Custom Handlers
+
+Create a new handler in the `handlers/` directory:
 
 ```python
 # handlers/myhandler.py
 from tsuite.context import StepResult
 
 def execute(step: dict, context: dict) -> StepResult:
-    # Implement your handler
-    return StepResult(success=True, exit_code=0)
+    """
+    Execute custom handler logic.
+
+    Args:
+        step: Step configuration from test.yaml
+        context: Execution context with config, state, captured, last, workdir
+
+    Returns:
+        StepResult with success, exit_code, stdout, stderr, error
+    """
+    my_param = step.get("my_param", "default")
+
+    # Your implementation here
+
+    return StepResult(
+        success=True,
+        exit_code=0,
+        stdout="Handler output",
+        stderr="",
+        error=None
+    )
+```
+
+Register in `container_runner.py`:
+
+```python
+elif handler_name == "myhandler":
+    from handlers import myhandler
+    return myhandler.execute(step, context)
 ```
 
 ## CLI Options

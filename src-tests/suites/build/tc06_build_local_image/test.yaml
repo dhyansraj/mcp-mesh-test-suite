@@ -70,11 +70,13 @@ test:
       BUILD_DIR=$(mktemp -d)
       echo "BUILD_DIR=$BUILD_DIR"
 
-      # Get Dockerfile from artifacts_path
+      # Get Dockerfile and tempo.yaml from artifacts_path
       DOCKERFILE_PATH="${artifacts_path}/Dockerfile"
+      TEMPO_CONFIG="${artifacts_path}/tempo.yaml"
 
-      # Copy Dockerfile
+      # Copy Dockerfile and tempo.yaml
       cp "$DOCKERFILE_PATH" $BUILD_DIR/
+      cp "$TEMPO_CONFIG" $BUILD_DIR/
 
       # Copy artifacts
       mkdir -p $BUILD_DIR/bin $BUILD_DIR/wheels $BUILD_DIR/packages
@@ -100,6 +102,7 @@ test:
       echo "Build context: $BUILD_DIR"
 
       docker build \
+        --no-cache \
         -t $IMAGE_NAME \
         -f $BUILD_DIR/Dockerfile \
         $BUILD_DIR

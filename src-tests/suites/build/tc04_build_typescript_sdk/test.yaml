@@ -47,12 +47,12 @@ test:
       echo "Source: $SOURCE_ABS"
       echo "Output: $OUTPUT_ABS"
 
-      echo "Building TypeScript SDK inside container..."
+      echo "Building TypeScript SDK inside container (clean build)..."
       docker run --rm \
-        -v "$SOURCE_ABS:/src/mcp-mesh" \
+        -v "$SOURCE_ABS:/src-host:ro" \
         -v "$OUTPUT_ABS:/out" \
         ${config.build.image} \
-        bash -c "cd /src/mcp-mesh/src/runtime/typescript && npm install && npm run build && npm pack --pack-destination /out/packages"
+        bash -c "cp -r /src-host /src/mcp-mesh && cd /src/mcp-mesh/src/runtime/typescript && npm install && npm run build && npm pack --pack-destination /out/packages"
 
       echo "TypeScript build complete"
       echo "npm pack complete"

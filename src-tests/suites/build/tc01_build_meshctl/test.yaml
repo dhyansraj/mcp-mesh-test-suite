@@ -47,12 +47,12 @@ test:
       echo "Source: $SOURCE_ABS"
       echo "Output: $OUTPUT_ABS"
 
-      echo "Building meshctl inside container..."
+      echo "Building meshctl inside container (clean build)..."
       docker run --rm \
-        -v "$SOURCE_ABS:/src/mcp-mesh:ro" \
+        -v "$SOURCE_ABS:/src-host:ro" \
         -v "$OUTPUT_ABS:/out" \
         ${config.build.image} \
-        bash -c "cd /src/mcp-mesh && go build -o /out/bin/meshctl ./cmd/meshctl/"
+        bash -c "cp -r /src-host /src/mcp-mesh && cd /src/mcp-mesh && go build -o /out/bin/meshctl ./cmd/meshctl/"
 
       echo "Build complete"
     capture: build_output

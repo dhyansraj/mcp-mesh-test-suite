@@ -48,6 +48,7 @@ test:
       echo "  Dockerfile: $DOCKERFILE_DIR/Dockerfile"
 
       docker build \
+        --no-cache \
         --build-arg VERSION=$VERSION \
         --build-arg PIP_VERSION=$PIP_VERSION \
         -t $IMAGE_NAME \

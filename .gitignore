@@ -45,3 +45,4 @@ mcp-mesh/
 
 # Build outputs
 src-tests/out/
+/mcp-mesh

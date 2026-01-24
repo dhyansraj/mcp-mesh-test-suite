@@ -29,7 +29,7 @@ const agent = mesh(server, {
   name: "claude-provider-ts",
   version: "1.0.0",
   description: "LLM Provider for anthropic/claude-sonnet-4-5",
-  port: 9000,
+  httpPort: 9000,
 });
 
 // ===== LLM PROVIDER =====

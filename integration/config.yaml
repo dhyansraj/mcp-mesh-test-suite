@@ -35,7 +35,7 @@ docker:
 
 # Execution settings
 execution:
-  max_workers: 6    # concurrent tests in docker mode
+  max_workers: 8    # concurrent tests in docker mode
   timeout: 300      # seconds per test
 
 # Legacy defaults (for compatibility)

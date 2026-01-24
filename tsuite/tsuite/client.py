@@ -273,6 +273,7 @@ class RunnerClient:
         steps_passed: int | None = None,
         steps_failed: int | None = None,
         steps: list | None = None,
+        assertions: list | None = None,
     ) -> dict | None:
         """
         Report that a test has passed.
@@ -284,6 +285,7 @@ class RunnerClient:
             steps_passed: Number of steps that passed
             steps_failed: Number of steps that failed
             steps: Detailed step results
+            assertions: Assertion results with actual/expected values
 
         Returns:
             Updated test result dict or None on error.
@@ -298,6 +300,8 @@ class RunnerClient:
             data["steps_failed"] = steps_failed
         if steps is not None:
             data["steps"] = steps
+        if assertions is not None:
+            data["assertions"] = assertions
         return self._patch(f"/api/runs/{run_id}/tests/{tid}", data)
 
     def report_test_failed(
@@ -309,6 +313,7 @@ class RunnerClient:
         steps_passed: int | None = None,
         steps_failed: int | None = None,
         steps: list | None = None,
+        assertions: list | None = None,
     ) -> dict | None:
         """
         Report that a test has failed.
@@ -321,6 +326,7 @@ class RunnerClient:
             steps_passed: Number of steps that passed
             steps_failed: Number of steps that failed
             steps: Detailed step results
+            assertions: Assertion results with actual/expected values
 
         Returns:
             Updated test result dict or None on error.
@@ -337,6 +343,8 @@ class RunnerClient:
             data["steps_failed"] = steps_failed
         if steps is not None:
             data["steps"] = steps
+        if assertions is not None:
+            data["assertions"] = assertions
         return self._patch(f"/api/runs/{run_id}/tests/{tid}", data)
 
     def report_test_skipped(
@@ -373,6 +381,7 @@ class RunnerClient:
         steps_passed: int | None = None,
         steps_failed: int | None = None,
         steps: list | None = None,
+        assertions: list | None = None,
     ) -> dict | None:
         """
         Generic method to report test status.
@@ -387,6 +396,7 @@ class RunnerClient:
             steps_passed: Number of steps that passed
             steps_failed: Number of steps that failed
             steps: Detailed step results
+            assertions: Assertion results with actual/expected values
 
         Returns:
             Updated test result dict or None on error.
@@ -405,6 +415,8 @@ class RunnerClient:
             data["steps_failed"] = steps_failed
         if steps is not None:
             data["steps"] = steps
+        if assertions is not None:
+            data["assertions"] = assertions
         return self._patch(f"/api/runs/{run_id}/tests/{tid}", data)
 
     def start_run(self, run_id: str) -> dict | None:

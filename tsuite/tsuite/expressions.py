@@ -2,14 +2,15 @@
 Expression language for assertions and variable resolution.
 
 Supports:
-- Variable resolution: ${var}, ${json:$.path}, ${file:/path}, etc.
-- Operators: ==, !=, contains, matches, exists, >, <, >=, <=, length
+- Variable resolution: ${var}, ${json:$.path}, ${jq:.path}, ${file:/path}, etc.
+- Operators: ==, !=, contains, matches, exists, >, <, >=, <=, length, iequal, startswith, endswith
 - Config/state/captured variable access
 """
 
 import re
 import os
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +41,7 @@ class ExpressionEvaluator:
     # Expression pattern: ${var} operator value
     EXPR_PATTERN = re.compile(
         r"^\$\{([^}]+)\}\s+"
-        r"(==|!=|>=|<=|>|<|contains|matches|exists|not\s+exists|not\s+contains|is|length)\s*"
+        r"(==|!=|>=|<=|>|<|contains|matches|exists|not\s+exists|not\s+contains|is|length|iequal|ieq|icontains|startswith|endswith)\s*"
         r"(.*)$"
     )
 
@@ -54,10 +55,13 @@ class ExpressionEvaluator:
         Supported formats:
         - config.packages.cli_version -> config value
         - state.agent_port -> state value
-        - captured.output -> captured variable
+        - captured.output -> captured variable (stdout only)
+        - steps.output.exit_code -> step result by capture name (exit_code, stdout, stderr, success)
         - last.exit_code -> last step result
         - last.stdout -> last step stdout
         - json:$.path.to.field -> JSONPath on last.stdout
+        - jq:.path.to.field -> jq query on last.stdout (supports fromjson for nested JSON)
+        - jq:captured.varname:.path -> jq query on captured variable
         - jsonfile:/path:$.query -> JSONPath on file
         - file:/path/to/file -> File contents
         - fixture:expected/foo.json -> Fixture file contents
@@ -80,6 +84,9 @@ class ExpressionEvaluator:
         if var.startswith("params."):
             return self._resolve_path(self.context.get("params", {}), var[7:])
 
+        if var.startswith("steps."):
+            return self._resolve_path(self.context.get("steps", {}), var[6:])
+
         if var.startswith("json:"):
             # JSONPath on stdout
             path = var[5:]
@@ -89,6 +96,30 @@ class ExpressionEvaluator:
                 return self._jsonpath(data, path)
             except json.JSONDecodeError:
                 return None
+
+        if var.startswith("jq:"):
+            # jq query - supports complex queries including fromjson
+            # Formats:
+            #   jq:.path.to.field - query on last.stdout
+            #   jq:captured.varname:.path - query on captured variable
+            query_part = var[3:]
+
+            # Check if querying a captured variable
+            if query_part.startswith("captured."):
+                # Format: captured.varname:.jq_query
+                rest = query_part[9:]  # Remove "captured."
+                if ":" in rest:
+                    var_name, jq_query = rest.split(":", 1)
+                else:
+                    var_name = rest
+                    jq_query = "."
+                input_data = self.context.get("captured", {}).get(var_name, "")
+            else:
+                # Query on last.stdout
+                jq_query = query_part
+                input_data = self.context.get("last", {}).get("stdout", "")
+
+            return self._jq(input_data, jq_query)
 
         if var.startswith("jsonfile:"):
             # ${jsonfile:/path:$.query}
@@ -169,6 +200,57 @@ class ExpressionEvaluator:
         except Exception:
             return None
 
+    def _jq(self, input_data: str, query: str) -> Any:
+        """
+        Execute jq query on input data.
+
+        Args:
+            input_data: JSON string to query
+            query: jq query expression (e.g., '.structuredContent.content', '.content[0].text | fromjson | .content')
+
+        Returns:
+            Query result (parsed as JSON if possible, otherwise raw string)
+        """
+        if not input_data:
+            return None
+
+        try:
+            # Run jq command
+            result = subprocess.run(
+                ["jq", "-r", query],
+                input=input_data,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            if result.returncode != 0:
+                # jq failed - return None or the error
+                return None
+
+            output = result.stdout.strip()
+
+            # Try to parse as JSON (jq -r returns raw strings, but complex objects are still JSON)
+            if output.startswith(("{", "[")):
+                try:
+                    return json.loads(output)
+                except json.JSONDecodeError:
+                    pass
+
+            # Handle jq null output
+            if output == "null":
+                return None
+
+            return output
+
+        except FileNotFoundError:
+            # jq not installed
+            raise ExpressionError("jq is not installed. Install with: apt-get install jq")
+        except subprocess.TimeoutExpired:
+            return None
+        except Exception as e:
+            return None
+
     def interpolate(self, text: str) -> str:
         """
         Interpolate all ${...} variables in a string.
@@ -182,7 +264,7 @@ class ExpressionEvaluator:
 
         return self.VAR_PATTERN.sub(replace, text)
 
-    def evaluate(self, expr: str) -> tuple[bool, str]:
+    def evaluate(self, expr: str) -> tuple[bool, str, dict]:
         """
         Evaluate an assertion expression.
 
@@ -190,11 +272,13 @@ class ExpressionEvaluator:
             expr: Expression like "${exit_code} == 0"
 
         Returns:
-            (passed, message) tuple
+            (passed, message, metadata) tuple where metadata contains:
+                - actual_value: The resolved value from the expression
+                - expected_value: The expected value (if applicable)
         """
         match = self.EXPR_PATTERN.match(expr.strip())
         if not match:
-            return False, f"Invalid expression syntax: {expr}"
+            return False, f"Invalid expression syntax: {expr}", {"actual_value": None, "expected_value": None}
 
         var_name, operator, expected_raw = match.groups()
         operator = operator.strip().lower()
@@ -205,11 +289,11 @@ class ExpressionEvaluator:
         # Handle operators that don't need an expected value
         if operator == "exists":
             passed = actual is not None
-            return passed, f"{'exists' if passed else 'does not exist'}"
+            return passed, f"{'exists' if passed else 'does not exist'}", {"actual_value": repr(actual), "expected_value": None}
 
         if operator == "not exists":
             passed = actual is None
-            return passed, f"{'does not exist' if passed else 'exists'}"
+            return passed, f"{'does not exist' if passed else 'exists'}", {"actual_value": repr(actual), "expected_value": None}
 
         # Parse expected value
         expected_raw = expected_raw.strip()
@@ -239,26 +323,50 @@ class ExpressionEvaluator:
         # Execute operator
         if operator == "==":
             passed = actual == expected
-            return passed, f"actual={repr(actual)}, expected={repr(expected)}"
+            return passed, f"actual={repr(actual)}, expected={repr(expected)}", {"actual_value": repr(actual), "expected_value": repr(expected)}
 
         if operator == "!=":
             passed = actual != expected
-            return passed, f"actual={repr(actual)}, should not equal {repr(expected)}"
+            return passed, f"actual={repr(actual)}, should not equal {repr(expected)}", {"actual_value": repr(actual), "expected_value": repr(expected)}
 
         if operator == "contains":
             passed = expected in str(actual) if actual else False
-            return passed, f"{'contains' if passed else 'does not contain'} {repr(expected)}"
+            return passed, f"{'contains' if passed else 'does not contain'} {repr(expected)}", {"actual_value": repr(actual), "expected_value": repr(expected)}
 
         if operator == "not contains":
             passed = expected not in str(actual) if actual else True
-            return passed, f"{'does not contain' if passed else 'contains'} {repr(expected)}"
+            return passed, f"{'does not contain' if passed else 'contains'} {repr(expected)}", {"actual_value": repr(actual), "expected_value": repr(expected)}
+
+        if operator in ("iequal", "ieq"):
+            # Case-insensitive equals (also trims whitespace)
+            actual_normalized = str(actual).strip().lower() if actual else ""
+            expected_normalized = str(expected).strip().lower()
+            passed = actual_normalized == expected_normalized
+            return passed, f"actual={repr(actual)}, expected (case-insensitive)={repr(expected)}", {"actual_value": repr(actual), "expected_value": repr(expected)}
+
+        if operator == "icontains":
+            # Case-insensitive contains
+            actual_lower = str(actual).lower() if actual else ""
+            expected_lower = str(expected).lower()
+            passed = expected_lower in actual_lower
+            return passed, f"{'contains' if passed else 'does not contain'} {repr(expected)} (case-insensitive)", {"actual_value": repr(actual), "expected_value": repr(expected)}
+
+        if operator == "startswith":
+            actual_str = str(actual) if actual else ""
+            passed = actual_str.startswith(expected)
+            return passed, f"{'starts with' if passed else 'does not start with'} {repr(expected)}", {"actual_value": repr(actual), "expected_value": repr(expected)}
+
+        if operator == "endswith":
+            actual_str = str(actual) if actual else ""
+            passed = actual_str.endswith(expected)
+            return passed, f"{'ends with' if passed else 'does not end with'} {repr(expected)}", {"actual_value": repr(actual), "expected_value": repr(expected)}
 
         if operator == "matches":
             try:
                 passed = bool(re.search(expected, str(actual))) if actual else False
-                return passed, f"{'matches' if passed else 'does not match'} pattern {repr(expected)}"
+                return passed, f"{'matches' if passed else 'does not match'} pattern {repr(expected)}", {"actual_value": repr(actual), "expected_value": repr(expected)}
             except re.error as e:
-                return False, f"Invalid regex pattern: {e}"
+                return False, f"Invalid regex pattern: {e}", {"actual_value": repr(actual), "expected_value": repr(expected)}
 
         if operator == "is":
             type_map = {
@@ -279,9 +387,9 @@ class ExpressionEvaluator:
             }
             expected_type = type_map.get(expected.lower())
             if expected_type is None:
-                return False, f"Unknown type: {expected}"
+                return False, f"Unknown type: {expected}", {"actual_value": type(actual).__name__, "expected_value": expected}
             passed = isinstance(actual, expected_type)
-            return passed, f"type is {type(actual).__name__}, expected {expected}"
+            return passed, f"type is {type(actual).__name__}, expected {expected}", {"actual_value": type(actual).__name__, "expected_value": expected}
 
         if operator == "length":
             # Parse "length > 5" style
@@ -302,9 +410,9 @@ class ExpressionEvaluator:
 
                 if length_op in ops:
                     passed = ops[length_op](actual_len, length_val)
-                    return passed, f"length={actual_len}, expected {length_op} {length_val}"
+                    return passed, f"length={actual_len}, expected {length_op} {length_val}", {"actual_value": str(actual_len), "expected_value": f"{length_op} {length_val}"}
 
-            return False, f"Invalid length expression: {expected}"
+            return False, f"Invalid length expression: {expected}", {"actual_value": None, "expected_value": expected}
 
         if operator in (">", "<", ">=", "<="):
             try:
@@ -317,8 +425,8 @@ class ExpressionEvaluator:
                     "<=": lambda a, b: a <= b,
                 }
                 passed = ops[operator](actual_num, expected_num)
-                return passed, f"actual={actual_num}, expected {operator} {expected_num}"
+                return passed, f"actual={actual_num}, expected {operator} {expected_num}", {"actual_value": str(actual_num), "expected_value": f"{operator} {expected_num}"}
             except (ValueError, TypeError):
-                return False, f"Cannot compare: {actual} {operator} {expected}"
+                return False, f"Cannot compare: {actual} {operator} {expected}", {"actual_value": repr(actual), "expected_value": repr(expected)}
 
-        return False, f"Unknown operator: {operator}"
+        return False, f"Unknown operator: {operator}", {"actual_value": None, "expected_value": None}

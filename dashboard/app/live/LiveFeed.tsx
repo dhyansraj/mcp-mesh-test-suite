@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -17,6 +18,7 @@ import {
   getRunTestsTree,
   getTestDetail,
   cancelRun,
+  runTests,
   RunExtended,
   RunTestTreeResponse,
   TestResult,
@@ -41,6 +43,7 @@ import {
   Terminal,
   FileText,
   StopCircle,
+  Play,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -234,7 +237,9 @@ interface TestTreeProps {
   expandedIds: Set<string>;
   onToggle: (id: string) => void;
   onTestClick?: (test: TestResult) => void;
+  onRerunTest?: (testId: string) => void;
   filter?: string;
+  suiteId?: number | null;
 }
 
 function getStatusIcon(status: string) {
@@ -253,7 +258,7 @@ function getStatusIcon(status: string) {
   }
 }
 
-function TestTree({ useCases, expandedIds, onToggle, onTestClick, filter }: TestTreeProps) {
+function TestTree({ useCases, expandedIds, onToggle, onTestClick, onRerunTest, filter, suiteId }: TestTreeProps) {
   if (!useCases || useCases.length === 0) {
     return (
       <Card>
@@ -330,27 +335,33 @@ function TestTree({ useCases, expandedIds, onToggle, onTestClick, filter }: Test
                 {isExpanded && (
                   <div className="border-t bg-muted/20">
                     {uc.tests.map((test) => (
-                      <button
+                      <div
                         key={test.test_id}
-                        onClick={() => onTestClick?.(test)}
                         className={cn(
-                          "flex items-center gap-3 px-4 py-2 pl-10 hover:bg-muted/30 transition-colors w-full text-left",
+                          "flex items-center gap-3 px-4 py-2 pl-10 hover:bg-muted/30 transition-colors group",
                           test.status === "running" && "bg-primary/10",
-                          (test.status === "failed" || test.status === "crashed") && "bg-destructive/5",
-                          onTestClick && "cursor-pointer"
+                          (test.status === "failed" || test.status === "crashed") && "bg-destructive/5"
                         )}
                       >
-                        {getStatusIcon(test.status)}
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm truncate">
-                            {test.name || test.test_case}
-                          </p>
-                          {test.error_message && (
-                            <p className="text-xs text-destructive truncate mt-1">
-                              {test.error_message}
-                            </p>
+                        <button
+                          onClick={() => onTestClick?.(test)}
+                          className={cn(
+                            "flex items-center gap-3 flex-1 min-w-0 text-left",
+                            onTestClick && "cursor-pointer"
                           )}
-                        </div>
+                        >
+                          {getStatusIcon(test.status)}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm truncate">
+                              {test.name || test.test_case}
+                            </p>
+                            {test.error_message && (
+                              <p className="text-xs text-destructive truncate mt-1">
+                                {test.error_message}
+                              </p>
+                            )}
+                          </div>
+                        </button>
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
                           {test.duration_ms !== null && (
                             <span className="font-mono">
@@ -363,8 +374,20 @@ function TestTree({ useCases, expandedIds, onToggle, onTestClick, filter }: Test
                           {test.status === "pending" && (
                             <span>(pending)</span>
                           )}
+                          {suiteId && onRerunTest && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onRerunTest(test.test_id);
+                              }}
+                              className="p-1 rounded hover:bg-primary/20 opacity-0 group-hover:opacity-100 transition-opacity"
+                              title="Rerun this test"
+                            >
+                              <Play className="h-3.5 w-3.5 text-primary" />
+                            </button>
+                          )}
                         </div>
-                      </button>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -386,19 +409,66 @@ interface TestDetailDialogProps {
   onOpenChange: (open: boolean) => void;
   testDetail: TestDetail | null;
   loading: boolean;
+  suiteId?: number | null;
+  onRerunTest?: (testId: string) => void;
 }
 
-function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetailDialogProps) {
+function TestDetailDialog({ open, onOpenChange, testDetail, loading, suiteId, onRerunTest }: TestDetailDialogProps) {
+  const [expandedAssertions, setExpandedAssertions] = useState<Set<number>>(new Set());
+  const [rerunning, setRerunning] = useState(false);
+
+  const handleRerun = async () => {
+    if (!testDetail || !suiteId || !onRerunTest) return;
+    setRerunning(true);
+    try {
+      await onRerunTest(testDetail.test_id);
+      // Close dialog so user can see the new test in live view
+      onOpenChange(false);
+    } finally {
+      setRerunning(false);
+    }
+  };
+
+  const toggleAssertion = (idx: number) => {
+    setExpandedAssertions(prev => {
+      const next = new Set(prev);
+      if (next.has(idx)) {
+        next.delete(idx);
+      } else {
+        next.add(idx);
+      }
+      return next;
+    });
+  };
+
   if (!testDetail && !loading) return null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
         <DialogHeader className="flex-shrink-0">
-          <DialogTitle className="flex items-center gap-2">
-            {testDetail && getStatusIcon(testDetail.status)}
-            <span className="truncate">{testDetail?.name || testDetail?.test_id}</span>
-          </DialogTitle>
+          <div className="flex items-center justify-between">
+            <DialogTitle className="flex items-center gap-2">
+              {testDetail && getStatusIcon(testDetail.status)}
+              <span className="truncate">{testDetail?.name || testDetail?.test_id}</span>
+            </DialogTitle>
+            {suiteId && testDetail && onRerunTest && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleRerun}
+                disabled={rerunning}
+                className="ml-4"
+              >
+                {rerunning ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                ) : (
+                  <Play className="h-4 w-4 mr-1" />
+                )}
+                Rerun
+              </Button>
+            )}
+          </div>
         </DialogHeader>
 
         {loading ? (
@@ -515,49 +585,71 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetai
                     Assertions ({testDetail.assertions.length})
                   </h4>
                   <div className="space-y-2">
-                    {testDetail.assertions.map((assertion, idx) => (
-                      <div
-                        key={assertion.id || idx}
-                        className={cn(
-                          "rounded-md border p-3",
-                          assertion.passed
-                            ? "border-success/30 bg-success/5"
-                            : "border-destructive/30 bg-destructive/5"
-                        )}
-                      >
-                        <div className="flex items-start gap-2">
-                          {assertion.passed ? (
-                            <CheckCircle className="h-4 w-4 text-success mt-0.5" />
-                          ) : (
-                            <XCircle className="h-4 w-4 text-destructive mt-0.5" />
+                    {testDetail.assertions.map((assertion, idx) => {
+                      const isExpanded = expandedAssertions.has(idx);
+                      const hasDetails = assertion.actual_value || assertion.expected_value;
+
+                      return (
+                        <div
+                          key={assertion.id || idx}
+                          className={cn(
+                            "rounded-md border",
+                            assertion.passed
+                              ? "border-success/30 bg-success/5"
+                              : "border-destructive/30 bg-destructive/5"
                           )}
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-mono">{assertion.expression}</p>
-                            {assertion.message && (
-                              <p className="text-xs text-muted-foreground mt-1">
-                                {assertion.message}
-                              </p>
+                        >
+                          <div
+                            className={cn(
+                              "flex items-center gap-2 p-3",
+                              hasDetails && "cursor-pointer hover:bg-muted/30"
                             )}
-                            {!assertion.passed && (
-                              <div className="mt-2 text-xs">
+                            onClick={() => hasDetails && toggleAssertion(idx)}
+                          >
+                            {hasDetails && (
+                              isExpanded ? (
+                                <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                              ) : (
+                                <ChevronRight className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                              )
+                            )}
+                            {assertion.passed ? (
+                              <CheckCircle className="h-4 w-4 text-success flex-shrink-0" />
+                            ) : (
+                              <XCircle className="h-4 w-4 text-destructive flex-shrink-0" />
+                            )}
+                            <span className="text-sm">
+                              {assertion.message || assertion.expression}
+                            </span>
+                          </div>
+                          {isExpanded && hasDetails && (
+                            <div className="px-3 pb-3 pt-0 border-t border-border/50">
+                              <div className="mt-2 text-xs font-mono space-y-1">
+                                <p className="text-muted-foreground">
+                                  <span className="text-foreground/70">Expression:</span>{" "}
+                                  <code className="bg-muted px-1 py-0.5 rounded">{assertion.expression}</code>
+                                </p>
                                 {assertion.expected_value && (
-                                  <p>
-                                    <span className="text-muted-foreground">Expected: </span>
-                                    <span className="font-mono text-success">{assertion.expected_value}</span>
+                                  <p className="text-muted-foreground">
+                                    <span className="text-foreground/70">Expected:</span>{" "}
+                                    <code className="bg-muted px-1 py-0.5 rounded">{assertion.expected_value}</code>
                                   </p>
                                 )}
                                 {assertion.actual_value && (
-                                  <p>
-                                    <span className="text-muted-foreground">Actual: </span>
-                                    <span className="font-mono text-destructive">{assertion.actual_value}</span>
+                                  <p className="text-muted-foreground">
+                                    <span className="text-foreground/70">Actual:</span>{" "}
+                                    <code className={cn(
+                                      "px-1 py-0.5 rounded",
+                                      assertion.passed ? "bg-success/20" : "bg-destructive/20"
+                                    )}>{assertion.actual_value}</code>
                                   </p>
                                 )}
                               </div>
-                            )}
-                          </div>
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -582,6 +674,7 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetai
 // ============================================================================
 
 export function LiveFeed() {
+  const router = useRouter();
   const { events, connected, currentRunId } = useLiveEvents({ maxEvents: 500 });
   const [run, setRun] = useState<RunExtended | null>(null);
   const [testTree, setTestTree] = useState<RunTestTreeResponse | null>(null);
@@ -725,6 +818,18 @@ export function LiveFeed() {
       setCancelling(false);
     }
   }, [displayedRunId]);
+
+  // Handle rerun test
+  const handleRerunTest = useCallback(async (testId: string) => {
+    if (!run?.suite_id) return;
+    try {
+      await runTests(run.suite_id, { tc: testId });
+      // New run will be picked up by SSE events automatically
+      router.push("/live");
+    } catch (err) {
+      console.error("Failed to rerun test:", err);
+    }
+  }, [run?.suite_id, router]);
 
   // Calculate stats
   const stats = useMemo(() => {
@@ -890,7 +995,9 @@ export function LiveFeed() {
               expandedIds={expandedIds}
               onToggle={toggleExpanded}
               onTestClick={handleTestClick}
+              onRerunTest={handleRerunTest}
               filter={statusFilter}
+              suiteId={run.suite_id}
             />
           )}
         </>
@@ -919,6 +1026,8 @@ export function LiveFeed() {
         }}
         testDetail={testDetail}
         loading={testDetailLoading}
+        suiteId={run?.suite_id}
+        onRerunTest={handleRerunTest}
       />
     </div>
   );

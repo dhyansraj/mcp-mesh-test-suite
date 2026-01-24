@@ -47,12 +47,12 @@ test:
       echo "Source: $SOURCE_ABS"
       echo "Output: $OUTPUT_ABS"
 
-      echo "Building Python wheel inside container..."
+      echo "Building Python wheel inside container (clean build)..."
       docker run --rm \
-        -v "$SOURCE_ABS:/src/mcp-mesh:ro" \
+        -v "$SOURCE_ABS:/src-host:ro" \
         -v "$OUTPUT_ABS:/out" \
         ${config.build.image} \
-        bash -c "cd /src/mcp-mesh/src/runtime/python && pip wheel . --no-deps -w /out/wheels"
+        bash -c "cp -r /src-host /src/mcp-mesh && cd /src/mcp-mesh/src/runtime/python && pip wheel . --no-deps -w /out/wheels"
 
       echo "Python wheel build complete"
     capture: build_output

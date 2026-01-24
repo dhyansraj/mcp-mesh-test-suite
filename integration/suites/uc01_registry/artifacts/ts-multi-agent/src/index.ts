@@ -15,7 +15,7 @@ const server = new FastMCP({
 
 const agent = mesh(server, {
   name: "ts-multi-agent",
-  port: 9003,
+  httpPort: 9003,
 });
 
 // ===== TOOLS =====

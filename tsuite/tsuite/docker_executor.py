@@ -274,10 +274,16 @@ class DockerExecutor:
     def _build_test_command(self, test: TestCase) -> list[str]:
         """Build the command to run inside the container."""
         # We run a shell script that:
-        # 1. Installs required Python packages
-        # 2. Runs the test
+        # 1. Installs jq (for jq-based assertions)
+        # 2. Installs required Python packages
+        # 3. Runs the test
         script = f'''
 set -e
+
+# Install jq if not present (for jq-based assertions)
+if ! command -v jq &> /dev/null; then
+    apt-get update -qq && apt-get install -y -qq jq 2>/dev/null || true
+fi
 
 # Install required packages
 pip install -q pyyaml requests jsonpath-ng 2>/dev/null

@@ -106,9 +106,21 @@ class StepExecutor:
         # Update context with result
         self.context.last = result
 
-        # Handle capture
-        if "capture" in step and result.success:
-            self.context.captured[step["capture"]] = result.stdout
+        # Handle capture - store both stdout (for backward compat) and full result
+        if "capture" in step:
+            capture_name = step["capture"]
+            # Always store full step result for ${steps.<name>.exit_code} etc.
+            self.context.steps[capture_name] = {
+                "exit_code": result.exit_code,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "success": result.success,
+                "duration": result.duration,
+                "error": result.error,
+            }
+            # Store stdout in captured for backward compatibility
+            if result.success:
+                self.context.captured[capture_name] = result.stdout
 
         # Handle state updates
         if "state" in step and result.success:
@@ -174,6 +186,7 @@ class StepExecutor:
             # Update routine context with captured values
             routine_context["captured"] = self.context.captured
             routine_context["state"] = self.context.state
+            routine_context["steps"] = self.context.steps
             routine_context["last"] = {
                 "exit_code": result.exit_code,
                 "stdout": result.stdout,
@@ -188,6 +201,7 @@ class StepExecutor:
             "config": runtime.get_config(),
             "state": self.context.state,
             "captured": self.context.captured,
+            "steps": self.context.steps,  # Step results by capture name
             "last": {
                 "exit_code": self.context.last.exit_code,
                 "stdout": self.context.last.stdout,
@@ -352,13 +366,15 @@ class TestExecutor:
                 expr = assertion.get("expr", "")
                 message = assertion.get("message", expr)
 
-                passed, details = evaluator.evaluate(expr)
+                passed, details, values = evaluator.evaluate(expr)
                 assertion_results.append({
                     "index": i,
                     "expr": expr,
                     "message": message,
                     "passed": passed,
                     "details": details,
+                    "expected_value": values.get("expected_value"),
+                    "actual_value": values.get("actual_value"),
                 })
 
                 if passed:

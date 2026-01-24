@@ -469,6 +469,7 @@ def create_app() -> Flask:
             duration_ms: int (optional)
             error_message: str (optional)
             steps: list (optional) - Step results
+            assertions: list (optional) - Assertion results
             skip_reason: str (optional)
         """
         run = repo.get_run(run_id)
@@ -503,6 +504,20 @@ def create_app() -> Flask:
 
         if not test:
             return jsonify({"error": f"Test not found: {test_id}"}), 404
+
+        # Store assertion results if provided
+        assertions = data.get("assertions")
+        if assertions and test.id:
+            for assertion in assertions:
+                repo.create_assertion_result(
+                    test_result_id=test.id,
+                    assertion_index=assertion.get("index", 0),
+                    expression=assertion.get("expr", ""),
+                    message=assertion.get("message"),
+                    passed=assertion.get("passed", False),
+                    actual_value=assertion.get("actual_value"),
+                    expected_value=assertion.get("expected_value"),
+                )
 
         # Emit SSE event
         if status == TestStatus.RUNNING:

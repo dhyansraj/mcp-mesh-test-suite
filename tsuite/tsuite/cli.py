@@ -4,10 +4,13 @@ Command-line interface for tsuite.
 Usage:
     tsuite --all                    # Run all tests (local mode)
     tsuite --all --docker           # Run all tests in Docker containers
-    tsuite --uc uc01_scaffolding    # Run all tests in use case
-    tsuite --tc uc01_scaffolding/tc01_python_agent  # Run specific test
+    tsuite --uc uc01_scaffolding    # Run all tests in a use case folder
+    tsuite --tc uc01_scaffolding/tc01_python_agent  # Run specific test (uc_folder/tc_folder)
+    tsuite --tc uc01/tc01 --tc uc02/tc03            # Run multiple specific tests
     tsuite --dry-run --all          # List tests without running
     tsuite --history                # Show recent runs
+
+Note: Test IDs use the format <uc_folder>/<tc_folder> (e.g., uc05_meshctl/tc05_status_healthy_resolution)
 """
 
 import sys
@@ -568,8 +571,8 @@ def generate_comparison(
 
 @click.command()
 @click.option("--all", "run_all", is_flag=True, help="Run all tests")
-@click.option("--uc", multiple=True, help="Run tests in specific use case(s)")
-@click.option("--tc", multiple=True, help="Run specific test case(s)")
+@click.option("--uc", multiple=True, help="Run all tests in use case folder(s) (e.g., --uc uc01_scaffolding)")
+@click.option("--tc", multiple=True, help="Run specific test(s) using uc_folder/tc_folder format (e.g., --tc uc05_meshctl/tc05_status)")
 @click.option("--tag", multiple=True, help="Filter by tag(s)")
 @click.option("--pattern", help="Filter by glob pattern")
 @click.option("--dry-run", is_flag=True, help="List tests without running")
@@ -709,6 +712,10 @@ def main(
     else:
         if not run_all and not uc and not tc:
             console.print("[yellow]No tests selected. Use --all, --uc, or --tc[/yellow]")
+            console.print("[dim]Examples:[/dim]")
+            console.print("[dim]  tsuite --all                           # Run all tests[/dim]")
+            console.print("[dim]  tsuite --uc uc01_scaffolding           # Run all tests in use case[/dim]")
+            console.print("[dim]  tsuite --tc uc05_meshctl/tc05_status   # Run specific test (uc_folder/tc_folder)[/dim]")
             sys.exit(0)
 
         tests = discovery.filter_tests(
@@ -730,6 +737,8 @@ def main(
 
     if not tests:
         console.print("[yellow]No tests match the criteria[/yellow]")
+        console.print("[dim]Tip: Use --dry-run --all to list available tests[/dim]")
+        console.print("[dim]Test IDs use format: uc_folder/tc_folder (e.g., uc05_meshctl/tc05_status_healthy_resolution)[/dim]")
         sys.exit(0)
 
     # Dry run: just list tests
@@ -917,12 +926,13 @@ def run_local_mode(
 
             progress.update(task, description=f"[{i+1}/{len(tests)}] {test.id}")
 
-            # Mark test as running in database (updates run counters)
+            # Mark test as running via API (updates run counters)
             if current_run_id:
-                repo.update_test_status(
+                update_test_status_via_api(
+                    server_url,
                     current_run_id,
                     test.id,
-                    status=TestStatus.RUNNING,
+                    status="running",
                 )
 
             # Emit SSE test_started event
@@ -932,10 +942,11 @@ def run_local_mode(
             result = executor.execute(test)
             results.append(result)
 
-            # Update test result in database (updates run counters)
+            # Update test result via API (updates run counters)
             if current_run_id:
-                status = TestStatus.PASSED if result.passed else TestStatus.FAILED
-                repo.update_test_status(
+                status = "passed" if result.passed else "failed"
+                update_test_status_via_api(
+                    server_url,
                     current_run_id,
                     test.id,
                     status=status,
@@ -1041,6 +1052,9 @@ def run_docker_mode(
         run_id=run_id,
     )
 
+    # API URL for status updates (use host URL, not container URL)
+    host_api_url = api_url or "http://localhost:9999"
+
     # Helper function to execute a single test (for parallel execution)
     def execute_single_test(test):
         """
@@ -1052,12 +1066,13 @@ def run_docker_mode(
         test_start = datetime.now()
         crashed = False
 
-        # Mark test as running in database (updates run counters)
+        # Mark test as running via API (updates run counters)
         if current_run_id:
-            repo.update_test_status(
+            update_test_status_via_api(
+                host_api_url,
                 current_run_id,
                 test.id,
-                status=TestStatus.RUNNING,
+                status="running",
             )
 
         # Emit SSE test_started event
@@ -1107,15 +1122,16 @@ def run_docker_mode(
             assertion_results=[],
         )
 
-        # Update test result in database (updates run counters)
+        # Update test result via API (updates run counters)
         if current_run_id:
             if crashed:
-                status = TestStatus.CRASHED
+                status = "crashed"
             elif result.passed:
-                status = TestStatus.PASSED
+                status = "passed"
             else:
-                status = TestStatus.FAILED
-            repo.update_test_status(
+                status = "failed"
+            update_test_status_via_api(
+                host_api_url,
                 current_run_id,
                 test.id,
                 status=status,
@@ -1125,18 +1141,10 @@ def run_docker_mode(
 
         # Emit SSE test_completed event
         if current_run_id:
-            # Determine correct status for SSE emission
-            if result.passed:
-                sse_status = "passed"
-            elif crashed:
-                sse_status = "crashed"
-            else:
-                sse_status = "failed"
-
             sse_manager.emit_test_completed(
                 run_id=current_run_id,
                 test_id=test.id,
-                status=sse_status,
+                status=status if current_run_id else ("passed" if result.passed else "failed"),
                 duration_ms=int(result.duration * 1000),
                 passed=result.steps_passed,
                 failed=result.steps_failed,
@@ -1147,9 +1155,6 @@ def run_docker_mode(
     # Execute tests with worker pool
     stop_requested = False
     cancel_requested = False
-
-    # API URL for cancellation checks (use host URL, not container URL)
-    host_api_url = api_url or "http://localhost:9999"
 
     with Progress(
         SpinnerColumn(),

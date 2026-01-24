@@ -53,7 +53,7 @@ test:
       IMAGE_NAME="${config.build.image}"
       echo "Building image: $IMAGE_NAME"
 
-      docker build -t $IMAGE_NAME -f "${artifacts_path}/Dockerfile" "${artifacts_path}"
+      docker build --no-cache -t $IMAGE_NAME -f "${artifacts_path}/Dockerfile" "${artifacts_path}"
 
       echo "Build complete: $IMAGE_NAME"
     capture: build_output

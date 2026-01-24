@@ -12,7 +12,7 @@ const server = new FastMCP({
 
 const agent = mesh(server, {
   name: "ts-accurate-provider",
-  port: 9041,
+  httpPort: 9041,
 });
 
 agent.addTool({

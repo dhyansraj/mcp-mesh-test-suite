@@ -29,7 +29,7 @@ const agent = mesh(server, {
   name: "gemini-provider-ts",
   version: "1.0.0",
   description: "LLM Provider for gemini/gemini-2.0-flash",
-  port: 9000,
+  httpPort: 9000,
 });
 
 // ===== LLM PROVIDER =====

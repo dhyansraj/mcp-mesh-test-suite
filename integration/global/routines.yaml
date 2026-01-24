@@ -230,3 +230,83 @@ routines:
             fi
             echo "Found: $f"
           done
+
+  #############################################################################
+  # OBSERVABILITY
+  # Redis + Tempo for distributed tracing tests
+  #############################################################################
+
+  # Start observability services (Redis + Tempo)
+  start_observability:
+    description: "Start Redis and Tempo for distributed tracing"
+    steps:
+      - handler: shell
+        command: |
+          echo "Starting Redis..."
+          redis-server --daemonize yes --port 6379
+          sleep 1
+          redis-cli ping || { echo "ERROR: Redis not responding"; exit 1; }
+          echo "Redis started"
+
+          echo "Starting Tempo..."
+          mkdir -p /var/tempo
+          tempo -config.file=/etc/tempo/tempo.yaml > /var/log/tempo.log 2>&1 &
+
+          # Wait for Tempo to become ready (ingester needs ~15-20s to stabilize)
+          echo "Waiting for Tempo to become ready..."
+          for i in $(seq 1 30); do
+            if wget -q --spider http://localhost:3200/ready 2>/dev/null; then
+              echo "Tempo ready after ${i}s"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "ERROR: Tempo not ready after 30s"
+              cat /var/log/tempo.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          echo "Observability services started:"
+          echo "  Redis: localhost:6379"
+          echo "  Tempo OTLP gRPC: localhost:4317"
+          echo "  Tempo OTLP HTTP: localhost:4318"
+          echo "  Tempo API: localhost:3200"
+        capture: observability_start
+        timeout: 60
+
+  # Stop observability services
+  stop_observability:
+    description: "Stop Redis and Tempo services"
+    steps:
+      - handler: shell
+        command: |
+          echo "Stopping observability services..."
+          redis-cli shutdown 2>/dev/null || true
+          pkill -f tempo 2>/dev/null || true
+          echo "Observability services stopped"
+        capture: observability_stop
+        ignore_errors: true
+
+  # Check observability services status
+  check_observability:
+    description: "Check if Redis and Tempo are running"
+    steps:
+      - handler: shell
+        command: |
+          REDIS_OK=false
+          TEMPO_OK=false
+
+          redis-cli ping > /dev/null 2>&1 && REDIS_OK=true
+          wget -q --spider http://localhost:3200/ready 2>/dev/null && TEMPO_OK=true
+
+          echo "Redis: $REDIS_OK"
+          echo "Tempo: $TEMPO_OK"
+
+          if [ "$REDIS_OK" = "true" ] && [ "$TEMPO_OK" = "true" ]; then
+            echo "STATUS: OK"
+          else
+            echo "STATUS: INCOMPLETE"
+            exit 1
+          fi
+        capture: observability_status

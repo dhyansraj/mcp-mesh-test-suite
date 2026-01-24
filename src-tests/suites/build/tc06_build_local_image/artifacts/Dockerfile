@@ -12,9 +12,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     git \
     build-essential \
+    redis-server \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Tempo for distributed tracing (architecture-aware)
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -fsSL "https://github.com/grafana/tempo/releases/download/v2.7.1/tempo_2.7.1_linux_${ARCH}.deb" -o /tmp/tempo.deb && \
+    dpkg -i /tmp/tempo.deb && rm /tmp/tempo.deb
+
+# Copy Tempo configuration
+COPY tempo.yaml /etc/tempo/tempo.yaml
+RUN mkdir -p /var/tempo && chown -R root:root /var/tempo
 
 # Verify Node.js installation
 RUN node --version && npm --version

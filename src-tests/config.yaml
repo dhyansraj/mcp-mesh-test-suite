@@ -36,3 +36,8 @@ docker:
 defaults:
   timeout: 600  # 10 minutes per test
   parallel: 1   # Build sequentially
+packages:
+  mode: local
+  cli_version: __DELETE__
+  sdk_python_version: __DELETE__
+  sdk_typescript_version: __DELETE__

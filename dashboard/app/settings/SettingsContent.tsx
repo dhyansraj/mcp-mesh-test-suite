@@ -80,7 +80,11 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
   // Load directory listing when dialog opens or path changes
   useEffect(() => {
     if (isAddDialogOpen) {
-      loadDirectory(folderPath || undefined);
+      // Try to restore last browsed path from localStorage
+      const lastPath = typeof window !== 'undefined'
+        ? localStorage.getItem('tsuite-last-browse-path')
+        : null;
+      loadDirectory(lastPath || undefined);
     }
   }, [isAddDialogOpen]);
 
@@ -94,6 +98,10 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
       setDirectories(result.directories);
       setIsSuite(result.is_suite);
       setFolderPath(result.path);
+      // Remember last browsed path
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('tsuite-last-browse-path', result.path);
+      }
     } catch (err) {
       setBrowseError(err instanceof Error ? err.message : "Failed to load directory");
     } finally {
@@ -324,9 +332,9 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
             </div>
           ) : (
             <div className="flex flex-col gap-3">
-              {suites.map((suite) => (
+              {suites.map((suite, idx) => (
                 <Card
-                  key={suite.id}
+                  key={suite.id || `suite-${idx}`}
                   className="rounded-md bg-muted/30 hover:bg-muted/50 transition-colors"
                 >
                   <CardContent className="px-4 py-3">

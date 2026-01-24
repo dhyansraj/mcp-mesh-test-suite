@@ -12,7 +12,7 @@ const server = new FastMCP({
 
 const agent = mesh(server, {
   name: "ts-tag-consumer",
-  port: 9045,
+  httpPort: 9045,
 });
 
 // Tool that requires "api" tag

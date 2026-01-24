@@ -13,7 +13,7 @@ const server = new FastMCP({
 
 const agent = mesh(server, {
   name: "ts-simple-agent",
-  port: 9001,
+  httpPort: 9001,
 });
 
 agent.addTool({

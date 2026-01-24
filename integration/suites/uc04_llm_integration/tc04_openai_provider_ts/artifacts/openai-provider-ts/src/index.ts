@@ -29,7 +29,7 @@ const agent = mesh(server, {
   name: "openai-provider-ts",
   version: "1.0.0",
   description: "LLM Provider for openai/gpt-4o",
-  port: 9000,
+  httpPort: 9000,
 });
 
 // ===== LLM PROVIDER =====
