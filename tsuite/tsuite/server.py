@@ -1508,6 +1508,7 @@ def create_app() -> Flask:
         cmd = [
             str(venv_python),
             "-m", "tsuite.cli",
+            "run",  # CLI requires 'run' subcommand
             "--suite-path", suite.folder_path,
             "--api-url", api_url,
         ]
@@ -1615,6 +1616,7 @@ def create_app() -> Flask:
         cmd = [
             str(venv_python),
             "-m", "tsuite.cli",
+            "run",  # CLI requires 'run' subcommand
             "--suite-path", suite.folder_path,
             "--api-url", api_url,
         ]
