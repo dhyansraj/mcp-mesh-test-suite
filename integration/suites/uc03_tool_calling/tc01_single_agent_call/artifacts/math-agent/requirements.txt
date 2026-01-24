@@ -1,2 +1,0 @@
-# Math agent dependencies
-# mcp-mesh is installed in the workspace venv by setup routine

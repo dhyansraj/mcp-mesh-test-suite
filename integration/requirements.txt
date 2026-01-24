@@ -1,2 +1,0 @@
-# Install the tsuite framework (editable mode for development)
--e ../tsuite

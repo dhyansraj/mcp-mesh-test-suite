@@ -11,8 +11,9 @@ The server runs on the host and provides endpoints for:
 
 import threading
 import logging
-from flask import Flask, jsonify, request, Response
+from flask import Flask, jsonify, request, Response, send_from_directory
 import json
+from pathlib import Path
 
 from werkzeug.serving import make_server
 
@@ -1753,6 +1754,45 @@ def create_app() -> Flask:
             "directories": directories,
             "is_suite": is_suite,
         })
+
+    # =========================================================================
+    # Static Dashboard Serving
+    # Serves the pre-built Next.js static export bundled with the package.
+    # =========================================================================
+
+    # Get the dashboard static files directory (bundled with package)
+    dashboard_dir = Path(__file__).parent / "dashboard"
+
+    @app.route("/")
+    def serve_dashboard_index():
+        """Serve the dashboard index page."""
+        if not dashboard_dir.exists():
+            return jsonify({
+                "error": "Dashboard not installed",
+                "message": "Static dashboard files not found. Run 'npm run build' in dashboard/ and copy 'out/' to tsuite/tsuite/dashboard/"
+            }), 404
+        return send_from_directory(dashboard_dir, "index.html")
+
+    @app.route("/<path:path>")
+    def serve_dashboard_static(path):
+        """Serve dashboard static files or fallback to index.html for SPA routing."""
+        if not dashboard_dir.exists():
+            return jsonify({"error": "Dashboard not installed"}), 404
+
+        # Check if the requested file exists
+        file_path = dashboard_dir / path
+
+        # If it's a file, serve it directly
+        if file_path.is_file():
+            return send_from_directory(dashboard_dir, path)
+
+        # If it's a directory with index.html (Next.js static export pattern)
+        index_path = file_path / "index.html"
+        if index_path.is_file():
+            return send_from_directory(file_path, "index.html")
+
+        # Fallback to main index.html for SPA client-side routing
+        return send_from_directory(dashboard_dir, "index.html")
 
     return app
 

@@ -1,14 +1,21 @@
 """
-Command-line interface for tsuite.
+Command-line interface for tsuite (mcp-mesh-tsuite).
 
 Usage:
-    tsuite --all                    # Run all tests (local mode)
-    tsuite --all --docker           # Run all tests in Docker containers
-    tsuite --uc uc01_scaffolding    # Run all tests in a use case folder
-    tsuite --tc uc01_scaffolding/tc01_python_agent  # Run specific test (uc_folder/tc_folder)
-    tsuite --tc uc01/tc01 --tc uc02/tc03            # Run multiple specific tests
-    tsuite --dry-run --all          # List tests without running
-    tsuite --history                # Show recent runs
+    tsuite run --all                    # Run all tests (local mode)
+    tsuite run --all --docker           # Run all tests in Docker containers
+    tsuite run --uc uc01_scaffolding    # Run all tests in a use case folder
+    tsuite run --tc uc01/tc01           # Run specific test (uc_folder/tc_folder)
+    tsuite run --dry-run --all          # List tests without running
+
+    tsuite api                          # Start API server with dashboard
+    tsuite api --port 8080              # Start on custom port
+
+    tsuite clear                        # Clear all test data
+    tsuite clear --run-id <id>          # Clear specific run
+
+    tsuite man --list                   # List available topics
+    tsuite man quickstart               # View man page
 
 Note: Test IDs use the format <uc_folder>/<tc_folder> (e.g., uc05_meshctl/tc05_status_healthy_resolution)
 """
@@ -569,7 +576,20 @@ def generate_comparison(
         console.print(f"[red]Error: {e}[/red]")
 
 
-@click.command()
+@click.group(invoke_without_command=True)
+@click.pass_context
+@click.version_option(version="0.1.0", prog_name="mcp-mesh-tsuite")
+def main(ctx):
+    """
+    mcp-mesh-tsuite - YAML-driven integration test framework.
+
+    Run 'tsuite <command> --help' for command-specific help.
+    """
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+
+
+@main.command("run")
 @click.option("--all", "run_all", is_flag=True, help="Run all tests")
 @click.option("--uc", multiple=True, help="Run all tests in use case folder(s) (e.g., --uc uc01_scaffolding)")
 @click.option("--tc", multiple=True, help="Run specific test(s) using uc_folder/tc_folder format (e.g., --tc uc05_meshctl/tc05_status)")
@@ -592,7 +612,7 @@ def generate_comparison(
 @click.option("--mock-llm", is_flag=True, help="Use mock LLM responses (no API calls)")
 @click.option("--skip-tag", multiple=True, help="Skip tests with specific tag(s)")
 @click.option("--api-url", default="http://localhost:9999", help="API server URL for SSE event forwarding")
-def main(
+def run_cmd(
     run_all: bool,
     uc: tuple,
     tc: tuple,
@@ -616,7 +636,15 @@ def main(
     skip_tag: tuple,
     api_url: str,
 ):
-    """Run integration tests."""
+    """Run integration tests.
+
+    Examples:
+        tsuite run --all                     Run all tests
+        tsuite run --all --docker            Run in Docker containers
+        tsuite run --uc uc01_users           Run use case
+        tsuite run --tc uc01/tc01            Run specific test
+        tsuite run --dry-run --all           List tests without running
+    """
     global _current_run_id
 
     # Set mock LLM mode
@@ -1297,6 +1325,498 @@ def print_docker_result(result: dict, verbose: bool = False):
 
         if result.get("stderr") and verbose:
             console.print(f"  [dim]stderr: {result['stderr'][:500]}[/dim]")
+
+
+# =============================================================================
+# API Command
+# =============================================================================
+
+# Default home directory for tsuite
+TSUITE_HOME = Path.home() / ".tsuite"
+
+
+def get_pid_file() -> Path:
+    """Get path to PID file."""
+    return TSUITE_HOME / "server.pid"
+
+
+def get_log_file() -> Path:
+    """Get path to log file."""
+    return TSUITE_HOME / "server.log"
+
+
+def is_server_running() -> tuple[bool, int | None]:
+    """Check if server is running. Returns (is_running, pid)."""
+    pid_file = get_pid_file()
+    if not pid_file.exists():
+        return False, None
+
+    try:
+        pid = int(pid_file.read_text().strip())
+        # Check if process exists
+        import os
+        os.kill(pid, 0)  # Signal 0 just checks if process exists
+        return True, pid
+    except (ValueError, ProcessLookupError, PermissionError):
+        # PID file exists but process is dead - clean up
+        pid_file.unlink(missing_ok=True)
+        return False, None
+
+
+@main.command("api")
+@click.option("--port", default=9999, help="Port to run the server on (default: 9999)")
+@click.option("--suites", help="Comma-separated list of suite paths to sync on startup")
+@click.option("--detach", "-d", is_flag=True, help="Run in background (detached mode)")
+def api_cmd(port: int, suites: str | None, detach: bool):
+    """Start the API server with web dashboard.
+
+    The server provides:
+    - REST API for test management
+    - Web dashboard at http://localhost:<port>
+    - Real-time updates via SSE
+
+    Examples:
+        tsuite api                     Start on default port 9999
+        tsuite api --port 8080         Start on custom port
+        tsuite api --detach            Run in background
+        tsuite api -d --port 8080      Background on custom port
+        tsuite api --suites ./my-suite Sync suite on startup
+    """
+    # Ensure home directory exists
+    TSUITE_HOME.mkdir(parents=True, exist_ok=True)
+
+    # Check if already running
+    running, existing_pid = is_server_running()
+    if running:
+        console.print(f"[yellow]Server already running (PID: {existing_pid})[/yellow]")
+        console.print(f"[dim]Use 'tsuite stop' to stop it first[/dim]")
+        sys.exit(1)
+
+    if detach:
+        # Start in background
+        import os
+
+        log_file = get_log_file()
+        pid_file = get_pid_file()
+
+        # Build command
+        cmd = [sys.executable, "-m", "tsuite.server", "--port", str(port)]
+        if suites:
+            cmd.extend(["--suites", suites])
+
+        # Open log file for output
+        log_fd = open(log_file, "a")
+        log_fd.write(f"\n{'='*60}\n")
+        log_fd.write(f"Server started at {datetime.now().isoformat()}\n")
+        log_fd.write(f"Port: {port}\n")
+        log_fd.write(f"{'='*60}\n")
+        log_fd.flush()
+
+        # Start detached process
+        process = subprocess.Popen(
+            cmd,
+            stdout=log_fd,
+            stderr=log_fd,
+            start_new_session=True,  # Detach from terminal
+        )
+
+        # Write PID file
+        pid_file.write_text(str(process.pid))
+
+        console.print(f"[bold green]API server started in background[/bold green]")
+        console.print(f"[dim]PID: {process.pid}[/dim]")
+        console.print(f"[dim]Dashboard: http://localhost:{port}[/dim]")
+        console.print(f"[dim]Logs: {log_file}[/dim]")
+        console.print(f"[dim]Use 'tsuite stop' to stop the server[/dim]")
+        return
+
+    # Foreground mode
+    from .server import create_app
+    from werkzeug.serving import make_server
+
+    # Initialize database
+    db.init_db()
+
+    # Sync suites if provided
+    if suites:
+        for suite_path in suites.split(","):
+            suite_dir = Path(suite_path.strip()).resolve()
+            config_file = suite_dir / "config.yaml"
+            if suite_dir.exists() and config_file.exists():
+                config = load_config(config_file)
+                if config:
+                    discovery = TestDiscovery(suite_dir)
+                    test_count = len(discovery.discover_tests())
+                    sync_suite_to_db(suite_dir, config, test_count)
+                    console.print(f"[dim]Synced suite: {suite_dir.name} ({test_count} tests)[/dim]")
+
+    # Write PID file for foreground mode too (so stop command works)
+    import os
+    pid_file = get_pid_file()
+    pid_file.write_text(str(os.getpid()))
+
+    # Start server
+    console.print(f"[bold green]Starting API server on http://localhost:{port}[/bold green]")
+    console.print(f"[dim]Dashboard: http://localhost:{port}[/dim]")
+    console.print(f"[dim]API: http://localhost:{port}/api[/dim]")
+    console.print("[dim]Press Ctrl+C to stop[/dim]\n")
+
+    app = create_app()
+    server = make_server("0.0.0.0", port, app, threaded=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        console.print("\n[dim]Shutting down...[/dim]")
+        server.shutdown()
+    finally:
+        # Clean up PID file
+        pid_file.unlink(missing_ok=True)
+
+
+# =============================================================================
+# Stop Command
+# =============================================================================
+
+@main.command("stop")
+def stop_cmd():
+    """Stop the running API server.
+
+    Gracefully stops the server that was started with 'tsuite api'.
+
+    Examples:
+        tsuite stop                    Stop the running server
+    """
+    import signal
+
+    running, pid = is_server_running()
+
+    if not running:
+        console.print("[yellow]No server running[/yellow]")
+        return
+
+    console.print(f"[dim]Stopping server (PID: {pid})...[/dim]")
+
+    try:
+        import os
+        os.kill(pid, signal.SIGTERM)
+
+        # Wait for process to terminate (up to 5 seconds)
+        import time
+        for _ in range(50):
+            try:
+                os.kill(pid, 0)
+                time.sleep(0.1)
+            except ProcessLookupError:
+                break
+
+        # Clean up PID file
+        get_pid_file().unlink(missing_ok=True)
+        console.print("[green]Server stopped[/green]")
+
+    except ProcessLookupError:
+        console.print("[green]Server already stopped[/green]")
+        get_pid_file().unlink(missing_ok=True)
+    except PermissionError:
+        console.print(f"[red]Permission denied. Try: kill {pid}[/red]")
+
+
+# =============================================================================
+# Clear Command
+# =============================================================================
+
+@main.command("clear")
+@click.option("--run-id", help="Clear specific run by ID")
+@click.option("--all", "clear_all", is_flag=True, help="Clear all test data")
+@click.option("--force", "-f", is_flag=True, help="Skip confirmation prompt")
+@click.option("--db-path", type=click.Path(), help="Path to database")
+def clear_cmd(run_id: str | None, clear_all: bool, force: bool, db_path: str | None):
+    """Clear test data from the database.
+
+    Examples:
+        tsuite clear --all              Clear all test data
+        tsuite clear --run-id abc123    Clear specific run
+        tsuite clear --all --force      Clear without confirmation
+    """
+    if db_path:
+        db.set_db_path(Path(db_path))
+    db.init_db()
+
+    if run_id:
+        # Clear specific run
+        run = repo.get_run(run_id)
+        if not run:
+            # Try partial match
+            runs = repo.list_runs(limit=100)
+            matching = [r for r in runs if r.run_id.startswith(run_id)]
+            if not matching:
+                console.print(f"[red]Run not found: {run_id}[/red]")
+                sys.exit(1)
+            if len(matching) > 1:
+                console.print(f"[yellow]Multiple runs match '{run_id}':[/yellow]")
+                for r in matching[:5]:
+                    console.print(f"  {r.run_id}")
+                sys.exit(1)
+            run_id = matching[0].run_id
+
+        if not force:
+            click.confirm(f"Delete run {run_id[:12]}... and all its test results?", abort=True)
+
+        repo.delete_run(run_id)
+        console.print(f"[green]Deleted run: {run_id[:12]}...[/green]")
+
+    elif clear_all:
+        # Clear everything
+        if not force:
+            click.confirm("Delete ALL test runs and results? This cannot be undone.", abort=True)
+
+        runs = repo.list_runs(limit=1000)
+        count = len(runs)
+        for run in runs:
+            repo.delete_run(run.run_id)
+
+        console.print(f"[green]Deleted {count} run(s)[/green]")
+
+    else:
+        console.print("[yellow]Specify --run-id or --all[/yellow]")
+        console.print("  tsuite clear --run-id <id>   Clear specific run")
+        console.print("  tsuite clear --all           Clear all data")
+
+
+# =============================================================================
+# Man Command
+# =============================================================================
+
+@main.command("man")
+@click.argument("topic", required=False)
+@click.option("--list", "list_topics", is_flag=True, help="List available topics")
+def man_cmd(topic: str | None, list_topics: bool):
+    """View documentation for tsuite.
+
+    Examples:
+        tsuite man --list           List all topics
+        tsuite man quickstart       View quickstart guide
+        tsuite man handlers         View handlers documentation
+    """
+    from .man import get_page, list_pages
+    from .man.renderer import render_page, render_list, render_not_found
+
+    if list_topics or topic is None:
+        render_list(console)
+        return
+
+    page = get_page(topic)
+    if page is None:
+        render_not_found(topic, console)
+        sys.exit(1)
+
+    render_page(page, console)
+
+
+# =============================================================================
+# Scaffold Command
+# =============================================================================
+
+@main.command("scaffold")
+@click.option("--suite", "suite_path", required=True, type=click.Path(exists=True),
+              help="Path to test suite (must have config.yaml)")
+@click.option("--uc", "uc_name", help="Use case name (e.g., uc01_tags). Interactive if not provided.")
+@click.option("--tc", "tc_name", help="Test case name (e.g., tc01_test). Interactive if not provided.")
+@click.option("--artifact-level", type=click.Choice(["tc", "uc"]), default=None,
+              help="Where to copy artifacts: tc (default) or uc level")
+@click.option("--name", "test_name", help="Test name (default: derived from tc)")
+@click.option("--no-interactive", is_flag=True, help="Skip prompts, use defaults")
+@click.option("--dry-run", is_flag=True, help="Preview without creating files")
+@click.option("--force", is_flag=True, help="Overwrite existing TC")
+@click.argument("agent_dirs", nargs=-1, required=True, type=click.Path(exists=True))
+def scaffold_cmd(
+    suite_path: str,
+    uc_name: str | None,
+    tc_name: str | None,
+    artifact_level: str | None,
+    test_name: str | None,
+    no_interactive: bool,
+    dry_run: bool,
+    force: bool,
+    agent_dirs: tuple,
+):
+    """Generate test case from agent directories.
+
+    Copies agent source directories to suite artifacts and generates test.yaml
+    with setup, agent startup, and placeholder test steps.
+
+    Examples:
+        tsuite scaffold --suite ./my-suite --uc uc01_tags --tc tc01_test ./agent1 ./agent2
+
+        tsuite scaffold --suite ./my-suite --uc uc01_tags --tc tc01_test \\
+            --artifact-level uc --dry-run ./agent1
+
+        tsuite scaffold --suite ./my-suite --uc uc01_tags --tc tc01_test \\
+            --force --no-interactive ./agent1 ./agent2
+
+        # Interactive mode (prompts for UC, TC, artifact level):
+        tsuite scaffold --suite ./my-suite ./agent1 ./agent2
+    """
+    from .scaffold import (
+        ScaffoldConfig,
+        ScaffoldError,
+        validate_suite,
+        validate_agent_dir,
+        validate_no_parent_dirs,
+        run_scaffold,
+    )
+
+    suite = Path(suite_path).resolve()
+
+    try:
+        # Validate suite
+        validate_suite(suite)
+
+        # Validate and detect agents
+        agent_paths = [Path(d).resolve() for d in agent_dirs]
+        validate_no_parent_dirs(agent_paths)
+
+        agents = []
+        for agent_path in agent_paths:
+            agent_info = validate_agent_dir(agent_path)
+            agents.append(agent_info)
+
+        # Show detected agents
+        console.print(f"\n[bold]Suite:[/bold] {suite}")
+        console.print(f"[bold]Detected agents:[/bold]")
+        for agent in agents:
+            type_label = "TypeScript" if agent.agent_type == "typescript" else "Python"
+            console.print(f"  - {agent.name} ({type_label})")
+        console.print()
+
+        # Interactive mode: prompt for UC if not provided
+        if uc_name is None:
+            if no_interactive:
+                console.print("[red]Error: --uc is required in non-interactive mode[/red]")
+                sys.exit(1)
+            uc_name = _interactive_uc_selection(suite)
+
+        # Interactive mode: prompt for TC if not provided
+        if tc_name is None:
+            if no_interactive:
+                console.print("[red]Error: --tc is required in non-interactive mode[/red]")
+                sys.exit(1)
+            tc_name = _interactive_tc_prompt(suite, uc_name)
+
+        # Interactive mode: prompt for artifact level if not provided
+        if artifact_level is None:
+            if no_interactive:
+                artifact_level = "tc"  # Default
+            else:
+                artifact_level = _interactive_artifact_level_prompt(suite, uc_name, tc_name)
+
+        # Confirmation prompt in interactive mode
+        if not no_interactive and not dry_run:
+            console.print(f"\n[bold]Summary:[/bold]")
+            console.print(f"  Use Case:       {uc_name}")
+            console.print(f"  Test Case:      {tc_name}")
+            console.print(f"  Artifact Level: {artifact_level}")
+            console.print(f"  Agents:         {', '.join(a.name for a in agents)}")
+            if not click.confirm("\nProceed?", default=True):
+                console.print("[yellow]Aborted.[/yellow]")
+                sys.exit(0)
+
+        # Create config
+        config = ScaffoldConfig(
+            suite_path=suite,
+            uc_name=uc_name,
+            tc_name=tc_name,
+            agents=agents,
+            artifact_level=artifact_level,
+            test_name=test_name,
+            dry_run=dry_run,
+            force=force,
+        )
+
+        # Run scaffold
+        run_scaffold(config)
+
+    except ScaffoldError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+def _interactive_uc_selection(suite: Path) -> str:
+    """Interactive UC selection/creation."""
+    suites_dir = suite / "suites"
+
+    # Find existing UCs
+    existing_ucs = []
+    if suites_dir.exists():
+        existing_ucs = sorted([
+            d.name for d in suites_dir.iterdir()
+            if d.is_dir() and d.name.startswith("uc")
+        ])
+
+    if existing_ucs:
+        console.print("[bold]Use Case:[/bold]")
+        for i, uc in enumerate(existing_ucs, 1):
+            console.print(f"  [{i}] {uc}")
+        console.print(f"  [{len(existing_ucs) + 1}] Create new UC")
+
+        while True:
+            choice = click.prompt("Select", type=int, default=len(existing_ucs) + 1)
+            if 1 <= choice <= len(existing_ucs):
+                return existing_ucs[choice - 1]
+            elif choice == len(existing_ucs) + 1:
+                break
+            else:
+                console.print("[red]Invalid choice[/red]")
+
+    # Create new UC
+    while True:
+        uc_name = click.prompt("New UC name (e.g., uc03_tags)")
+        if uc_name.startswith("uc") and "_" in uc_name:
+            return uc_name
+        console.print("[red]UC name should follow pattern: uc##_description[/red]")
+
+
+def _interactive_tc_prompt(suite: Path, uc_name: str) -> str:
+    """Interactive TC name prompt."""
+    uc_dir = suite / "suites" / uc_name
+
+    # Find existing TCs
+    existing_tcs = []
+    if uc_dir.exists():
+        existing_tcs = sorted([
+            d.name for d in uc_dir.iterdir()
+            if d.is_dir() and d.name.startswith("tc")
+        ])
+
+    if existing_tcs:
+        console.print(f"\n[bold]Existing TCs in {uc_name}:[/bold]")
+        for tc in existing_tcs:
+            console.print(f"  - {tc}")
+
+    while True:
+        tc_name = click.prompt("\nTest Case name (e.g., tc01_test)")
+        if tc_name.startswith("tc") and "_" in tc_name:
+            if tc_name in existing_tcs:
+                console.print(f"[yellow]Warning: {tc_name} already exists (use --force to overwrite)[/yellow]")
+            return tc_name
+        console.print("[red]TC name should follow pattern: tc##_description[/red]")
+
+
+def _interactive_artifact_level_prompt(suite: Path, uc_name: str, tc_name: str) -> str:
+    """Interactive artifact level prompt."""
+    tc_path = f"suites/{uc_name}/{tc_name}/artifacts/"
+    uc_path = f"suites/{uc_name}/artifacts/"
+
+    console.print(f"\n[bold]Artifact level:[/bold]")
+    console.print(f"  [1] TC level ({tc_path})")
+    console.print(f"  [2] UC level ({uc_path})")
+
+    while True:
+        choice = click.prompt("Select", type=int, default=1)
+        if choice == 1:
+            return "tc"
+        elif choice == 2:
+            return "uc"
+        console.print("[red]Invalid choice[/red]")
 
 
 if __name__ == "__main__":

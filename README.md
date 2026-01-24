@@ -1,110 +1,183 @@
-# MCP Mesh Test Suite
+# mcp-mesh-tsuite
 
-Integration test suite for [MCP Mesh](https://github.com/dhyansraj/mcp-mesh).
+YAML-driven integration test framework with container isolation and real-time monitoring.
 
-## Structure
+## Installation
 
+```bash
+pip install mcp-mesh-tsuite
 ```
-mcp-mesh-test-suite/
-├── tsuite/          # Test framework (Python package)
-├── dashboard/       # Web dashboard (Next.js)
-├── lib-tests/       # Library tests & Docker image builder
-└── integration/     # Integration test suites
-```
-
-## Components
-
-### tsuite
-
-The `tsuite` Python package provides the test framework for running integration tests. It supports:
-- YAML-based test definitions
-- Docker container execution
-- Test result database and reporting
-- Routines and reusable test patterns
-
-### dashboard
-
-Web dashboard for monitoring test runs and managing test suites:
-- Real-time test execution monitoring via SSE
-- Test result history and filtering
-- Test case editor with YAML preview
-
-### lib-tests
-
-Builds the `tsuite-mesh` Docker image with pre-installed MCP Mesh packages:
-- meshctl CLI
-- Python SDK (mcp-mesh)
-- Node.js for TypeScript agents
-
-### integration
-
-Integration test suites organized by use case:
-- `uc01_*` - Registry and scaffolding tests
-- `uc02_*` - Agent lifecycle and tools tests
-- `uc03_*` - Capabilities and tag matching tests
 
 ## Quick Start
 
 ```bash
-# 1. Setup (first time only)
-cd tsuite && python3.11 -m venv venv && source venv/bin/activate && pip install -r requirements.txt -e .
-cd ../dashboard && npm install
+# View the quickstart guide
+tsuite man quickstart
 
-# 2. Build the Docker image (lib-tests)
-./start.sh --cli --suite-path lib-tests
+# Start the dashboard (includes API server)
+tsuite api --port 9999
 
-# 3. Run integration tests
-./start.sh --cli --docker
+# Open http://localhost:9999 in your browser
 ```
 
-## Running the Suite
+## Commands
 
-Use `start.sh` to run CLI, API server, or dashboard:
+### Run Tests
 
 ```bash
-./start.sh --api          # Start API server (http://localhost:9999)
-./start.sh --ui           # Start dashboard UI (http://localhost:3000)
-./start.sh --cli          # Run CLI with default suite (integration/suites)
-./start.sh --all          # Start API + UI in background, then wait
+# Run all tests in Docker mode
+tsuite run --suite ./my-suite --all --docker
+
+# Run specific use case
+tsuite run --suite ./my-suite --uc uc01_registry --docker
+
+# Run specific test case
+tsuite run --suite ./my-suite --tc uc01_registry/tc01_agent_registration --docker
+
+# Run tests matching tags
+tsuite run --suite ./my-suite --tag smoke --docker
+
+# Dry run (list tests without executing)
+tsuite run --suite ./my-suite --dry-run --all
 ```
 
-### CLI Options
+### Dashboard & API Server
 
 ```bash
-./start.sh --cli                              # Run all tests
-./start.sh --cli --uc uc01_registry           # Run specific use case
-./start.sh --cli --tc tc01_simple             # Run specific test case
-./start.sh --cli --docker                     # Run tests in Docker mode
-./start.sh --cli --standalone                 # Run tests without Docker
-./start.sh --cli --suite-path /path/to/suite  # Run specific suite
+# Start on default port (9999)
+tsuite api
+
+# Start on custom port
+tsuite api --port 8080
+
+# Start in background (detached)
+tsuite api --detach
+
+# Stop background server
+tsuite stop
 ```
 
-## Dashboard
+### Scaffold Test Cases
 
-The web dashboard provides real-time test monitoring and suite management.
+Generate test cases from agent directories:
 
 ```bash
-# Terminal 1: Start API server
-./start.sh --api
+# Interactive mode
+tsuite scaffold --suite ./my-suite ./path/to/agent1 ./path/to/agent2
 
-# Terminal 2: Start dashboard
-./start.sh --ui
+# Non-interactive mode
+tsuite scaffold --suite ./my-suite --uc uc01_tags --tc tc01_test ./agent1 ./agent2
+
+# Preview without creating files
+tsuite scaffold --suite ./my-suite --uc uc01_tags --tc tc01_test --dry-run ./agent1
 ```
 
-The dashboard will be available at http://localhost:3000
+### Documentation
 
-Add test suites via Settings → Add Suite in the dashboard UI.
+```bash
+# List available topics
+tsuite man --list
 
-## Configuration
+# View specific topic
+tsuite man quickstart
+tsuite man handlers
+tsuite man assertions
+tsuite man routines
+```
 
-Each component has a `config.yaml` for version configuration:
+### Clear Data
+
+```bash
+# Clear all test data
+tsuite clear --all
+
+# Clear specific run
+tsuite clear --run-id <run_id>
+```
+
+## Features
+
+- **YAML-based test definitions** - Tests as configuration, not code
+- **Container isolation** - Each test runs in a fresh Docker container
+- **Parallel execution** - Worker pool for concurrent test runs
+- **Web dashboard** - Real-time monitoring, history, and test editor
+- **Pluggable handlers** - shell, http, file, wait, pip-install, npm-install
+- **Expression language** - Flexible assertions with jq, JSONPath support
+- **Reusable routines** - Define once, use across tests
+- **Scaffold command** - Auto-generate test cases from agent directories
+
+## Test Suite Structure
+
+```
+my-suite/
+├── config.yaml              # Suite configuration
+├── global/
+│   └── routines.yaml        # Global reusable routines
+└── suites/
+    └── uc01_example/        # Use case folder
+        ├── routines.yaml    # UC-level routines (optional)
+        └── tc01_test/       # Test case folder
+            ├── test.yaml    # Test definition
+            └── artifacts/   # Test artifacts (agents, fixtures)
+```
+
+## Example Test
 
 ```yaml
-packages:
-  cli_version: "0.8.0-beta.8"
-  sdk_python_version: "0.8.0b8"
-  sdk_typescript_version: "0.8.0-beta.8"
+name: "Agent Registration Test"
+description: "Verify agent registers with mesh"
+tags: [smoke, registry]
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  - name: "Copy agent to workspace"
+    handler: shell
+    command: "cp -r /artifacts/my-agent /workspace/"
+
+  - name: "Start agent"
+    handler: shell
+    command: "meshctl start my-agent/main.py -d"
+    workdir: /workspace
+
+  - name: "Wait for registration"
+    handler: wait
+    seconds: 5
+
+  - name: "Verify agent registered"
+    handler: shell
+    command: "meshctl list"
+    capture: agent_list
+
+assertions:
+  - expr: "${captured.agent_list} contains 'my-agent'"
+    message: "Agent should be registered"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop || true"
+    workdir: /workspace
 ```
+
+## Documentation Topics
+
+Run `tsuite man <topic>` for detailed documentation:
+
+| Topic | Description |
+|-------|-------------|
+| quickstart | Getting started guide |
+| suites | Suite structure and config.yaml |
+| testcases | Test case structure and test.yaml |
+| handlers | Built-in handlers (shell, http, file, etc.) |
+| routines | Reusable test routines |
+| assertions | Assertion syntax and expressions |
+| variables | Variable interpolation syntax |
+| docker | Docker mode and container isolation |
+| api | API server and dashboard |
 
 ## License
 

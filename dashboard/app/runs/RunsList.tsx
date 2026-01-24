@@ -120,7 +120,7 @@ export function RunsList({ initialRuns }: RunsListProps) {
           </Card>
         ) : (
           filteredRuns.map((run) => (
-            <Link key={run.run_id} href={`/runs/${run.run_id}`}>
+            <Link key={run.run_id} href={`/runs?id=${run.run_id}`}>
               <Card className="border-border bg-card rounded-md transition-colors hover:bg-muted/30">
                 <CardContent className="flex items-center justify-between px-4 py-2.5">
                   <div className="flex items-center gap-3">

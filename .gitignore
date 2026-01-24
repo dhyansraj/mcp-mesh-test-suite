@@ -46,3 +46,5 @@ mcp-mesh/
 # Build outputs
 src-tests/out/
 /mcp-mesh
+PYPI_RELEASE_PLAN.org
+SCAFFOLD_PLAN.org
