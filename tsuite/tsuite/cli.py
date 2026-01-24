@@ -1525,61 +1525,62 @@ def stop_cmd():
 # =============================================================================
 
 @main.command("clear")
-@click.option("--run-id", help="Clear specific run by ID")
 @click.option("--all", "clear_all", is_flag=True, help="Clear all test data")
 @click.option("--force", "-f", is_flag=True, help="Skip confirmation prompt")
-@click.option("--db-path", type=click.Path(), help="Path to database")
-def clear_cmd(run_id: str | None, clear_all: bool, force: bool, db_path: str | None):
-    """Clear test data from the database.
+def clear_cmd(clear_all: bool, force: bool):
+    """Clear test data (database, logs, reports).
 
     Examples:
         tsuite clear --all              Clear all test data
-        tsuite clear --run-id abc123    Clear specific run
         tsuite clear --all --force      Clear without confirmation
     """
-    if db_path:
-        db.set_db_path(Path(db_path))
-    db.init_db()
+    import shutil
 
-    if run_id:
-        # Clear specific run
-        run = repo.get_run(run_id)
-        if not run:
-            # Try partial match
-            runs = repo.list_runs(limit=100)
-            matching = [r for r in runs if r.run_id.startswith(run_id)]
-            if not matching:
-                console.print(f"[red]Run not found: {run_id}[/red]")
-                sys.exit(1)
-            if len(matching) > 1:
-                console.print(f"[yellow]Multiple runs match '{run_id}':[/yellow]")
-                for r in matching[:5]:
-                    console.print(f"  {r.run_id}")
-                sys.exit(1)
-            run_id = matching[0].run_id
+    tsuite_dir = Path.home() / ".tsuite"
 
-        if not force:
-            click.confirm(f"Delete run {run_id[:12]}... and all its test results?", abort=True)
+    if not clear_all:
+        console.print("[yellow]Use --all to clear all test data[/yellow]")
+        console.print("  tsuite clear --all           Clear database, logs, and reports")
+        console.print("  tsuite clear --all --force   Clear without confirmation")
+        return
 
-        repo.delete_run(run_id)
-        console.print(f"[green]Deleted run: {run_id[:12]}...[/green]")
+    if not tsuite_dir.exists():
+        console.print("[yellow]Nothing to clear (~/.tsuite does not exist)[/yellow]")
+        return
 
-    elif clear_all:
-        # Clear everything
-        if not force:
-            click.confirm("Delete ALL test runs and results? This cannot be undone.", abort=True)
+    if not force:
+        click.confirm("Delete ALL test data (database, logs, reports)? This cannot be undone.", abort=True)
 
-        runs = repo.list_runs(limit=1000)
-        count = len(runs)
-        for run in runs:
-            repo.delete_run(run.run_id)
+    cleared = []
 
-        console.print(f"[green]Deleted {count} run(s)[/green]")
+    # Clear database files (including backups)
+    for pattern in ["*.db", "*.db-*", "*.db.*"]:
+        for f in tsuite_dir.glob(pattern):
+            f.unlink()
+            cleared.append(f.name)
 
+    # Clear runs directory
+    runs_dir = tsuite_dir / "runs"
+    if runs_dir.exists():
+        shutil.rmtree(runs_dir)
+        cleared.append("runs/")
+
+    # Clear reports directory
+    reports_dir = tsuite_dir / "reports"
+    if reports_dir.exists():
+        shutil.rmtree(reports_dir)
+        cleared.append("reports/")
+
+    # Clear server log
+    server_log = tsuite_dir / "server.log"
+    if server_log.exists():
+        server_log.unlink()
+        cleared.append("server.log")
+
+    if cleared:
+        console.print(f"[green]Cleared: {', '.join(cleared)}[/green]")
     else:
-        console.print("[yellow]Specify --run-id or --all[/yellow]")
-        console.print("  tsuite clear --run-id <id>   Clear specific run")
-        console.print("  tsuite clear --all           Clear all data")
+        console.print("[yellow]Nothing to clear[/yellow]")
 
 
 # =============================================================================
