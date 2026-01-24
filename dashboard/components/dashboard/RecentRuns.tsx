@@ -59,7 +59,7 @@ export function RecentRuns({ runs }: RecentRunsProps) {
                 >
                   <TableCell>
                     <Link
-                      href={`/runs/${run.run_id}`}
+                      href={`/runs?id=${run.run_id}`}
                       className="font-mono text-sm text-primary hover:underline"
                     >
                       {run.run_id.slice(0, 8)}...

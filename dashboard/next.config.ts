@@ -1,15 +1,16 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Proxy API requests to tsuite backend
-  async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:9999"}/api/:path*`,
-      },
-    ];
+  // Enable static export for bundling with Python package
+  output: "export",
+
+  // Disable image optimization (not supported in static export)
+  images: {
+    unoptimized: true,
   },
+
+  // Trailing slashes for static hosting compatibility
+  trailingSlash: true,
 };
 
 export default nextConfig;

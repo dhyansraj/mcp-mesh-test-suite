@@ -1,6 +1,6 @@
-# tsuite - Integration Test Framework
+# mcp-mesh-tsuite
 
-A YAML-driven integration test framework with container isolation, real-time monitoring, and a web dashboard.
+YAML-driven integration test framework with container isolation, real-time monitoring, and a web dashboard.
 
 ## Features
 
@@ -19,44 +19,84 @@ A YAML-driven integration test framework with container isolation, real-time mon
 ## Installation
 
 ```bash
-pip install -e .
+pip install mcp-mesh-tsuite
+```
+
+## Quick Start
+
+```bash
+# View documentation
+tsuite man quickstart
+
+# Start the dashboard
+tsuite api --port 9999
 ```
 
 ## Usage
 
+### Running Tests
+
 ```bash
 # Run all tests in Docker mode
-tsuite --all --docker
+tsuite run --all --docker
 
 # Run specific use case
-tsuite --uc uc01_registry --docker
+tsuite run --uc uc01_registry --docker
 
 # Run specific test case
-tsuite --tc uc01_registry/tc01_agent_registration --docker
+tsuite run --tc uc01_registry/tc01_agent_registration --docker
 
 # Run tests matching tags
-tsuite --tag smoke --docker
+tsuite run --tag smoke --docker
 
 # Dry run (list tests without running)
-tsuite --dry-run --all
+tsuite run --dry-run --all
 
 # View recent runs
-tsuite --history
+tsuite run --history
 
 # Generate report for a previous run
-tsuite --report-run <run_id>
+tsuite run --report-run <run_id>
 
 # Compare two runs
-tsuite --compare <run_id_1> <run_id_2>
+tsuite run --compare <run_id_1> <run_id_2>
 ```
 
-### Standalone API Server
+### API Server & Dashboard
 
-Run the API server for the dashboard without running tests:
+Start the API server with web dashboard:
 
 ```bash
-python -m tsuite.server --port 9999
-python -m tsuite.server --port 9999 --suites path/to/suite1,path/to/suite2
+# Start on default port (9999)
+tsuite api
+
+# Start on custom port
+tsuite api --port 8080
+
+# Start with suites pre-loaded
+tsuite api --suites ./my-suite,./other-suite
+```
+
+### Clear Data
+
+```bash
+# Clear all test data
+tsuite clear --all
+
+# Clear specific run
+tsuite clear --run-id <run_id>
+```
+
+### Documentation
+
+```bash
+# List available topics
+tsuite man --list
+
+# View specific topic
+tsuite man quickstart
+tsuite man handlers
+tsuite man assertions
 ```
 
 ## Execution Modes
@@ -77,7 +117,7 @@ defaults:
 Tests run locally in sequential order. Use for development or when Docker is unavailable:
 
 ```bash
-tsuite --all  # Runs without --docker flag
+tsuite run --all  # Runs without --docker flag
 ```
 
 ## Architecture
