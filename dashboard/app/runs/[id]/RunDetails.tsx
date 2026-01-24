@@ -1,14 +1,17 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   RunSummary,
   TestResult,
@@ -17,6 +20,9 @@ import {
   formatRelativeTime,
   getStatusBgColor,
   getTestDetail,
+  rerunFromRun,
+  cancelRun,
+  runTests,
 } from "@/lib/api";
 import {
   CheckCircle,
@@ -31,6 +37,9 @@ import {
   FolderOpen,
   Folder,
   FileText,
+  RotateCcw,
+  StopCircle,
+  Play,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -64,20 +73,65 @@ function groupTestsByUseCase(tests: TestResult[]): UseCaseGroup[] {
     use_case,
     tests,
     passed: tests.filter(t => t.status === "passed").length,
-    failed: tests.filter(t => t.status === "failed").length,
+    failed: tests.filter(t => t.status === "failed" || t.status === "crashed").length,
+    crashed: tests.filter(t => t.status === "crashed").length,
+    skipped: tests.filter(t => t.status === "skipped").length,
     pending: tests.filter(t => t.status === "pending").length,
     running: tests.filter(t => t.status === "running").length,
+    total: tests.length,
   }));
 }
 
 export function RunDetails({ run, tests }: RunDetailsProps) {
+  const router = useRouter();
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<string | null>(null);
   const [selectedTest, setSelectedTest] = useState<TestResult | null>(null);
   const [testDetail, setTestDetail] = useState<TestDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [rerunning, setRerunning] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   const useCases = useMemo(() => groupTestsByUseCase(tests), [tests]);
+
+  const handleRerun = async () => {
+    if (!run.suite_id) return;
+
+    setRerunning(true);
+    try {
+      await rerunFromRun(run);
+      router.push("/live");
+    } catch (error) {
+      console.error("Failed to rerun:", error);
+    } finally {
+      setRerunning(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    setCancelling(true);
+    try {
+      await cancelRun(run.run_id);
+      router.refresh();
+    } catch (error) {
+      console.error("Failed to cancel:", error);
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  const canCancel = run.status === "pending" || run.status === "running";
+  const isCancelRequested = run.cancel_requested;
+
+  const handleRerunTest = async (testId: string) => {
+    if (!run.suite_id) return;
+    try {
+      await runTests(run.suite_id, { tc: testId });
+      router.push("/live");
+    } catch (error) {
+      console.error("Failed to rerun test:", error);
+    }
+  };
 
   const toggleExpand = (id: string) => {
     setExpandedIds((prev) => {
@@ -111,7 +165,7 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
 
   const stats = {
     passed: tests.filter(t => t.status === "passed").length,
-    failed: tests.filter(t => t.status === "failed").length,
+    failed: tests.filter(t => t.status === "failed" || t.status === "crashed").length,
   };
 
   return (
@@ -119,14 +173,61 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
       {/* Run Summary Card */}
       <Card className="border-border bg-card rounded-md">
         <CardContent className="p-6">
+          {/* Header with Rerun/Cancel buttons */}
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-lg font-medium">Run Summary</h3>
+            <div className="flex items-center gap-2">
+              {/* Cancel button - show for running/pending runs */}
+              {canCancel && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCancel}
+                  disabled={cancelling || isCancelRequested}
+                  className="gap-2 text-destructive border-destructive/50 hover:bg-destructive/10"
+                >
+                  {cancelling ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <StopCircle className="h-4 w-4" />
+                  )}
+                  {isCancelRequested ? "Cancelling..." : "Cancel"}
+                </Button>
+              )}
+              {/* Rerun button */}
+              {run.suite_id && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRerun}
+                  disabled={rerunning}
+                  className="gap-2"
+                >
+                  {rerunning ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RotateCcw className="h-4 w-4" />
+                  )}
+                  Rerun
+                </Button>
+              )}
+            </div>
+          </div>
+
           <div className="grid gap-6 md:grid-cols-4">
             <div>
               <p className="text-sm text-muted-foreground">Status</p>
               <Badge
                 variant="secondary"
-                className={`mt-1 ${getStatusBgColor(run.status)}`}
+                className={`mt-1 ${getStatusBgColor(
+                  isCancelRequested && run.status === "running"
+                    ? "cancelled"
+                    : run.status
+                )}`}
               >
-                {run.status}
+                {isCancelRequested && run.status === "running"
+                  ? "cancelling"
+                  : run.status}
               </Badge>
             </div>
             <div>
@@ -222,7 +323,9 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
         expandedIds={expandedIds}
         onToggle={toggleExpand}
         onTestClick={handleTestClick}
+        onRerunTest={handleRerunTest}
         filter={filter}
+        suiteId={run.suite_id}
       />
 
       {/* Test Detail Dialog */}
@@ -231,6 +334,8 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
         onOpenChange={(open) => !open && handleDialogClose()}
         testDetail={testDetail}
         loading={loadingDetail}
+        suiteId={run.suite_id}
+        onRerunTest={handleRerunTest}
       />
     </div>
   );
@@ -245,7 +350,9 @@ interface TestTreeProps {
   expandedIds: Set<string>;
   onToggle: (id: string) => void;
   onTestClick?: (test: TestResult) => void;
+  onRerunTest?: (testId: string) => void;
   filter?: string | null;
+  suiteId?: number | null;
 }
 
 function getStatusIcon(status: string) {
@@ -253,6 +360,7 @@ function getStatusIcon(status: string) {
     case "passed":
       return <CheckCircle className="h-4 w-4 text-success" />;
     case "failed":
+    case "crashed":
       return <XCircle className="h-4 w-4 text-destructive" />;
     case "running":
       return <Loader2 className="h-4 w-4 text-primary animate-spin" />;
@@ -263,7 +371,7 @@ function getStatusIcon(status: string) {
   }
 }
 
-function TestTree({ useCases, expandedIds, onToggle, onTestClick, filter }: TestTreeProps) {
+function TestTree({ useCases, expandedIds, onToggle, onTestClick, onRerunTest, filter, suiteId }: TestTreeProps) {
   if (!useCases || useCases.length === 0) {
     return (
       <Card>
@@ -276,10 +384,15 @@ function TestTree({ useCases, expandedIds, onToggle, onTestClick, filter }: Test
   }
 
   // Filter use cases and tests
+  // When filtering by "failed", include "crashed" tests as well
   const filteredUseCases = useCases.map((uc) => ({
     ...uc,
     tests: filter
-      ? uc.tests.filter((t) => t.status === filter)
+      ? uc.tests.filter((t) =>
+          filter === "failed"
+            ? t.status === "failed" || t.status === "crashed"
+            : t.status === filter
+        )
       : uc.tests,
   })).filter((uc) => uc.tests.length > 0);
 
@@ -343,34 +456,52 @@ function TestTree({ useCases, expandedIds, onToggle, onTestClick, filter }: Test
                 {isExpanded && (
                   <div className="border-t bg-muted/20">
                     {uc.tests.map((test) => (
-                      <button
+                      <div
                         key={test.id}
-                        onClick={() => onTestClick?.(test)}
                         className={cn(
-                          "flex items-center gap-3 px-4 py-2 pl-10 hover:bg-muted/30 transition-colors w-full text-left",
-                          test.status === "failed" && "bg-destructive/5",
-                          onTestClick && "cursor-pointer"
+                          "flex items-center gap-3 px-4 py-2 pl-10 hover:bg-muted/30 transition-colors group",
+                          (test.status === "failed" || test.status === "crashed") && "bg-destructive/5"
                         )}
                       >
-                        {getStatusIcon(test.status)}
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm truncate">
-                            {test.name || test.test_case}
-                          </p>
-                          {test.error_message && (
-                            <p className="text-xs text-destructive truncate mt-1">
-                              {test.error_message}
-                            </p>
+                        <button
+                          onClick={() => onTestClick?.(test)}
+                          className={cn(
+                            "flex items-center gap-3 flex-1 min-w-0 text-left",
+                            onTestClick && "cursor-pointer"
                           )}
-                        </div>
+                        >
+                          {getStatusIcon(test.status)}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm truncate">
+                              {test.name || test.test_case}
+                            </p>
+                            {test.error_message && (
+                              <p className="text-xs text-destructive truncate mt-1">
+                                {test.error_message}
+                              </p>
+                            )}
+                          </div>
+                        </button>
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
                           {test.duration_ms !== null && (
                             <span className="font-mono">
                               {formatDuration(test.duration_ms)}
                             </span>
                           )}
+                          {suiteId && onRerunTest && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onRerunTest(test.test_id);
+                              }}
+                              className="p-1 rounded hover:bg-primary/20 opacity-0 group-hover:opacity-100 transition-opacity"
+                              title="Rerun this test"
+                            >
+                              <Play className="h-3.5 w-3.5 text-primary" />
+                            </button>
+                          )}
                         </div>
-                      </button>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -392,19 +523,64 @@ interface TestDetailDialogProps {
   onOpenChange: (open: boolean) => void;
   testDetail: TestDetail | null;
   loading: boolean;
+  suiteId: number | null;
+  onRerunTest: (testId: string) => void;
 }
 
-function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetailDialogProps) {
+function TestDetailDialog({ open, onOpenChange, testDetail, loading, suiteId, onRerunTest }: TestDetailDialogProps) {
+  const [rerunning, setRerunning] = useState(false);
+
+  const handleRerun = async () => {
+    if (!testDetail || !suiteId) return;
+    setRerunning(true);
+    try {
+      await onRerunTest(testDetail.test_id);
+    } finally {
+      setRerunning(false);
+    }
+  };
+  const [expandedAssertions, setExpandedAssertions] = useState<Set<number>>(new Set());
+
+  const toggleAssertion = (idx: number) => {
+    setExpandedAssertions(prev => {
+      const next = new Set(prev);
+      if (next.has(idx)) {
+        next.delete(idx);
+      } else {
+        next.add(idx);
+      }
+      return next;
+    });
+  };
+
   if (!testDetail && !loading) return null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
         <DialogHeader className="flex-shrink-0">
-          <DialogTitle className="flex items-center gap-2">
-            {testDetail && getStatusIcon(testDetail.status)}
-            <span className="truncate">{testDetail?.name || testDetail?.test_id}</span>
-          </DialogTitle>
+          <div className="flex items-center justify-between">
+            <DialogTitle className="flex items-center gap-2">
+              {testDetail && getStatusIcon(testDetail.status)}
+              <span className="truncate">{testDetail?.name || testDetail?.test_id}</span>
+            </DialogTitle>
+            {suiteId && testDetail && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleRerun}
+                disabled={rerunning}
+                className="ml-4"
+              >
+                {rerunning ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                ) : (
+                  <Play className="h-4 w-4 mr-1" />
+                )}
+                Rerun
+              </Button>
+            )}
+          </div>
         </DialogHeader>
 
         {loading ? (
@@ -412,8 +588,8 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetai
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
         ) : testDetail ? (
-          <div className="overflow-y-auto max-h-[calc(85vh-120px)] pr-2">
-            <div className="space-y-6">
+          <ScrollArea className="h-[calc(85vh-120px)]">
+            <div className="space-y-6 pr-4">
               {/* Test Info */}
               <div className="flex flex-wrap gap-4 text-sm">
                 <div>
@@ -453,14 +629,14 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetai
                         className={cn(
                           "rounded-md border p-3",
                           step.status === "passed" && "border-success/30 bg-success/5",
-                          step.status === "failed" && "border-destructive/30 bg-destructive/5"
+                          (step.status === "failed" || step.status === "crashed") && "border-destructive/30 bg-destructive/5"
                         )}
                       >
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
                             {step.status === "passed" ? (
                               <CheckCircle className="h-4 w-4 text-success" />
-                            ) : step.status === "failed" ? (
+                            ) : step.status === "failed" || step.status === "crashed" ? (
                               <XCircle className="h-4 w-4 text-destructive" />
                             ) : (
                               <Circle className="h-4 w-4 text-muted-foreground" />
@@ -521,39 +697,76 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetai
                     Assertions ({testDetail.assertions.length})
                   </h4>
                   <div className="space-y-2">
-                    {testDetail.assertions.map((assertion, idx) => (
-                      <div
-                        key={assertion.id || idx}
-                        className={cn(
-                          "rounded-md border p-3",
-                          assertion.passed
-                            ? "border-success/30 bg-success/5"
-                            : "border-destructive/30 bg-destructive/5"
-                        )}
-                      >
-                        <div className="flex items-center gap-2">
-                          {assertion.passed ? (
-                            <CheckCircle className="h-4 w-4 text-success" />
-                          ) : (
-                            <XCircle className="h-4 w-4 text-destructive" />
+                    {testDetail.assertions.map((assertion, idx) => {
+                      const isExpanded = expandedAssertions.has(idx);
+                      const hasDetails = assertion.actual_value || assertion.expected_value;
+
+                      return (
+                        <div
+                          key={assertion.id || idx}
+                          className={cn(
+                            "rounded-md border",
+                            assertion.passed
+                              ? "border-success/30 bg-success/5"
+                              : "border-destructive/30 bg-destructive/5"
                           )}
-                          <span className="text-sm">
-                            {assertion.message || assertion.expression}
-                          </span>
-                        </div>
-                        {!assertion.passed && assertion.actual_value && (
-                          <div className="mt-2 text-xs font-mono text-muted-foreground">
-                            <p>Expected: {assertion.expected_value}</p>
-                            <p>Actual: {assertion.actual_value}</p>
+                        >
+                          <div
+                            className={cn(
+                              "flex items-center gap-2 p-3",
+                              hasDetails && "cursor-pointer hover:bg-muted/30"
+                            )}
+                            onClick={() => hasDetails && toggleAssertion(idx)}
+                          >
+                            {hasDetails && (
+                              isExpanded ? (
+                                <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                              ) : (
+                                <ChevronRight className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                              )
+                            )}
+                            {assertion.passed ? (
+                              <CheckCircle className="h-4 w-4 text-success flex-shrink-0" />
+                            ) : (
+                              <XCircle className="h-4 w-4 text-destructive flex-shrink-0" />
+                            )}
+                            <span className="text-sm">
+                              {assertion.message || assertion.expression}
+                            </span>
                           </div>
-                        )}
-                      </div>
-                    ))}
+                          {isExpanded && hasDetails && (
+                            <div className="px-3 pb-3 pt-0 border-t border-border/50">
+                              <div className="mt-2 text-xs font-mono space-y-1">
+                                <p className="text-muted-foreground">
+                                  <span className="text-foreground/70">Expression:</span>{" "}
+                                  <code className="bg-muted px-1 py-0.5 rounded">{assertion.expression}</code>
+                                </p>
+                                {assertion.expected_value && (
+                                  <p className="text-muted-foreground">
+                                    <span className="text-foreground/70">Expected:</span>{" "}
+                                    <code className="bg-muted px-1 py-0.5 rounded">{assertion.expected_value}</code>
+                                  </p>
+                                )}
+                                {assertion.actual_value && (
+                                  <p className="text-muted-foreground">
+                                    <span className="text-foreground/70">Actual:</span>{" "}
+                                    <code className={cn(
+                                      "px-1 py-0.5 rounded",
+                                      assertion.passed ? "bg-success/20" : "bg-destructive/20"
+                                    )}>{assertion.actual_value}</code>
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
             </div>
-          </div>
+          </ScrollArea>
         ) : null}
       </DialogContent>
     </Dialog>

@@ -130,7 +130,7 @@ def convert_to_commented_map(data: Dict) -> CommentedMap:
         return data
 
 
-def merge_yaml_updates(original: CommentedMap, updates: Dict) -> CommentedMap:
+def merge_yaml_updates(original: CommentedMap, updates: Dict, delete_marker: str = "__DELETE__") -> CommentedMap:
     """
     Merge updates into original YAML data, preserving comments in original.
 
@@ -140,15 +140,23 @@ def merge_yaml_updates(original: CommentedMap, updates: Dict) -> CommentedMap:
     Args:
         original: Original CommentedMap with comments
         updates: Dictionary with updates to apply
+        delete_marker: Special string value that signals field deletion
 
     Returns:
         Updated CommentedMap with preserved comments
     """
+    keys_to_delete = []
+
     for key, value in updates.items():
+        # Check for delete marker
+        if value == delete_marker:
+            keys_to_delete.append(key)
+            continue
+
         if key in original:
             if isinstance(value, dict) and isinstance(original[key], CommentedMap):
                 # Recursively merge nested dicts
-                merge_yaml_updates(original[key], value)
+                merge_yaml_updates(original[key], value, delete_marker)
             elif isinstance(value, list):
                 # For lists, replace but convert to CommentedSeq
                 original[key] = convert_to_commented_map(value)
@@ -158,6 +166,11 @@ def merge_yaml_updates(original: CommentedMap, updates: Dict) -> CommentedMap:
         else:
             # New key - add it
             original[key] = convert_to_commented_map(value)
+
+    # Delete marked keys
+    for key in keys_to_delete:
+        if key in original:
+            del original[key]
 
     return original
 

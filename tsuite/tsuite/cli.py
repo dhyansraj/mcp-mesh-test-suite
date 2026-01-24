@@ -4,13 +4,18 @@ Command-line interface for tsuite.
 Usage:
     tsuite --all                    # Run all tests (local mode)
     tsuite --all --docker           # Run all tests in Docker containers
-    tsuite --uc uc01_scaffolding    # Run all tests in use case
-    tsuite --tc uc01_scaffolding/tc01_python_agent  # Run specific test
+    tsuite --uc uc01_scaffolding    # Run all tests in a use case folder
+    tsuite --tc uc01_scaffolding/tc01_python_agent  # Run specific test (uc_folder/tc_folder)
+    tsuite --tc uc01/tc01 --tc uc02/tc03            # Run multiple specific tests
     tsuite --dry-run --all          # List tests without running
     tsuite --history                # Show recent runs
+
+Note: Test IDs use the format <uc_folder>/<tc_folder> (e.g., uc05_meshctl/tc05_status_healthy_resolution)
 """
 
 import sys
+import time
+import subprocess
 import tempfile
 from pathlib import Path
 from dataclasses import dataclass
@@ -18,6 +23,7 @@ from datetime import datetime
 from typing import Optional
 
 import click
+import requests
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -25,7 +31,6 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 from .context import runtime
 from .discovery import TestDiscovery, load_config
-from .server import RunnerServer
 from .executor import TestExecutor, TestResult
 from .routines import RoutineResolver
 from . import db
@@ -56,9 +61,278 @@ class DockerTestResult:
     error: str | None
 
 
+# =============================================================================
+# API Server Helper Functions
+# =============================================================================
+
+def health_check(api_url: str, timeout: int = 5) -> bool:
+    """
+    Check if API server is running.
+
+    Args:
+        api_url: URL of the API server (e.g., "http://localhost:9999")
+        timeout: Request timeout in seconds
+
+    Returns:
+        True if server is healthy, False otherwise.
+    """
+    try:
+        resp = requests.get(f"{api_url}/health", timeout=timeout)
+        return resp.status_code == 200
+    except requests.RequestException:
+        return False
+
+
+def ensure_api_server(port: int = 9999, timeout: int = 10) -> str:
+    """
+    Start API server if not running, return URL.
+
+    Args:
+        port: Port for the API server
+        timeout: Max seconds to wait for server to start
+
+    Returns:
+        API server URL
+
+    Raises:
+        RuntimeError: If server fails to start within timeout
+    """
+    api_url = f"http://localhost:{port}"
+
+    # Check if already running
+    if health_check(api_url):
+        return api_url
+
+    console.print(f"[dim]Starting API server on port {port}...[/dim]")
+
+    # Start server in background
+    subprocess.Popen(
+        [sys.executable, "-m", "tsuite.server", "--port", str(port)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    # Wait for server to be ready
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        if health_check(api_url, timeout=2):
+            console.print(f"[dim]API server started at {api_url}[/dim]")
+            return api_url
+        time.sleep(0.2)
+
+    raise RuntimeError(f"Failed to start API server on port {port} within {timeout}s")
+
+
+def create_run_via_api(api_url: str, suite_id: int, tests: list, filters: dict | None = None, mode: str = "docker") -> str:
+    """
+    Create a new test run via API.
+
+    Args:
+        api_url: URL of the API server
+        suite_id: Database ID of the suite
+        tests: List of test objects to run
+        filters: Optional filters used for test selection
+        mode: Execution mode ("docker" or "standalone")
+
+    Returns:
+        run_id: The created run's ID
+
+    Raises:
+        RuntimeError: If API call fails
+    """
+    # Build test list for API
+    test_data = [
+        {
+            "test_id": t.id,
+            "use_case": t.uc,
+            "test_case": t.tc,
+            "name": t.name,
+            "tags": t.tags or [],
+        }
+        for t in tests
+    ]
+
+    payload = {
+        "suite_id": suite_id,
+        "tests": test_data,
+        "mode": mode,
+    }
+    if filters:
+        payload["filters"] = filters
+
+    try:
+        resp = requests.post(f"{api_url}/api/runs", json=payload, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        return data["run_id"]
+    except requests.RequestException as e:
+        raise RuntimeError(f"Failed to create run via API: {e}")
+
+
+def start_run_via_api(api_url: str, run_id: str) -> None:
+    """Signal that a run has started."""
+    try:
+        resp = requests.post(f"{api_url}/api/runs/{run_id}/start", timeout=10)
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        console.print(f"[yellow]Warning: Failed to signal run start: {e}[/yellow]")
+
+
+def complete_run_via_api(api_url: str, run_id: str, duration_ms: int | None = None) -> None:
+    """Signal that a run has completed."""
+    try:
+        payload = {}
+        if duration_ms is not None:
+            payload["duration_ms"] = duration_ms
+        resp = requests.post(f"{api_url}/api/runs/{run_id}/complete", json=payload, timeout=10)
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        console.print(f"[yellow]Warning: Failed to signal run complete: {e}[/yellow]")
+
+
+def update_test_status_via_api(
+    api_url: str,
+    run_id: str,
+    test_id: str,
+    status: str,
+    duration_ms: int | None = None,
+    error_message: str | None = None,
+    steps_passed: int | None = None,
+    steps_failed: int | None = None,
+) -> None:
+    """Update test status via API."""
+    try:
+        payload = {"status": status}
+        if duration_ms is not None:
+            payload["duration_ms"] = duration_ms
+        if error_message is not None:
+            payload["error_message"] = error_message
+        if steps_passed is not None:
+            payload["steps_passed"] = steps_passed
+        if steps_failed is not None:
+            payload["steps_failed"] = steps_failed
+
+        resp = requests.patch(f"{api_url}/api/runs/{run_id}/tests/{test_id}", json=payload, timeout=10)
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        console.print(f"[yellow]Warning: Failed to update test status: {e}[/yellow]")
+
+
+def check_cancel_requested(api_url: str, run_id: str) -> bool:
+    """
+    Check if cancellation has been requested for a run.
+
+    Called before starting each test for cooperative cancellation.
+    """
+    try:
+        resp = requests.get(f"{api_url}/api/runner/should-cancel/{run_id}", timeout=5)
+        if resp.status_code == 200:
+            return resp.json().get("cancel_requested", False)
+    except requests.RequestException:
+        pass  # On error, continue execution
+    return False
+
+
+def finalize_cancelled_run(run_id: str, skip_reason: str = "Run cancelled") -> int:
+    """
+    Mark all pending tests as skipped and complete the run as cancelled.
+
+    Returns the number of tests that were skipped.
+    """
+    return repo.cancel_run_with_skip(run_id, skip_reason)
+
+
+# =============================================================================
+# Worker Pool for Parallel Execution
+# =============================================================================
+
+class TestTimeoutError(Exception):
+    """Raised when a test exceeds its timeout."""
+    pass
+
+
+class WorkerPool:
+    """
+    Thread pool for parallel test execution.
+
+    Used in docker mode to run multiple containers concurrently.
+    Standalone mode should always use max_workers=1.
+    """
+
+    def __init__(self, max_workers: int = 1):
+        from concurrent.futures import ThreadPoolExecutor
+        self.max_workers = max(1, max_workers)
+        self.executor: ThreadPoolExecutor | None = None
+        self._cancelled = False
+
+    def __enter__(self):
+        from concurrent.futures import ThreadPoolExecutor
+        self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
+        return self
+
+    def __exit__(self, *args):
+        if self.executor:
+            # If cancelled, don't wait for running tasks
+            self.executor.shutdown(wait=not self._cancelled, cancel_futures=self._cancelled)
+
+    def cancel(self):
+        """Mark the pool as cancelled - exit won't wait for futures."""
+        self._cancelled = True
+
+    def submit(self, fn, *args, **kwargs):
+        """Submit a task to the pool."""
+        if self.executor is None:
+            raise RuntimeError("WorkerPool not entered as context manager")
+        return self.executor.submit(fn, *args, **kwargs)
+
+    def map_unordered(self, fn, items):
+        """
+        Execute fn for each item, yielding results as they complete.
+
+        Results may be returned in any order (not necessarily input order).
+        """
+        from concurrent.futures import as_completed
+
+        if self.executor is None:
+            raise RuntimeError("WorkerPool not entered as context manager")
+
+        futures = {self.executor.submit(fn, item): item for item in items}
+        for future in as_completed(futures):
+            try:
+                yield future.result()
+            except Exception as e:
+                # Return error result for this item
+                item = futures[future]
+                yield {"test_id": getattr(item, 'id', str(item)), "error": str(e), "passed": False}
+
+
+def execute_with_timeout(fn, timeout_seconds: int):
+    """
+    Execute a function with a timeout.
+
+    Args:
+        fn: Callable to execute
+        timeout_seconds: Maximum execution time in seconds
+
+    Returns:
+        Result of fn()
+
+    Raises:
+        TestTimeoutError: If execution exceeds timeout
+    """
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(fn)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FuturesTimeoutError:
+            raise TestTimeoutError(f"Execution exceeded {timeout_seconds}s timeout")
+
+
 def get_handlers() -> dict:
     """Load all available handlers."""
-    from handlers import shell, file, routine, http, wait, llm
+    from handlers import shell, file, routine, http, wait, llm, pip_install, npm_install
 
     return {
         "shell": shell.execute,
@@ -67,15 +341,21 @@ def get_handlers() -> dict:
         "http": http.execute,
         "wait": wait.execute,
         "llm": llm.execute,
+        "pip-install": pip_install.execute,
+        "npm-install": npm_install.execute,
     }
 
 
-def sync_suite_to_db(suite_path: Path, config: dict, test_count: int) -> None:
+def sync_suite_to_db(suite_path: Path, config: dict, test_count: int):
     """
     Sync the suite configuration to the database.
     Called when running tests from CLI to keep DB in sync with YAML.
+
+    Returns:
+        Suite object with id for linking to runs
     """
     import json
+    from .models import Suite
 
     folder_path = str(suite_path.resolve())
 
@@ -90,7 +370,7 @@ def sync_suite_to_db(suite_path: Path, config: dict, test_count: int) -> None:
         mode = SuiteMode.DOCKER
 
     # Upsert suite (create or update)
-    repo.upsert_suite(
+    suite = repo.upsert_suite(
         folder_path=folder_path,
         suite_name=suite_name,
         mode=mode,
@@ -99,6 +379,7 @@ def sync_suite_to_db(suite_path: Path, config: dict, test_count: int) -> None:
     )
 
     console.print(f"[dim]Suite synced: {suite_name}[/dim]")
+    return suite
 
 
 def print_banner(config: dict, test_count: int):
@@ -290,15 +571,14 @@ def generate_comparison(
 
 @click.command()
 @click.option("--all", "run_all", is_flag=True, help="Run all tests")
-@click.option("--uc", multiple=True, help="Run tests in specific use case(s)")
-@click.option("--tc", multiple=True, help="Run specific test case(s)")
+@click.option("--uc", multiple=True, help="Run all tests in use case folder(s) (e.g., --uc uc01_scaffolding)")
+@click.option("--tc", multiple=True, help="Run specific test(s) using uc_folder/tc_folder format (e.g., --tc uc05_meshctl/tc05_status)")
 @click.option("--tag", multiple=True, help="Filter by tag(s)")
 @click.option("--pattern", help="Filter by glob pattern")
 @click.option("--dry-run", is_flag=True, help="List tests without running")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.option("--stop-on-fail", is_flag=True, help="Stop on first failure")
 @click.option("--suite-path", type=click.Path(exists=True), help="Path to test suite")
-@click.option("--port", default=9999, help="Server port")
 @click.option("--docker", is_flag=True, help="Run tests in Docker containers")
 @click.option("--image", default=None, help="Docker image to use (overrides config)")
 @click.option("--db-path", type=click.Path(), help="Path to results database")
@@ -311,6 +591,7 @@ def generate_comparison(
 @click.option("--retry-failed", is_flag=True, help="Retry failed tests from last run")
 @click.option("--mock-llm", is_flag=True, help="Use mock LLM responses (no API calls)")
 @click.option("--skip-tag", multiple=True, help="Skip tests with specific tag(s)")
+@click.option("--api-url", default="http://localhost:9999", help="API server URL for SSE event forwarding")
 def main(
     run_all: bool,
     uc: tuple,
@@ -321,7 +602,6 @@ def main(
     verbose: bool,
     stop_on_fail: bool,
     suite_path: str | None,
-    port: int,
     docker: bool,
     image: str | None,
     db_path: str | None,
@@ -334,6 +614,7 @@ def main(
     retry_failed: bool,
     mock_llm: bool,
     skip_tag: tuple,
+    api_url: str,
 ):
     """Run integration tests."""
     global _current_run_id
@@ -344,10 +625,25 @@ def main(
         os.environ["TSUITE_MOCK_LLM"] = "true"
         console.print("[dim]Mock LLM mode enabled[/dim]")
 
+    # Configure SSE event forwarding to API server
+    sse_manager.set_event_server(api_url)
+    console.print(f"[dim]SSE forwarding: {api_url}[/dim]")
+
     # Initialize database
     if db_path:
         db.set_db_path(Path(db_path))
     db.init_db()
+
+    # Ensure API server is running (required for docker mode and SSE forwarding)
+    # Parse port from api_url
+    from urllib.parse import urlparse
+    parsed = urlparse(api_url)
+    api_port = parsed.port or 9999
+    try:
+        api_url = ensure_api_server(port=api_port, timeout=15)
+    except RuntimeError as e:
+        console.print(f"[yellow]Warning: {e}[/yellow]")
+        console.print("[dim]Continuing without API server (SSE events will not be forwarded)[/dim]")
 
     # Show history and exit
     if history:
@@ -407,7 +703,7 @@ def main(
     routine_sets = discovery.discover_routines()
 
     # Sync suite to database (keeps DB in sync with YAML for dashboard)
-    sync_suite_to_db(suite, config, len(all_tests))
+    suite_record = sync_suite_to_db(suite, config, len(all_tests))
 
     # Filter tests
     if retry_failed and failed_test_ids:
@@ -416,6 +712,10 @@ def main(
     else:
         if not run_all and not uc and not tc:
             console.print("[yellow]No tests selected. Use --all, --uc, or --tc[/yellow]")
+            console.print("[dim]Examples:[/dim]")
+            console.print("[dim]  tsuite --all                           # Run all tests[/dim]")
+            console.print("[dim]  tsuite --uc uc01_scaffolding           # Run all tests in use case[/dim]")
+            console.print("[dim]  tsuite --tc uc05_meshctl/tc05_status   # Run specific test (uc_folder/tc_folder)[/dim]")
             sys.exit(0)
 
         tests = discovery.filter_tests(
@@ -437,6 +737,8 @@ def main(
 
     if not tests:
         console.print("[yellow]No tests match the criteria[/yellow]")
+        console.print("[dim]Tip: Use --dry-run --all to list available tests[/dim]")
+        console.print("[dim]Test IDs use format: uc_folder/tc_folder (e.g., uc05_meshctl/tc05_status_healthy_resolution)[/dim]")
         sys.exit(0)
 
     # Dry run: just list tests
@@ -467,6 +769,7 @@ def main(
     # Create run record in database
     packages = config.get("packages", {})
     run = repo.create_run(
+        suite_id=suite_record.id,
         cli_version=packages.get("cli_version"),
         sdk_python_version=packages.get("sdk_python_version"),
         sdk_typescript_version=packages.get("sdk_typescript_version"),
@@ -479,14 +782,13 @@ def main(
     # Emit SSE run_started event
     sse_manager.emit_run_started(run.run_id, len(tests))
 
-    # Create test result records for all tests
-    test_result_map = {}  # test_id -> db test_result_id
+    # Create test result records for all tests (PENDING status)
     for test in tests:
         parts = test.id.split("/")
         use_case = parts[0] if len(parts) > 0 else ""
         test_case = parts[1] if len(parts) > 1 else ""
 
-        tr = repo.create_test_result(
+        repo.create_test_result(
             run_id=run.run_id,
             test_id=test.id,
             use_case=use_case,
@@ -494,7 +796,6 @@ def main(
             name=test.name,
             tags=test.tags,
         )
-        test_result_map[test.id] = tr.id
 
     # Docker mode or local mode
     if docker:
@@ -503,12 +804,11 @@ def main(
             config=config,
             suite=suite,
             workdir=workdir,
-            port=port,
             verbose=verbose,
             stop_on_fail=stop_on_fail,
             image_override=image,
-            test_result_map=test_result_map,
             run_id=run.run_id,
+            api_url=api_url,
         )
     else:
         results = run_local_mode(
@@ -516,27 +816,28 @@ def main(
             routine_sets=routine_sets,
             suite=suite,
             workdir=workdir,
-            port=port,
             verbose=verbose,
             stop_on_fail=stop_on_fail,
-            test_result_map=test_result_map,
             run_id=run.run_id,
+            api_url=api_url,
         )
 
-    # Complete run record
-    repo.complete_run(run.run_id)
+    # Complete run record (unless already cancelled)
+    current_run = repo.get_run(run.run_id)
+    if current_run and current_run.status != RunStatus.CANCELLED:
+        repo.complete_run(run.run_id)
 
-    # Emit SSE run_completed event
-    passed_count = sum(1 for r in results if r.passed)
-    failed_count = sum(1 for r in results if not r.passed)
-    total_duration_ms = int(sum(r.duration for r in results) * 1000)
-    sse_manager.emit_run_completed(
-        run_id=run.run_id,
-        passed=passed_count,
-        failed=failed_count,
-        skipped=0,
-        duration_ms=total_duration_ms,
-    )
+        # Emit SSE run_completed event
+        passed_count = sum(1 for r in results if r.passed)
+        failed_count = sum(1 for r in results if not r.passed)
+        total_duration_ms = int(sum(r.duration for r in results) * 1000)
+        sse_manager.emit_run_completed(
+            run_id=run.run_id,
+            passed=passed_count,
+            failed=failed_count,
+            skipped=0,
+            duration_ms=total_duration_ms,
+        )
 
     # Print summary
     print_summary(results, run.run_id)
@@ -569,13 +870,18 @@ def run_local_mode(
     routine_sets: dict,
     suite: Path,
     workdir: Path,
-    port: int,
     verbose: bool,
     stop_on_fail: bool,
-    test_result_map: dict | None = None,
     run_id: str | None = None,
+    api_url: str | None = None,
 ) -> list[TestResult]:
-    """Run tests in local mode (no Docker)."""
+    """
+    Run tests in local/standalone mode (no Docker).
+
+    Always sequential (max_workers=1) because tests share the same
+    filesystem and may have dependencies on each other.
+    Use docker mode for parallel execution.
+    """
     # Setup routine resolver
     routine_resolver = RoutineResolver(routine_sets)
 
@@ -586,74 +892,97 @@ def run_local_mode(
 
     results = []
 
-    with RunnerServer(port=port) as server:
-        console.print(f"[dim]Server: {server.get_url()}[/dim]")
-        console.print(f"[dim]Mode: local[/dim]\n")
+    # Use API server URL
+    server_url = api_url or "http://localhost:9999"
+    console.print(f"[dim]API Server: {server_url}[/dim]")
+    console.print(f"[dim]Mode: local (standalone)[/dim]\n")
 
-        executor = TestExecutor(
-            handlers=handlers,
-            routine_resolver=routine_resolver,
-            server_url=server.get_url(),
-            base_workdir=workdir,
+    executor = TestExecutor(
+        handlers=handlers,
+        routine_resolver=routine_resolver,
+        server_url=server_url,
+        base_workdir=workdir,
+        suite_path=suite,
+    )
+
+    cancel_requested = False
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Running tests...", total=len(tests))
+
+        for i, test in enumerate(tests):
+            current_run_id = run_id or _current_run_id
+
+            # Check for cancellation before starting each test
+            if current_run_id and check_cancel_requested(server_url, current_run_id):
+                console.print("\n[yellow]Cancellation requested - skipping remaining tests[/yellow]")
+                cancel_requested = True
+                break
+
+            progress.update(task, description=f"[{i+1}/{len(tests)}] {test.id}")
+
+            # Mark test as running via API (updates run counters)
+            if current_run_id:
+                update_test_status_via_api(
+                    server_url,
+                    current_run_id,
+                    test.id,
+                    status="running",
+                )
+
+            # Emit SSE test_started event
+            if current_run_id:
+                sse_manager.emit_test_started(current_run_id, test.id, test.name)
+
+            result = executor.execute(test)
+            results.append(result)
+
+            # Update test result via API (updates run counters)
+            if current_run_id:
+                status = "passed" if result.passed else "failed"
+                update_test_status_via_api(
+                    server_url,
+                    current_run_id,
+                    test.id,
+                    status=status,
+                    duration_ms=int(result.duration * 1000),
+                    error_message=result.error,
+                )
+
+            # Emit SSE test_completed event
+            if current_run_id:
+                sse_manager.emit_test_completed(
+                    run_id=current_run_id,
+                    test_id=test.id,
+                    status="passed" if result.passed else "failed",
+                    duration_ms=int(result.duration * 1000),
+                    passed=result.steps_passed,
+                    failed=result.steps_failed,
+                )
+
+            print_test_result(result, verbose)
+
+            if not result.passed and stop_on_fail:
+                console.print("\n[red]Stopping on first failure[/red]")
+                break
+
+            progress.advance(task)
+
+    # If cancelled, finalize the run with skipped tests
+    if cancel_requested and current_run_id:
+        skipped = finalize_cancelled_run(current_run_id)
+        console.print(f"[yellow]Skipped {skipped} remaining test(s)[/yellow]")
+        # Emit SSE event for cancellation
+        from .sse import SSEEvent
+        sse_manager.emit(
+            SSEEvent(type="run_cancelled", data={"run_id": current_run_id, "skipped_count": skipped}),
+            run_id=current_run_id,
         )
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            TimeElapsedColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Running tests...", total=len(tests))
-
-            for i, test in enumerate(tests):
-                progress.update(task, description=f"[{i+1}/{len(tests)}] {test.id}")
-
-                # Mark test as running in database
-                db_test_id = test_result_map.get(test.id) if test_result_map else None
-                if db_test_id:
-                    repo.update_test_result(
-                        db_test_id,
-                        status=TestStatus.RUNNING,
-                        started_at=datetime.now(),
-                    )
-
-                # Emit SSE test_started event
-                run_id = _current_run_id
-                if run_id:
-                    sse_manager.emit_test_started(run_id, test.id, test.name)
-
-                result = executor.execute(test)
-                results.append(result)
-
-                # Update test result in database
-                if db_test_id:
-                    status = TestStatus.PASSED if result.passed else TestStatus.FAILED
-                    repo.update_test_result(
-                        db_test_id,
-                        status=status,
-                        finished_at=datetime.now(),
-                        duration_ms=int(result.duration * 1000),
-                        error_message=result.error,
-                    )
-
-                # Emit SSE test_completed event
-                if run_id:
-                    sse_manager.emit_test_completed(
-                        run_id=run_id,
-                        test_id=test.id,
-                        status="passed" if result.passed else "failed",
-                        duration_ms=int(result.duration * 1000),
-                        passed=result.steps_passed,
-                        failed=result.steps_failed,
-                    )
-
-                print_test_result(result, verbose)
-
-                if not result.passed and stop_on_fail:
-                    console.print("\n[red]Stopping on first failure[/red]")
-                    break
-
-                progress.advance(task)
 
     return results
 
@@ -663,14 +992,18 @@ def run_docker_mode(
     config: dict,
     suite: Path,
     workdir: Path,
-    port: int,
     verbose: bool,
     stop_on_fail: bool,
     image_override: str | None = None,
-    test_result_map: dict | None = None,
     run_id: str | None = None,
+    api_url: str | None = None,
 ) -> list[TestResult]:
-    """Run tests in Docker containers."""
+    """
+    Run tests in Docker containers with optional parallel execution.
+
+    Uses WorkerPool for parallel test execution.
+    max_workers is read from config.execution.max_workers (default: 1).
+    """
     from .docker_executor import DockerExecutor, ContainerConfig, check_docker_available
 
     # Check Docker availability
@@ -681,7 +1014,7 @@ def run_docker_mode(
         from .discovery import TestDiscovery
         discovery = TestDiscovery(suite)
         routine_sets = discovery.discover_routines()
-        return run_local_mode(tests, routine_sets, suite, workdir, port, verbose, stop_on_fail, test_result_map, run_id)
+        return run_local_mode(tests, routine_sets, suite, workdir, verbose, stop_on_fail, run_id, api_url)
 
     console.print(f"[dim]Docker: {info}[/dim]")
 
@@ -693,98 +1026,247 @@ def run_docker_mode(
     container_config = ContainerConfig(
         image=image_override or docker_config.get("base_image", "python:3.11-slim"),
         network=docker_config.get("network", "bridge"),
+        mounts=docker_config.get("mounts", []),
     )
 
+    # Get execution settings from config
+    execution = config.get("execution", {})
+    max_workers = execution.get("max_workers", 1)
+    test_timeout = execution.get("timeout", 300)  # seconds per test
+
     results = []
+    current_run_id = run_id or _current_run_id
 
-    with RunnerServer(port=port) as server:
-        console.print(f"[dim]Server: {server.get_url()}[/dim]")
-        console.print(f"[dim]Mode: docker ({container_config.image})[/dim]\n")
+    # Use host.docker.internal for Docker containers to reach host's API server
+    api_server_url = "http://host.docker.internal:9999"
+    console.print(f"[dim]API Server: {api_server_url}[/dim]")
+    console.print(f"[dim]Mode: docker ({container_config.image})[/dim]")
+    console.print(f"[dim]Workers: {max_workers}, Timeout: {test_timeout}s[/dim]\n")
 
-        executor = DockerExecutor(
-            server_url=server.get_url(),
-            framework_path=framework_path,
-            suite_path=suite,
-            base_workdir=workdir,
-            config=container_config,
-            run_id=run_id,
+    executor = DockerExecutor(
+        server_url=api_server_url,
+        framework_path=framework_path,
+        suite_path=suite,
+        base_workdir=workdir,
+        config=container_config,
+        run_id=run_id,
+    )
+
+    # API URL for status updates (use host URL, not container URL)
+    host_api_url = api_url or "http://localhost:9999"
+
+    # Helper function to execute a single test (for parallel execution)
+    def execute_single_test(test):
+        """
+        Execute a single test and return result.
+
+        Reports CRASHED status on unexpected container/process death.
+        Timeout is reported as FAILED (not CRASHED).
+        """
+        test_start = datetime.now()
+        crashed = False
+
+        # Mark test as running via API (updates run counters)
+        if current_run_id:
+            update_test_status_via_api(
+                host_api_url,
+                current_run_id,
+                test.id,
+                status="running",
+            )
+
+        # Emit SSE test_started event
+        if current_run_id:
+            sse_manager.emit_test_started(current_run_id, test.id, test.name)
+
+        # Execute test with timeout and crash detection
+        try:
+            docker_result = execute_with_timeout(
+                lambda: executor.execute_test(test),
+                test_timeout
+            )
+        except TestTimeoutError as e:
+            # Timeout is FAILED, not CRASHED
+            docker_result = {
+                "test_id": test.id,
+                "passed": False,
+                "duration": test_timeout,
+                "error": str(e),
+                "stdout": "",
+                "stderr": f"Test exceeded {test_timeout}s timeout",
+            }
+        except Exception as e:
+            # Unexpected error = container/process crashed
+            crashed = True
+            docker_result = {
+                "test_id": test.id,
+                "passed": False,
+                "duration": (datetime.now() - test_start).total_seconds(),
+                "error": f"Container/process crashed: {e}",
+                "stdout": "",
+                "stderr": str(e),
+            }
+
+        # Convert to TestResult
+        result = TestResult(
+            test_id=docker_result["test_id"],
+            test_name=test.name,
+            passed=docker_result["passed"],
+            duration=docker_result.get("duration", 0),
+            steps_passed=0,
+            steps_failed=0 if docker_result["passed"] else 1,
+            assertions_passed=0,
+            assertions_failed=0,
+            error=docker_result.get("error"),
+            step_results=[],
+            assertion_results=[],
         )
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            TimeElapsedColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Running tests...", total=len(tests))
+        # Update test result via API (updates run counters)
+        if current_run_id:
+            if crashed:
+                status = "crashed"
+            elif result.passed:
+                status = "passed"
+            else:
+                status = "failed"
+            update_test_status_via_api(
+                host_api_url,
+                current_run_id,
+                test.id,
+                status=status,
+                duration_ms=int(result.duration * 1000),
+                error_message=result.error,
+            )
 
+        # Emit SSE test_completed event
+        if current_run_id:
+            sse_manager.emit_test_completed(
+                run_id=current_run_id,
+                test_id=test.id,
+                status=status if current_run_id else ("passed" if result.passed else "failed"),
+                duration_ms=int(result.duration * 1000),
+                passed=result.steps_passed,
+                failed=result.steps_failed,
+            )
+
+        return result, docker_result
+
+    # Execute tests with worker pool
+    stop_requested = False
+    cancel_requested = False
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Running tests...", total=len(tests))
+
+        if max_workers == 1:
+            # Sequential execution (same as before)
             for i, test in enumerate(tests):
+                if stop_requested or cancel_requested:
+                    break
+
+                # Check for cancellation before starting each test
+                if current_run_id and check_cancel_requested(host_api_url, current_run_id):
+                    console.print("\n[yellow]Cancellation requested - skipping remaining tests[/yellow]")
+                    cancel_requested = True
+                    break
+
                 progress.update(task, description=f"[{i+1}/{len(tests)}] {test.id}")
 
-                # Mark test as running in database
-                db_test_id = test_result_map.get(test.id) if test_result_map else None
-                start_time = datetime.now()
-                if db_test_id:
-                    repo.update_test_result(
-                        db_test_id,
-                        status=TestStatus.RUNNING,
-                        started_at=start_time,
-                    )
-
-                # Emit SSE test_started event
-                run_id = _current_run_id
-                if run_id:
-                    sse_manager.emit_test_started(run_id, test.id, test.name)
-
-                docker_result = executor.execute_test(test)
-
-                # Convert to TestResult for consistent handling
-                result = TestResult(
-                    test_id=docker_result["test_id"],
-                    test_name=test.name,
-                    passed=docker_result["passed"],
-                    duration=docker_result["duration"],
-                    steps_passed=0,
-                    steps_failed=0 if docker_result["passed"] else 1,
-                    assertions_passed=0,
-                    assertions_failed=0,
-                    error=docker_result.get("error"),
-                    step_results=[],
-                    assertion_results=[],
-                )
-
+                result, docker_result = execute_single_test(test)
                 results.append(result)
 
-                # Update test result in database
-                if db_test_id:
-                    status = TestStatus.PASSED if result.passed else TestStatus.FAILED
-                    repo.update_test_result(
-                        db_test_id,
-                        status=status,
-                        finished_at=datetime.now(),
-                        duration_ms=int(result.duration * 1000),
-                        error_message=result.error,
-                    )
-
-                # Emit SSE test_completed event
-                if run_id:
-                    sse_manager.emit_test_completed(
-                        run_id=run_id,
-                        test_id=test.id,
-                        status="passed" if result.passed else "failed",
-                        duration_ms=int(result.duration * 1000),
-                        passed=result.steps_passed,
-                        failed=result.steps_failed,
-                    )
-
-                # Print Docker output
                 print_docker_result(docker_result, verbose)
 
                 if not result.passed and stop_on_fail:
                     console.print("\n[red]Stopping on first failure[/red]")
-                    break
+                    stop_requested = True
 
                 progress.advance(task)
+        else:
+            # Parallel execution using WorkerPool
+            # Interleave submission and collection - submit new tests only as workers become free
+            from concurrent.futures import as_completed
+
+            completed = 0
+            submitted = 0
+            test_iter = iter(tests)
+            progress.update(task, description=f"[0/{len(tests)}] Running {max_workers} tests in parallel...")
+
+            with WorkerPool(max_workers=max_workers) as pool:
+                pending_futures = {}  # future -> test mapping
+
+                # Submit initial batch (up to max_workers)
+                for _ in range(max_workers):
+                    try:
+                        test = next(test_iter)
+                        # Check for cancellation before submitting
+                        if current_run_id and check_cancel_requested(host_api_url, current_run_id):
+                            console.print("\n[yellow]Cancellation requested - not submitting more tests[/yellow]")
+                            cancel_requested = True
+                            break
+                        future = pool.submit(execute_single_test, test)
+                        pending_futures[future] = test
+                        submitted += 1
+                    except StopIteration:
+                        break  # No more tests to submit
+
+                # Process results and submit new tests as workers become free
+                while pending_futures:
+                    # Wait for any future to complete
+                    done_futures = as_completed(pending_futures.keys())
+                    for future in done_futures:
+                        completed += 1
+                        test = pending_futures.pop(future)
+
+                        try:
+                            result, docker_result = future.result()
+                            results.append(result)
+                            print_docker_result(docker_result, verbose)
+
+                            if not result.passed and stop_on_fail:
+                                console.print("\n[red]Failure detected (remaining tests will complete)[/red]")
+                                stop_requested = True
+
+                        except Exception as e:
+                            console.print(f"[red]Test execution error: {e}[/red]")
+
+                        progress.update(task, description=f"[{completed}/{len(tests)}] Running...")
+                        progress.advance(task)
+
+                        # Check for cancellation - if cancelled, don't submit new tests
+                        if not cancel_requested and current_run_id and check_cancel_requested(host_api_url, current_run_id):
+                            console.print("\n[yellow]Cancellation requested - waiting for running tests to complete[/yellow]")
+                            cancel_requested = True
+
+                        # Submit next test if not cancelled/stopped and there are more tests
+                        if not cancel_requested and not stop_requested:
+                            try:
+                                next_test = next(test_iter)
+                                future = pool.submit(execute_single_test, next_test)
+                                pending_futures[future] = next_test
+                                submitted += 1
+                            except StopIteration:
+                                pass  # No more tests
+
+                        # Break inner loop to re-check pending_futures
+                        break
+
+    # If cancelled, finalize the run with skipped tests
+    if cancel_requested and current_run_id:
+        skipped = finalize_cancelled_run(current_run_id)
+        console.print(f"[yellow]Skipped {skipped} remaining test(s)[/yellow]")
+        # Emit SSE event for cancellation
+        from .sse import SSEEvent
+        sse_manager.emit(
+            SSEEvent(type="run_cancelled", data={"run_id": current_run_id, "skipped_count": skipped}),
+            run_id=current_run_id,
+        )
 
     return results
 

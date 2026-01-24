@@ -22,7 +22,12 @@ class TestStatus(Enum):
     RUNNING = "running"
     PASSED = "passed"
     FAILED = "failed"
+    CRASHED = "crashed"  # subprocess/container died unexpectedly
     SKIPPED = "skipped"
+
+
+# Terminal states that cannot be overwritten (idempotent updates)
+TERMINAL_STATES = {TestStatus.PASSED, TestStatus.FAILED, TestStatus.CRASHED, TestStatus.SKIPPED}
 
 
 class StepStatus(Enum):
@@ -46,6 +51,8 @@ class Run:
     finished_at: Optional[datetime] = None
     status: RunStatus = RunStatus.PENDING
     suite_id: Optional[int] = None
+    suite_name: Optional[str] = None  # Populated from join with suites table
+    display_name: Optional[str] = None  # Computed: tc name, uc name, or suite name
     cli_version: Optional[str] = None
     sdk_python_version: Optional[str] = None
     sdk_typescript_version: Optional[str] = None
@@ -59,11 +66,14 @@ class Run:
     duration_ms: Optional[int] = None
     filters: Optional[dict] = None
     mode: str = "docker"
+    cancel_requested: bool = False
 
     def to_dict(self) -> dict:
         return {
             "run_id": self.run_id,
             "suite_id": self.suite_id,
+            "suite_name": self.suite_name,
+            "display_name": self.display_name,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
             "status": self.status.value,
@@ -80,6 +90,7 @@ class Run:
             "duration_ms": self.duration_ms,
             "filters": self.filters,
             "mode": self.mode,
+            "cancel_requested": self.cancel_requested,
         }
 
     @classmethod
@@ -91,9 +102,32 @@ class Run:
             except json.JSONDecodeError:
                 filters = None
 
+        # Handle suite_name from joined query (may not be present in all queries)
+        suite_name = None
+        try:
+            suite_name = row["suite_name"]
+        except (KeyError, IndexError):
+            pass
+
+        # Handle cancel_requested (may not exist in older DBs before migration)
+        cancel_requested = False
+        try:
+            cancel_requested = bool(row["cancel_requested"])
+        except (KeyError, IndexError):
+            pass
+
+        # Handle display_name from computed query (may not be present in all queries)
+        display_name = None
+        try:
+            display_name = row["display_name"]
+        except (KeyError, IndexError):
+            pass
+
         return cls(
             run_id=row["run_id"],
             suite_id=row["suite_id"],
+            suite_name=suite_name,
+            display_name=display_name,
             started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
             finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
             status=RunStatus(row["status"]),
@@ -110,6 +144,7 @@ class Run:
             duration_ms=row["duration_ms"],
             filters=filters,
             mode=row["mode"] or "docker",
+            cancel_requested=cancel_requested,
         )
 
 
@@ -258,6 +293,7 @@ class AssertionResult:
     message: Optional[str] = None
     passed: bool = False
     actual_value: Optional[str] = None
+    expected_value: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -268,6 +304,7 @@ class AssertionResult:
             "message": self.message,
             "passed": self.passed,
             "actual_value": self.actual_value,
+            "expected_value": self.expected_value,
         }
 
     @classmethod
@@ -280,6 +317,7 @@ class AssertionResult:
             message=row["message"],
             passed=bool(row["passed"]),
             actual_value=row["actual_value"],
+            expected_value=row.get("expected_value") if hasattr(row, "get") else row["expected_value"] if "expected_value" in row.keys() else None,
         )
 
 

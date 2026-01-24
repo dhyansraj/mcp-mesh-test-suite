@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -16,6 +17,8 @@ import {
   getRunExtended,
   getRunTestsTree,
   getTestDetail,
+  cancelRun,
+  runTests,
   RunExtended,
   RunTestTreeResponse,
   TestResult,
@@ -23,6 +26,7 @@ import {
   StepResult,
   AssertionResult,
 } from "@/lib/api";
+import { Button } from "@/components/ui/button";
 import {
   CheckCircle,
   XCircle,
@@ -38,6 +42,8 @@ import {
   Folder,
   Terminal,
   FileText,
+  StopCircle,
+  Play,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -179,12 +185,12 @@ function ProgressBarSection({ completed, total, passed, failed }: ProgressBarPro
 // ============================================================================
 
 interface CurrentlyRunningProps {
-  test: TestResult | null;
-  elapsed?: number;
+  tests: TestResult[];
+  getElapsed: (test: TestResult) => number;
 }
 
-function CurrentlyRunning({ test, elapsed }: CurrentlyRunningProps) {
-  if (!test) {
+function CurrentlyRunning({ tests, getElapsed }: CurrentlyRunningProps) {
+  if (tests.length === 0) {
     return (
       <Card className="border-dashed">
         <CardContent className="flex items-center justify-center py-8 text-muted-foreground">
@@ -200,18 +206,22 @@ function CurrentlyRunning({ test, elapsed }: CurrentlyRunningProps) {
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
           <Loader2 className="h-5 w-5 animate-spin text-primary" />
-          Currently Running
+          Currently Running ({tests.length})
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="space-y-2">
-          <p className="font-medium">{test.name || test.test_id}</p>
-          <p className="text-sm text-muted-foreground font-mono">{test.test_id}</p>
-          {elapsed !== undefined && (
-            <p className="font-mono text-sm text-primary">
-              {formatDuration(elapsed)}
-            </p>
-          )}
+        <div className="space-y-3">
+          {tests.map((test) => (
+            <div key={test.test_id} className="flex items-center justify-between border-b border-primary/20 pb-2 last:border-0 last:pb-0">
+              <div className="min-w-0 flex-1">
+                <p className="font-medium truncate">{test.name || test.test_id}</p>
+                <p className="text-sm text-muted-foreground font-mono truncate">{test.test_id}</p>
+              </div>
+              <p className="font-mono text-sm text-primary ml-4">
+                {formatDuration(getElapsed(test))}
+              </p>
+            </div>
+          ))}
         </div>
       </CardContent>
     </Card>
@@ -227,7 +237,9 @@ interface TestTreeProps {
   expandedIds: Set<string>;
   onToggle: (id: string) => void;
   onTestClick?: (test: TestResult) => void;
+  onRerunTest?: (testId: string) => void;
   filter?: string;
+  suiteId?: number | null;
 }
 
 function getStatusIcon(status: string) {
@@ -235,6 +247,7 @@ function getStatusIcon(status: string) {
     case "passed":
       return <CheckCircle className="h-4 w-4 text-success" />;
     case "failed":
+    case "crashed":
       return <XCircle className="h-4 w-4 text-destructive" />;
     case "running":
       return <Loader2 className="h-4 w-4 text-primary animate-spin" />;
@@ -245,7 +258,7 @@ function getStatusIcon(status: string) {
   }
 }
 
-function TestTree({ useCases, expandedIds, onToggle, onTestClick, filter }: TestTreeProps) {
+function TestTree({ useCases, expandedIds, onToggle, onTestClick, onRerunTest, filter, suiteId }: TestTreeProps) {
   if (!useCases || useCases.length === 0) {
     return (
       <Card>
@@ -322,27 +335,33 @@ function TestTree({ useCases, expandedIds, onToggle, onTestClick, filter }: Test
                 {isExpanded && (
                   <div className="border-t bg-muted/20">
                     {uc.tests.map((test) => (
-                      <button
+                      <div
                         key={test.test_id}
-                        onClick={() => onTestClick?.(test)}
                         className={cn(
-                          "flex items-center gap-3 px-4 py-2 pl-10 hover:bg-muted/30 transition-colors w-full text-left",
+                          "flex items-center gap-3 px-4 py-2 pl-10 hover:bg-muted/30 transition-colors group",
                           test.status === "running" && "bg-primary/10",
-                          test.status === "failed" && "bg-destructive/5",
-                          onTestClick && "cursor-pointer"
+                          (test.status === "failed" || test.status === "crashed") && "bg-destructive/5"
                         )}
                       >
-                        {getStatusIcon(test.status)}
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm truncate">
-                            {test.name || test.test_case}
-                          </p>
-                          {test.error_message && (
-                            <p className="text-xs text-destructive truncate mt-1">
-                              {test.error_message}
-                            </p>
+                        <button
+                          onClick={() => onTestClick?.(test)}
+                          className={cn(
+                            "flex items-center gap-3 flex-1 min-w-0 text-left",
+                            onTestClick && "cursor-pointer"
                           )}
-                        </div>
+                        >
+                          {getStatusIcon(test.status)}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm truncate">
+                              {test.name || test.test_case}
+                            </p>
+                            {test.error_message && (
+                              <p className="text-xs text-destructive truncate mt-1">
+                                {test.error_message}
+                              </p>
+                            )}
+                          </div>
+                        </button>
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
                           {test.duration_ms !== null && (
                             <span className="font-mono">
@@ -355,8 +374,20 @@ function TestTree({ useCases, expandedIds, onToggle, onTestClick, filter }: Test
                           {test.status === "pending" && (
                             <span>(pending)</span>
                           )}
+                          {suiteId && onRerunTest && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onRerunTest(test.test_id);
+                              }}
+                              className="p-1 rounded hover:bg-primary/20 opacity-0 group-hover:opacity-100 transition-opacity"
+                              title="Rerun this test"
+                            >
+                              <Play className="h-3.5 w-3.5 text-primary" />
+                            </button>
+                          )}
                         </div>
-                      </button>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -378,19 +409,66 @@ interface TestDetailDialogProps {
   onOpenChange: (open: boolean) => void;
   testDetail: TestDetail | null;
   loading: boolean;
+  suiteId?: number | null;
+  onRerunTest?: (testId: string) => void;
 }
 
-function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetailDialogProps) {
+function TestDetailDialog({ open, onOpenChange, testDetail, loading, suiteId, onRerunTest }: TestDetailDialogProps) {
+  const [expandedAssertions, setExpandedAssertions] = useState<Set<number>>(new Set());
+  const [rerunning, setRerunning] = useState(false);
+
+  const handleRerun = async () => {
+    if (!testDetail || !suiteId || !onRerunTest) return;
+    setRerunning(true);
+    try {
+      await onRerunTest(testDetail.test_id);
+      // Close dialog so user can see the new test in live view
+      onOpenChange(false);
+    } finally {
+      setRerunning(false);
+    }
+  };
+
+  const toggleAssertion = (idx: number) => {
+    setExpandedAssertions(prev => {
+      const next = new Set(prev);
+      if (next.has(idx)) {
+        next.delete(idx);
+      } else {
+        next.add(idx);
+      }
+      return next;
+    });
+  };
+
   if (!testDetail && !loading) return null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
         <DialogHeader className="flex-shrink-0">
-          <DialogTitle className="flex items-center gap-2">
-            {testDetail && getStatusIcon(testDetail.status)}
-            <span className="truncate">{testDetail?.name || testDetail?.test_id}</span>
-          </DialogTitle>
+          <div className="flex items-center justify-between">
+            <DialogTitle className="flex items-center gap-2">
+              {testDetail && getStatusIcon(testDetail.status)}
+              <span className="truncate">{testDetail?.name || testDetail?.test_id}</span>
+            </DialogTitle>
+            {suiteId && testDetail && onRerunTest && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleRerun}
+                disabled={rerunning}
+                className="ml-4"
+              >
+                {rerunning ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                ) : (
+                  <Play className="h-4 w-4 mr-1" />
+                )}
+                Rerun
+              </Button>
+            )}
+          </div>
         </DialogHeader>
 
         {loading ? (
@@ -398,8 +476,8 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetai
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
         ) : testDetail ? (
-          <div className="overflow-y-auto max-h-[calc(85vh-120px)] pr-2">
-            <div className="space-y-6">
+          <ScrollArea className="h-[calc(85vh-120px)]">
+            <div className="space-y-6 pr-4">
               {/* Test Info */}
               <div className="flex flex-wrap gap-4 text-sm">
                 <div>
@@ -439,14 +517,14 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetai
                         className={cn(
                           "rounded-md border p-3",
                           step.status === "passed" && "border-success/30 bg-success/5",
-                          step.status === "failed" && "border-destructive/30 bg-destructive/5"
+                          (step.status === "failed" || step.status === "crashed") && "border-destructive/30 bg-destructive/5"
                         )}
                       >
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
                             {step.status === "passed" ? (
                               <CheckCircle className="h-4 w-4 text-success" />
-                            ) : step.status === "failed" ? (
+                            ) : step.status === "failed" || step.status === "crashed" ? (
                               <XCircle className="h-4 w-4 text-destructive" />
                             ) : (
                               <Circle className="h-4 w-4 text-muted-foreground" />
@@ -507,49 +585,71 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetai
                     Assertions ({testDetail.assertions.length})
                   </h4>
                   <div className="space-y-2">
-                    {testDetail.assertions.map((assertion, idx) => (
-                      <div
-                        key={assertion.id || idx}
-                        className={cn(
-                          "rounded-md border p-3",
-                          assertion.passed
-                            ? "border-success/30 bg-success/5"
-                            : "border-destructive/30 bg-destructive/5"
-                        )}
-                      >
-                        <div className="flex items-start gap-2">
-                          {assertion.passed ? (
-                            <CheckCircle className="h-4 w-4 text-success mt-0.5" />
-                          ) : (
-                            <XCircle className="h-4 w-4 text-destructive mt-0.5" />
+                    {testDetail.assertions.map((assertion, idx) => {
+                      const isExpanded = expandedAssertions.has(idx);
+                      const hasDetails = assertion.actual_value || assertion.expected_value;
+
+                      return (
+                        <div
+                          key={assertion.id || idx}
+                          className={cn(
+                            "rounded-md border",
+                            assertion.passed
+                              ? "border-success/30 bg-success/5"
+                              : "border-destructive/30 bg-destructive/5"
                           )}
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-mono">{assertion.expression}</p>
-                            {assertion.message && (
-                              <p className="text-xs text-muted-foreground mt-1">
-                                {assertion.message}
-                              </p>
+                        >
+                          <div
+                            className={cn(
+                              "flex items-center gap-2 p-3",
+                              hasDetails && "cursor-pointer hover:bg-muted/30"
                             )}
-                            {!assertion.passed && (
-                              <div className="mt-2 text-xs">
+                            onClick={() => hasDetails && toggleAssertion(idx)}
+                          >
+                            {hasDetails && (
+                              isExpanded ? (
+                                <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                              ) : (
+                                <ChevronRight className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                              )
+                            )}
+                            {assertion.passed ? (
+                              <CheckCircle className="h-4 w-4 text-success flex-shrink-0" />
+                            ) : (
+                              <XCircle className="h-4 w-4 text-destructive flex-shrink-0" />
+                            )}
+                            <span className="text-sm">
+                              {assertion.message || assertion.expression}
+                            </span>
+                          </div>
+                          {isExpanded && hasDetails && (
+                            <div className="px-3 pb-3 pt-0 border-t border-border/50">
+                              <div className="mt-2 text-xs font-mono space-y-1">
+                                <p className="text-muted-foreground">
+                                  <span className="text-foreground/70">Expression:</span>{" "}
+                                  <code className="bg-muted px-1 py-0.5 rounded">{assertion.expression}</code>
+                                </p>
                                 {assertion.expected_value && (
-                                  <p>
-                                    <span className="text-muted-foreground">Expected: </span>
-                                    <span className="font-mono text-success">{assertion.expected_value}</span>
+                                  <p className="text-muted-foreground">
+                                    <span className="text-foreground/70">Expected:</span>{" "}
+                                    <code className="bg-muted px-1 py-0.5 rounded">{assertion.expected_value}</code>
                                   </p>
                                 )}
                                 {assertion.actual_value && (
-                                  <p>
-                                    <span className="text-muted-foreground">Actual: </span>
-                                    <span className="font-mono text-destructive">{assertion.actual_value}</span>
+                                  <p className="text-muted-foreground">
+                                    <span className="text-foreground/70">Actual:</span>{" "}
+                                    <code className={cn(
+                                      "px-1 py-0.5 rounded",
+                                      assertion.passed ? "bg-success/20" : "bg-destructive/20"
+                                    )}>{assertion.actual_value}</code>
                                   </p>
                                 )}
                               </div>
-                            )}
-                          </div>
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -562,7 +662,7 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetai
                 </div>
               )}
             </div>
-          </div>
+          </ScrollArea>
         ) : null}
       </DialogContent>
     </Dialog>
@@ -574,18 +674,20 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading }: TestDetai
 // ============================================================================
 
 export function LiveFeed() {
+  const router = useRouter();
   const { events, connected, currentRunId } = useLiveEvents({ maxEvents: 500 });
   const [run, setRun] = useState<RunExtended | null>(null);
   const [testTree, setTestTree] = useState<RunTestTreeResponse | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [statusFilter, setStatusFilter] = useState<string>("");
-  const [runningElapsed, setRunningElapsed] = useState<number>(0);
   // Track the displayed run ID separately - persists after run completes
   const [displayedRunId, setDisplayedRunId] = useState<string | null>(null);
   // Test detail dialog state
   const [selectedTest, setSelectedTest] = useState<TestResult | null>(null);
   const [testDetail, setTestDetail] = useState<TestDetail | null>(null);
   const [testDetailLoading, setTestDetailLoading] = useState(false);
+  // Cancel state
+  const [cancelling, setCancelling] = useState(false);
 
   // Update displayed run ID when a new run starts (but don't clear on completion)
   useEffect(() => {
@@ -649,25 +751,22 @@ export function LiveFeed() {
     }
   }, [events, displayedRunId]);
 
-  // Track elapsed time for running test
+  // Track elapsed time for running tests (force re-render every 100ms)
+  const [, setTick] = useState(0);
   useEffect(() => {
     if (!displayedRunId || !testTree) return;
 
-    const runningTest = testTree.use_cases
+    const runningTests = testTree.use_cases
       .flatMap((uc) => uc.tests)
-      .find((t) => t.status === "running");
+      .filter((t) => t.status === "running");
 
-    if (!runningTest) {
-      setRunningElapsed(0);
+    if (runningTests.length === 0) {
       return;
     }
 
-    const startTime = runningTest.started_at
-      ? new Date(runningTest.started_at).getTime()
-      : Date.now();
-
+    // Force re-render every 100ms to update elapsed times
     const interval = setInterval(() => {
-      setRunningElapsed(Date.now() - startTime);
+      setTick((t) => t + 1);
     }, 100);
 
     return () => clearInterval(interval);
@@ -703,6 +802,35 @@ export function LiveFeed() {
     }
   }, [displayedRunId]);
 
+  // Handle cancel
+  const handleCancel = useCallback(async () => {
+    if (!displayedRunId) return;
+
+    setCancelling(true);
+    try {
+      await cancelRun(displayedRunId);
+      // Refetch run data to update status
+      const runData = await getRunExtended(displayedRunId);
+      setRun(runData);
+    } catch (err) {
+      console.error("Failed to cancel run:", err);
+    } finally {
+      setCancelling(false);
+    }
+  }, [displayedRunId]);
+
+  // Handle rerun test
+  const handleRerunTest = useCallback(async (testId: string) => {
+    if (!run?.suite_id) return;
+    try {
+      await runTests(run.suite_id, { tc: testId });
+      // New run will be picked up by SSE events automatically
+      router.push("/live");
+    } catch (err) {
+      console.error("Failed to rerun test:", err);
+    }
+  }, [run?.suite_id, router]);
+
   // Calculate stats
   const stats = useMemo(() => {
     if (!run) {
@@ -716,13 +844,21 @@ export function LiveFeed() {
     };
   }, [run]);
 
-  // Find currently running test
-  const runningTest = useMemo(() => {
-    if (!testTree) return null;
+  // Find all currently running tests
+  const runningTests = useMemo(() => {
+    if (!testTree) return [];
     return testTree.use_cases
       .flatMap((uc) => uc.tests)
-      .find((t) => t.status === "running") || null;
+      .filter((t) => t.status === "running");
   }, [testTree]);
+
+  // Calculate elapsed time for a test
+  const getTestElapsed = useCallback((test: TestResult) => {
+    const startTime = test.started_at
+      ? new Date(test.started_at).getTime()
+      : Date.now();
+    return Date.now() - startTime;
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -759,7 +895,7 @@ export function LiveFeed() {
 
           {displayedRunId && (
             <div className="flex items-center gap-2 rounded bg-primary/10 px-4 py-2">
-              {currentRunId === displayedRunId ? (
+              {currentRunId === displayedRunId && !run?.cancel_requested ? (
                 <span className="relative flex h-3 w-3">
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75"></span>
                   <span className="relative inline-flex h-3 w-3 rounded-full bg-primary"></span>
@@ -770,6 +906,12 @@ export function LiveFeed() {
               <span className="font-mono text-sm font-medium text-primary">
                 Run: {displayedRunId.slice(0, 8)}...
               </span>
+              {run?.status === "cancelled" && (
+                <span className="text-xs text-warning">(cancelled)</span>
+              )}
+              {run?.cancel_requested && run?.status === "running" && (
+                <span className="text-xs text-warning">(cancelling...)</span>
+              )}
               {currentRunId !== displayedRunId && run?.status === "completed" && (
                 <span className="text-xs text-muted-foreground">(completed)</span>
               )}
@@ -795,9 +937,9 @@ export function LiveFeed() {
             failed={stats.failed}
           />
 
-          {/* Currently Running - only show when run is in progress */}
-          {(run.status === "running" || run.status === "pending") && (
-            <CurrentlyRunning test={runningTest} elapsed={runningElapsed} />
+          {/* Currently Running - show as long as there are running tests */}
+          {(run.status === "running" || run.status === "pending") && runningTests.length > 0 && (
+            <CurrentlyRunning tests={runningTests} getElapsed={getTestElapsed} />
           )}
 
           {/* Run Info */}
@@ -808,16 +950,40 @@ export function LiveFeed() {
                   <span className="text-muted-foreground">
                     Run: <span className="font-mono">{displayedRunId.slice(0, 12)}</span>
                   </span>
+                  <Badge variant="outline">
+                    {run.cancel_requested && run.status === "running"
+                      ? "cancelling"
+                      : run.status}
+                  </Badge>
                   <Badge variant="outline">{run.mode}</Badge>
                   <span className="text-muted-foreground">
                     {run.total_tests} tests
                   </span>
                 </div>
-                {run.started_at && (
-                  <span className="text-muted-foreground">
-                    Started: {new Date(run.started_at).toLocaleTimeString()}
-                  </span>
-                )}
+                <div className="flex items-center gap-4">
+                  {run.started_at && (
+                    <span className="text-muted-foreground">
+                      Started: {new Date(run.started_at).toLocaleTimeString()}
+                    </span>
+                  )}
+                  {/* Cancel button - show for running/pending runs */}
+                  {(run.status === "running" || run.status === "pending") && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCancel}
+                      disabled={cancelling || run.cancel_requested}
+                      className="gap-2 text-destructive border-destructive/50 hover:bg-destructive/10"
+                    >
+                      {cancelling ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <StopCircle className="h-4 w-4" />
+                      )}
+                      {run.cancel_requested ? "Cancelling..." : "Cancel"}
+                    </Button>
+                  )}
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -829,7 +995,9 @@ export function LiveFeed() {
               expandedIds={expandedIds}
               onToggle={toggleExpanded}
               onTestClick={handleTestClick}
+              onRerunTest={handleRerunTest}
               filter={statusFilter}
+              suiteId={run.suite_id}
             />
           )}
         </>
@@ -858,6 +1026,8 @@ export function LiveFeed() {
         }}
         testDetail={testDetail}
         loading={testDetailLoading}
+        suiteId={run?.suite_id}
+        onRerunTest={handleRerunTest}
       />
     </div>
   );

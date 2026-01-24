@@ -1,45 +1,79 @@
 # Global Routines - Available to all tests
 # Reference as: global.routine_name or just routine_name
 #
-# Modular pre-run routines - tests compose what they need:
-#   - Scaffolding tests: setup_node + install_meshctl
-#   - Python agent tests: setup_python_venv + install_meshctl + scaffold + install_pip_deps
-#   - TypeScript agent tests: setup_node + install_meshctl + scaffold + install_npm_deps
+# IMPORTANT: These routines assume tsuite-mesh image is used (from lib-tests or src-tests)
+# The image must have pre-installed: meshctl, node, mesh module
+# If any prerequisite is missing, tests will fail immediately.
 
 routines:
+  #############################################################################
+  # PREREQUISITE CHECKS
+  # These verify the image has required tools - fail fast if not
+  #############################################################################
+
+  # Verify meshctl is installed
+  check_meshctl:
+    description: "Verify meshctl CLI is available"
+    steps:
+      - handler: shell
+        command: |
+          if ! command -v meshctl &> /dev/null; then
+            echo "ERROR: meshctl not found in image"
+            echo "Use tsuite-mesh image from lib-tests or src-tests"
+            exit 1
+          fi
+          meshctl --version
+        capture: meshctl_version
+
+  # Verify Node.js is installed
+  check_node:
+    description: "Verify Node.js is available"
+    steps:
+      - handler: shell
+        command: |
+          if ! command -v node &> /dev/null; then
+            echo "ERROR: node not found in image"
+            echo "Use tsuite-mesh image from lib-tests or src-tests"
+            exit 1
+          fi
+          node --version && npm --version
+        capture: node_version
+
+  # Verify mesh module is installed
+  check_mesh_module:
+    description: "Verify mesh Python module is available"
+    steps:
+      - handler: shell
+        command: |
+          python -c "import mesh" 2>/dev/null
+          if [ $? -ne 0 ]; then
+            echo "ERROR: mesh module not found in image"
+            echo "Use tsuite-mesh image from lib-tests or src-tests"
+            exit 1
+          fi
+          python -c "import mesh; print(f'mesh module OK')"
+        capture: mesh_check
+
   #############################################################################
   # PYTHON SETUP
   #############################################################################
 
-  # Create Python virtual environment in workspace
+  # Create Python virtual environment linked to system mesh module
   setup_python_venv:
-    description: "Create .venv in workspace directory"
+    description: "Create .venv in workspace linked to system mesh module"
     steps:
       - handler: shell
         command: |
           cd /workspace
           python -m venv .venv
-          echo "Created .venv in /workspace"
+          # Link to system-installed mesh package
+          echo "import sys; sys.path.insert(0, '/usr/local/lib/python3.11/site-packages')" > /workspace/.venv/lib/python3.11/site-packages/mesh.pth
+          echo "Created .venv in /workspace (linked to system mesh)"
       - handler: shell
-        command: "/workspace/.venv/bin/python --version"
-        capture: python_version
+        command: "/workspace/.venv/bin/python -c \"import mesh; print('venv mesh OK')\""
+        capture: venv_check
 
-  # Install MCP Mesh Python SDK into venv
-  install_mcpmesh_python:
-    description: "Install mcpmesh Python package into workspace venv"
-    params:
-      version:
-        type: string
-        required: true
-    steps:
-      - handler: shell
-        command: "/workspace/.venv/bin/pip install mcp-mesh==${params.version}"
-        timeout: 120
-      - handler: shell
-        command: "/workspace/.venv/bin/python -c \"import mcpmesh; print(mcpmesh.__version__)\""
-        capture: mcpmesh_version
-
-  # Install pip dependencies from a directory (requirements.txt or pyproject.toml)
+  # Install pip dependencies from a directory
   install_pip_deps:
     description: "Install Python dependencies for a scaffolded agent"
     params:
@@ -48,52 +82,13 @@ routines:
         required: true
         description: "Path to agent directory"
     steps:
-      - handler: shell
-        command: |
-          cd ${params.path}
-          if [ -f "requirements.txt" ]; then
-            /workspace/.venv/bin/pip install -r requirements.txt
-          fi
-          if [ -f "pyproject.toml" ]; then
-            /workspace/.venv/bin/pip install -e .
-          fi
-        timeout: 180
+      - handler: pip-install
+        path: ${params.path}
+        venv: /workspace/.venv
 
   #############################################################################
   # NODE.JS SETUP
   #############################################################################
-
-  # Install Node.js and npm in Python base image
-  setup_node:
-    description: "Install Node.js 20 and npm"
-    steps:
-      - handler: shell
-        command: |
-          if ! command -v node &> /dev/null; then
-            apt-get update -qq
-            apt-get install -y -qq curl
-            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-            apt-get install -y -qq nodejs
-          fi
-        timeout: 180
-      - handler: shell
-        command: "node --version && npm --version"
-        capture: node_version
-
-  # Install meshctl CLI
-  install_meshctl:
-    description: "Install meshctl CLI at specific version"
-    params:
-      version:
-        type: string
-        required: true
-    steps:
-      - handler: shell
-        command: "npm install -g @mcpmesh/cli@${params.version}"
-        timeout: 120
-      - handler: shell
-        command: "meshctl --version"
-        capture: meshctl_version
 
   # Install npm dependencies from a directory
   install_npm_deps:
@@ -104,107 +99,76 @@ routines:
         required: true
         description: "Path to directory with package.json"
     steps:
-      - handler: shell
-        command: "cd ${params.path} && npm install"
-        timeout: 180
+      - handler: npm-install
+        path: ${params.path}
 
   #############################################################################
-  # COMBINED SETUP (for convenience)
+  # COMBINED SETUP ROUTINES
   #############################################################################
 
-  # Setup for scaffolding tests (Node + meshctl only)
+  # Setup for scaffolding tests - just verify prerequisites
   setup_for_scaffold:
-    description: "Setup Node.js and meshctl for scaffolding tests"
-    params:
-      meshctl_version:
-        type: string
-        required: true
+    description: "Verify prerequisites for scaffolding tests"
     steps:
       - handler: shell
         command: |
-          if ! command -v node &> /dev/null; then
-            apt-get update -qq
-            apt-get install -y -qq curl
-            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-            apt-get install -y -qq nodejs
+          # Verify meshctl
+          if ! command -v meshctl &> /dev/null; then
+            echo "ERROR: meshctl not found - use tsuite-mesh image"
+            exit 1
           fi
-        timeout: 180
-      - handler: shell
-        command: "npm install -g @mcpmesh/cli@${params.meshctl_version}"
-        timeout: 120
-      - handler: shell
-        command: "meshctl --version"
-        capture: meshctl_version
+          # Verify node
+          if ! command -v node &> /dev/null; then
+            echo "ERROR: node not found - use tsuite-mesh image"
+            exit 1
+          fi
+          echo "Prerequisites OK: meshctl=$(meshctl --version 2>&1 | head -1), node=$(node --version)"
+        capture: prereq_check
 
-  # Setup for Python agent tests (venv + Node + meshctl)
-  # When using tsuite-mesh image, packages are pre-installed
+  # Setup for Python agent tests
   setup_for_python_agent:
-    description: "Full setup for running Python agents"
-    params:
-      meshctl_version:
-        type: string
-        required: true
-      mcpmesh_version:
-        type: string
-        required: true
+    description: "Setup for running Python agents"
     steps:
-      # Create venv and install mcpmesh (skip if using pre-built image)
       - handler: shell
         command: |
-          cd /workspace
-          # Check if meshctl is already installed (tsuite-mesh image)
-          if command -v meshctl &> /dev/null; then
-            echo "Using pre-built tsuite-mesh image - meshctl already installed"
-            python -m venv .venv
-            # Link to system-installed mesh package instead of reinstalling
-            echo "import sys; sys.path.insert(0, '/usr/local/lib/python3.11/site-packages')" > /workspace/.venv/lib/python3.11/site-packages/mesh.pth
-          else
-            echo "Fresh image - installing packages..."
-            python -m venv .venv
-            /workspace/.venv/bin/pip install mcp-mesh==${params.mcpmesh_version}
-            # Install Node.js if not present
-            if ! command -v node &> /dev/null; then
-              apt-get update -qq
-              apt-get install -y -qq curl
-              curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-              apt-get install -y -qq nodejs
-            fi
-            npm install -g @mcpmesh/cli@${params.meshctl_version}
+          # Verify prerequisites
+          if ! command -v meshctl &> /dev/null; then
+            echo "ERROR: meshctl not found - use tsuite-mesh image"
+            exit 1
           fi
-        timeout: 180
+          python -c "import mesh" 2>/dev/null || {
+            echo "ERROR: mesh module not found - use tsuite-mesh image"
+            exit 1
+          }
+          # Create venv linked to system mesh
+          cd /workspace
+          python -m venv .venv
+          echo "import sys; sys.path.insert(0, '/usr/local/lib/python3.11/site-packages')" > /workspace/.venv/lib/python3.11/site-packages/mesh.pth
+          /workspace/.venv/bin/python -c "import mesh; print('Setup complete: mesh module available')"
+        capture: setup_result
+        timeout: 60
       - handler: shell
         command: "meshctl --version"
         capture: meshctl_version
 
-  # Setup for TypeScript agent tests (Node + meshctl + SDK)
+  # Setup for TypeScript agent tests
   setup_for_typescript_agent:
-    description: "Full setup for running TypeScript agents"
-    params:
-      meshctl_version:
-        type: string
-        required: true
-      sdk_version:
-        type: string
-        required: true
+    description: "Setup for running TypeScript agents"
     steps:
-      # Install Node.js
       - handler: shell
         command: |
-          if ! command -v node &> /dev/null; then
-            apt-get update -qq
-            apt-get install -y -qq curl
-            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-            apt-get install -y -qq nodejs
+          # Verify prerequisites
+          if ! command -v meshctl &> /dev/null; then
+            echo "ERROR: meshctl not found - use tsuite-mesh image"
+            exit 1
           fi
-        timeout: 180
-      # Install meshctl
-      - handler: shell
-        command: "npm install -g @mcpmesh/cli@${params.meshctl_version}"
-        timeout: 120
-      # Install TypeScript SDK globally (for running agents)
-      - handler: shell
-        command: "npm install -g @mcpmesh/sdk@${params.sdk_version}"
-        timeout: 120
+          if ! command -v node &> /dev/null; then
+            echo "ERROR: node not found - use tsuite-mesh image"
+            exit 1
+          fi
+          echo "Prerequisites OK: meshctl=$(meshctl --version 2>&1 | head -1), node=$(node --version)"
+        capture: prereq_check
+        timeout: 30
       - handler: shell
         command: "meshctl --version"
         capture: meshctl_version
@@ -213,29 +177,28 @@ routines:
   # LEGACY (for backward compatibility)
   #############################################################################
 
-  # Full environment setup (alias for setup_for_scaffold)
+  # Legacy setup_environment - now just verifies prerequisites
   setup_environment:
-    description: "Setup complete test environment with Node and meshctl"
+    description: "Verify test environment prerequisites"
     params:
       meshctl_version:
         type: string
-        required: true
+        required: false  # Ignored - version comes from image
     steps:
       - handler: shell
         command: |
-          if ! command -v node &> /dev/null; then
-            apt-get update -qq
-            apt-get install -y -qq curl
-            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-            apt-get install -y -qq nodejs
+          if ! command -v meshctl &> /dev/null; then
+            echo "ERROR: meshctl not found - use tsuite-mesh image"
+            exit 1
           fi
-        timeout: 180
-      - handler: shell
-        command: "npm install -g @mcpmesh/cli@${params.meshctl_version}"
-        timeout: 120
-      - handler: shell
-        command: "meshctl --version"
+          if ! command -v node &> /dev/null; then
+            echo "ERROR: node not found - use tsuite-mesh image"
+            exit 1
+          fi
+          echo "Environment OK"
+          meshctl --version
         capture: meshctl_version
+        timeout: 30
 
   #############################################################################
   # UTILITIES
@@ -246,7 +209,7 @@ routines:
     description: "Remove all files from workspace directory"
     steps:
       - handler: shell
-        command: "rm -rf /workspace/* /workspace/.*  2>/dev/null || true"
+        command: "rm -rf /workspace/* /workspace/.* 2>/dev/null || true"
         ignore_errors: true
 
   # Verify expected files exist
@@ -267,3 +230,83 @@ routines:
             fi
             echo "Found: $f"
           done
+
+  #############################################################################
+  # OBSERVABILITY
+  # Redis + Tempo for distributed tracing tests
+  #############################################################################
+
+  # Start observability services (Redis + Tempo)
+  start_observability:
+    description: "Start Redis and Tempo for distributed tracing"
+    steps:
+      - handler: shell
+        command: |
+          echo "Starting Redis..."
+          redis-server --daemonize yes --port 6379
+          sleep 1
+          redis-cli ping || { echo "ERROR: Redis not responding"; exit 1; }
+          echo "Redis started"
+
+          echo "Starting Tempo..."
+          mkdir -p /var/tempo
+          tempo -config.file=/etc/tempo/tempo.yaml > /var/log/tempo.log 2>&1 &
+
+          # Wait for Tempo to become ready (ingester needs ~15-20s to stabilize)
+          echo "Waiting for Tempo to become ready..."
+          for i in $(seq 1 30); do
+            if wget -q --spider http://localhost:3200/ready 2>/dev/null; then
+              echo "Tempo ready after ${i}s"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "ERROR: Tempo not ready after 30s"
+              cat /var/log/tempo.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          echo "Observability services started:"
+          echo "  Redis: localhost:6379"
+          echo "  Tempo OTLP gRPC: localhost:4317"
+          echo "  Tempo OTLP HTTP: localhost:4318"
+          echo "  Tempo API: localhost:3200"
+        capture: observability_start
+        timeout: 60
+
+  # Stop observability services
+  stop_observability:
+    description: "Stop Redis and Tempo services"
+    steps:
+      - handler: shell
+        command: |
+          echo "Stopping observability services..."
+          redis-cli shutdown 2>/dev/null || true
+          pkill -f tempo 2>/dev/null || true
+          echo "Observability services stopped"
+        capture: observability_stop
+        ignore_errors: true
+
+  # Check observability services status
+  check_observability:
+    description: "Check if Redis and Tempo are running"
+    steps:
+      - handler: shell
+        command: |
+          REDIS_OK=false
+          TEMPO_OK=false
+
+          redis-cli ping > /dev/null 2>&1 && REDIS_OK=true
+          wget -q --spider http://localhost:3200/ready 2>/dev/null && TEMPO_OK=true
+
+          echo "Redis: $REDIS_OK"
+          echo "Tempo: $TEMPO_OK"
+
+          if [ "$REDIS_OK" = "true" ] && [ "$TEMPO_OK" = "true" ]; then
+            echo "STATUS: OK"
+          else
+            echo "STATUS: INCOMPLETE"
+            exit 1
+          fi
+        capture: observability_status

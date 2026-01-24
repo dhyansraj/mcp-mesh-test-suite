@@ -10,7 +10,7 @@ import uuid
 from . import db
 from .models import (
     Run, RunStatus, RunSummary,
-    TestResult, TestStatus, TestDetail,
+    TestResult, TestStatus, TestDetail, TERMINAL_STATES,
     StepResult, StepStatus,
     AssertionResult,
     CapturedValue,
@@ -23,6 +23,7 @@ from .models import (
 # =============================================================================
 
 def create_run(
+    suite_id: Optional[int] = None,
     cli_version: Optional[str] = None,
     sdk_python_version: Optional[str] = None,
     sdk_typescript_version: Optional[str] = None,
@@ -36,13 +37,13 @@ def create_run(
     db.execute(
         """
         INSERT INTO runs (
-            run_id, started_at, status, cli_version,
+            run_id, suite_id, started_at, status, cli_version,
             sdk_python_version, sdk_typescript_version,
             docker_image, total_tests
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            run_id, started_at.isoformat(), RunStatus.RUNNING.value,
+            run_id, suite_id, started_at.isoformat(), RunStatus.RUNNING.value,
             cli_version, sdk_python_version, sdk_typescript_version,
             docker_image, total_tests,
         ),
@@ -51,6 +52,7 @@ def create_run(
 
     return Run(
         run_id=run_id,
+        suite_id=suite_id,
         started_at=started_at,
         status=RunStatus.RUNNING,
         cli_version=cli_version,
@@ -103,21 +105,63 @@ def update_run(
 
 
 def get_run(run_id: str) -> Optional[Run]:
-    """Get a run by ID."""
-    row = db.fetchone("SELECT * FROM runs WHERE run_id = ?", (run_id,))
+    """Get a run by ID with suite name and computed display_name."""
+    row = db.fetchone(
+        """
+        SELECT r.*, s.suite_name,
+            CASE
+                WHEN (SELECT COUNT(*) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+                    THEN (SELECT tr.test_id FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+                WHEN (SELECT COUNT(DISTINCT tr.use_case) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+                    THEN (SELECT tr.use_case FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+                ELSE NULL
+            END as display_name
+        FROM runs r
+        LEFT JOIN suites s ON r.suite_id = s.id
+        WHERE r.run_id = ?
+        """,
+        (run_id,),
+    )
     return Run.from_row(row) if row else None
 
 
 def get_latest_run() -> Optional[Run]:
-    """Get the most recent run."""
-    row = db.fetchone("SELECT * FROM runs ORDER BY started_at DESC LIMIT 1")
+    """Get the most recent run with suite name and computed display_name."""
+    row = db.fetchone(
+        """
+        SELECT r.*, s.suite_name,
+            CASE
+                WHEN (SELECT COUNT(*) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+                    THEN (SELECT tr.test_id FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+                WHEN (SELECT COUNT(DISTINCT tr.use_case) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+                    THEN (SELECT tr.use_case FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+                ELSE NULL
+            END as display_name
+        FROM runs r
+        LEFT JOIN suites s ON r.suite_id = s.id
+        ORDER BY r.started_at DESC LIMIT 1
+        """
+    )
     return Run.from_row(row) if row else None
 
 
 def list_runs(limit: int = 20, offset: int = 0) -> List[Run]:
-    """List runs ordered by start time (newest first)."""
+    """List runs ordered by start time (newest first), with suite name and computed display_name."""
     rows = db.fetchall(
-        "SELECT * FROM runs ORDER BY started_at DESC LIMIT ? OFFSET ?",
+        """
+        SELECT r.*, s.suite_name,
+            CASE
+                WHEN (SELECT COUNT(*) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+                    THEN (SELECT tr.test_id FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+                WHEN (SELECT COUNT(DISTINCT tr.use_case) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+                    THEN (SELECT tr.use_case FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+                ELSE NULL
+            END as display_name
+        FROM runs r
+        LEFT JOIN suites s ON r.suite_id = s.id
+        ORDER BY r.started_at DESC
+        LIMIT ? OFFSET ?
+        """,
         (limit, offset),
     )
     return [Run.from_row(row) for row in rows]
@@ -149,10 +193,14 @@ def complete_run(run_id: str, duration_ms: Optional[int] = None) -> None:
 
     passed = sum(1 for t in tests if t.status == TestStatus.PASSED)
     failed = sum(1 for t in tests if t.status == TestStatus.FAILED)
+    crashed = sum(1 for t in tests if t.status == TestStatus.CRASHED)
     skipped = sum(1 for t in tests if t.status == TestStatus.SKIPPED)
 
+    # CRASHED tests count as failures for overall status
+    total_failed = failed + crashed
+
     # Determine overall status
-    status = RunStatus.COMPLETED if failed == 0 else RunStatus.FAILED
+    status = RunStatus.COMPLETED if total_failed == 0 else RunStatus.FAILED
 
     # Calculate duration if not provided
     run = get_run(run_id)
@@ -165,7 +213,7 @@ def complete_run(run_id: str, duration_ms: Optional[int] = None) -> None:
         status=status,
         finished_at=finished_at,
         passed=passed,
-        failed=failed,
+        failed=total_failed,  # Include crashed tests in failed count
         skipped=skipped,
         duration_ms=duration_ms,
     )
@@ -267,6 +315,10 @@ def update_test_status(
 
     This is the main method called by test runners to report progress.
     It also updates the run's counters.
+
+    Idempotent: ignores updates if test is already in a terminal state
+    (passed, failed, crashed, skipped). This prevents race conditions in parallel
+    execution and ensures crashed tests aren't overwritten.
     """
     # Get current test state
     test = get_test_result_by_test_id(run_id, test_id)
@@ -274,6 +326,12 @@ def update_test_status(
         return None
 
     old_status = test.status
+
+    # Idempotent - don't update terminal states
+    if old_status in TERMINAL_STATES:
+        # Already in terminal state, ignore update
+        return test
+
     now = datetime.now()
 
     # Build update
@@ -284,7 +342,7 @@ def update_test_status(
         updates.append("started_at = ?")
         params.append(now.isoformat())
 
-    if status in (TestStatus.PASSED, TestStatus.FAILED, TestStatus.SKIPPED):
+    if status in (TestStatus.PASSED, TestStatus.FAILED, TestStatus.CRASHED, TestStatus.SKIPPED):
         updates.append("finished_at = ?")
         params.append(now.isoformat())
 
@@ -341,6 +399,9 @@ def _update_run_counters(run_id: str, old_status: TestStatus, new_status: TestSt
         db.execute("UPDATE runs SET passed = passed - 1 WHERE run_id = ?", (run_id,))
     elif old_status == TestStatus.FAILED:
         db.execute("UPDATE runs SET failed = failed - 1 WHERE run_id = ?", (run_id,))
+    elif old_status == TestStatus.CRASHED:
+        # CRASHED counts as failed for run statistics
+        db.execute("UPDATE runs SET failed = failed - 1 WHERE run_id = ?", (run_id,))
     elif old_status == TestStatus.SKIPPED:
         db.execute("UPDATE runs SET skipped = skipped - 1 WHERE run_id = ?", (run_id,))
 
@@ -352,6 +413,9 @@ def _update_run_counters(run_id: str, old_status: TestStatus, new_status: TestSt
     elif new_status == TestStatus.PASSED:
         db.execute("UPDATE runs SET passed = passed + 1 WHERE run_id = ?", (run_id,))
     elif new_status == TestStatus.FAILED:
+        db.execute("UPDATE runs SET failed = failed + 1 WHERE run_id = ?", (run_id,))
+    elif new_status == TestStatus.CRASHED:
+        # CRASHED counts as failed for run statistics
         db.execute("UPDATE runs SET failed = failed + 1 WHERE run_id = ?", (run_id,))
     elif new_status == TestStatus.SKIPPED:
         db.execute("UPDATE runs SET skipped = skipped + 1 WHERE run_id = ?", (run_id,))
@@ -388,6 +452,7 @@ def get_tests_by_usecase(run_id: str) -> dict:
                 "running": 0,
                 "passed": 0,
                 "failed": 0,
+                "crashed": 0,
                 "skipped": 0,
                 "total": 0,
             }
@@ -403,6 +468,8 @@ def get_tests_by_usecase(run_id: str) -> dict:
             grouped[uc]["passed"] += 1
         elif test.status == TestStatus.FAILED:
             grouped[uc]["failed"] += 1
+        elif test.status == TestStatus.CRASHED:
+            grouped[uc]["crashed"] += 1
         elif test.status == TestStatus.SKIPPED:
             grouped[uc]["skipped"] += 1
 
@@ -455,7 +522,20 @@ def update_test_result(
     error_message: Optional[str] = None,
     error_step: Optional[int] = None,
 ) -> None:
-    """Update a test result record."""
+    """
+    Update a test result record.
+
+    Idempotent: ignores status updates if test is already in a
+    terminal state (passed, failed, crashed, skipped).
+    """
+    # Check current status for idempotency
+    if status is not None:
+        current = get_test_result(test_result_id)
+        if current and current.status in TERMINAL_STATES:
+            # Already in terminal state, ignore status update
+            # But still allow other field updates (duration, error_message, etc.)
+            status = None
+
     updates = []
     params = []
 
@@ -680,15 +760,16 @@ def create_assertion_result(
     message: Optional[str] = None,
     passed: bool = False,
     actual_value: Optional[str] = None,
+    expected_value: Optional[str] = None,
 ) -> AssertionResult:
     """Create a new assertion result record."""
     cursor = db.execute(
         """
         INSERT INTO assertion_results (
-            test_result_id, assertion_index, expression, message, passed, actual_value
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            test_result_id, assertion_index, expression, message, passed, actual_value, expected_value
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (test_result_id, assertion_index, expression, message, 1 if passed else 0, actual_value),
+        (test_result_id, assertion_index, expression, message, 1 if passed else 0, actual_value, expected_value),
     )
     db.commit()
 
@@ -700,6 +781,7 @@ def create_assertion_result(
         message=message,
         passed=passed,
         actual_value=actual_value,
+        expected_value=expected_value,
     )
 
 
@@ -973,3 +1055,62 @@ def delete_suite(suite_id: int) -> bool:
     cursor = db.execute("DELETE FROM suites WHERE id = ?", (suite_id,))
     db.commit()
     return cursor.rowcount > 0
+
+
+# =============================================================================
+# Cancellation Operations
+# =============================================================================
+
+def request_cancel(run_id: str) -> None:
+    """Set the cancel_requested flag on a run."""
+    db.execute(
+        "UPDATE runs SET cancel_requested = 1 WHERE run_id = ?",
+        (run_id,),
+    )
+    db.commit()
+
+
+def is_cancel_requested(run_id: str) -> bool:
+    """Check if cancellation has been requested for a run."""
+    row = db.fetchone(
+        "SELECT cancel_requested FROM runs WHERE run_id = ?",
+        (run_id,),
+    )
+    return bool(row["cancel_requested"]) if row else False
+
+
+def cancel_run_with_skip(run_id: str, skip_reason: str = "Run cancelled") -> int:
+    """
+    Mark all pending tests as skipped and complete the run as cancelled.
+
+    Returns the number of tests that were skipped.
+    """
+    # Get all pending tests
+    pending_tests = db.fetchall(
+        "SELECT test_id FROM test_results WHERE run_id = ? AND status = ?",
+        (run_id, TestStatus.PENDING.value),
+    )
+
+    skipped_count = 0
+    for row in pending_tests:
+        update_test_status(
+            run_id=run_id,
+            test_id=row["test_id"],
+            status=TestStatus.SKIPPED,
+            skip_reason=skip_reason,
+        )
+        skipped_count += 1
+
+    # Mark the run as cancelled
+    db.execute(
+        """
+        UPDATE runs SET
+            status = ?,
+            finished_at = ?
+        WHERE run_id = ?
+        """,
+        (RunStatus.CANCELLED.value, datetime.now().isoformat(), run_id),
+    )
+    db.commit()
+
+    return skipped_count

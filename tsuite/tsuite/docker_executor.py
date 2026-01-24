@@ -12,7 +12,7 @@ import tempfile
 import time
 import json
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import docker
 from docker.errors import ContainerError, ImageNotFound, APIError
@@ -30,6 +30,7 @@ class ContainerConfig:
     timeout: int = 300  # 5 minutes default
     memory_limit: str = "1g"
     cpu_limit: float = 1.0
+    mounts: list = field(default_factory=list)  # Suite-level mounts from config.yaml docker.mounts
 
 
 class DockerExecutor:
@@ -147,7 +148,29 @@ class DockerExecutor:
             if uc_artifacts_path.exists() and uc_artifacts_path.is_dir():
                 volumes[str(uc_artifacts_path)] = {"bind": "/uc-artifacts", "mode": "ro"}
 
-        # Add custom mounts from test config
+        # Create and mount logs directory for meshctl output
+        # Structure: ~/.tsuite/runs/<run_id>/<uc>/<tc>/logs/
+        if self.run_id:
+            uc_name = test.id.split("/")[0] if "/" in test.id else test.id
+            tc_name = test.id.split("/")[1] if "/" in test.id else "default"
+            logs_path = Path.home() / ".tsuite" / "runs" / self.run_id / uc_name / tc_name / "logs"
+            logs_path.mkdir(parents=True, exist_ok=True)
+            volumes[str(logs_path)] = {"bind": "/root/.mcp-mesh/logs", "mode": "rw"}
+
+        # Add suite-level mounts from config.yaml docker.mounts
+        for mount in self.config.mounts:
+            mount_type = mount.get("type", "host")
+            container_path = mount.get("container_path")
+
+            if mount_type == "host":
+                host_path = mount.get("host_path")
+                if host_path:
+                    # Resolve relative paths
+                    if not host_path.startswith("/"):
+                        host_path = str(self.suite_path / host_path)
+                    mode = "ro" if mount.get("readonly", False) else "rw"
+                    volumes[host_path] = {"bind": container_path, "mode": mode}
+        # Add custom mounts from test config (can override suite-level)
         for mount in container_config.get("mounts", []):
             mount_type = mount.get("type", "host")
             container_path = mount.get("container_path")
@@ -206,6 +229,12 @@ class DockerExecutor:
                 stdout = container.logs(stdout=True, stderr=False).decode("utf-8")
                 stderr = container.logs(stdout=False, stderr=True).decode("utf-8")
 
+                # Debug: print container output on failure
+                if exit_code != 0:
+                    print(f"DEBUG: Container failed with exit code {exit_code}")
+                    print(f"DEBUG: STDOUT (last 1000 chars):\n{stdout[-1000:]}")
+                    print(f"DEBUG: STDERR (last 500 chars):\n{stderr[-500:]}")
+
             except Exception as e:
                 error = f"Container execution failed: {e}"
                 exit_code = 1
@@ -245,10 +274,16 @@ class DockerExecutor:
     def _build_test_command(self, test: TestCase) -> list[str]:
         """Build the command to run inside the container."""
         # We run a shell script that:
-        # 1. Installs required Python packages
-        # 2. Runs the test
+        # 1. Installs jq (for jq-based assertions)
+        # 2. Installs required Python packages
+        # 3. Runs the test
         script = f'''
 set -e
+
+# Install jq if not present (for jq-based assertions)
+if ! command -v jq &> /dev/null; then
+    apt-get update -qq && apt-get install -y -qq jq 2>/dev/null || true
+fi
 
 # Install required packages
 pip install -q pyyaml requests jsonpath-ng 2>/dev/null

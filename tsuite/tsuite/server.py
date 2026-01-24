@@ -32,6 +32,11 @@ def create_app() -> Flask:
     """Create the Flask application."""
     app = Flask(__name__)
 
+    @app.teardown_appcontext
+    def close_db_connection(exception=None):
+        """Close database connection at end of each request to prevent FD leaks."""
+        db.close_connection()
+
     @app.after_request
     def add_cors_headers(response):
         """Add CORS headers to all responses for dashboard access."""
@@ -50,58 +55,102 @@ def create_app() -> Flask:
         """Health check endpoint."""
         return jsonify({"status": "ok"})
 
-    @app.route("/config", methods=["GET"])
-    def get_config():
-        """Get full configuration."""
+    # =========================================================================
+    # Runner API Endpoints
+    # These endpoints are called by test containers/subprocesses.
+    # =========================================================================
+
+    @app.route("/api/runner/config", methods=["GET"])
+    def api_runner_get_config():
+        """
+        Get full configuration for runner.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
         return jsonify(runtime.get_config())
 
-    @app.route("/config/<path:path>", methods=["GET"])
-    def get_config_value(path: str):
-        """Get specific configuration value by dot-notation path."""
-        # Convert URL path to dot notation (config/packages/cli_version -> packages.cli_version)
+    @app.route("/api/runner/config/<path:path>", methods=["GET"])
+    def api_runner_get_config_value(path: str):
+        """
+        Get specific configuration value by dot-notation path.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
         dot_path = path.replace("/", ".")
         value = runtime.get_config(dot_path)
         if value is None:
             return jsonify({"error": f"Config path not found: {dot_path}"}), 404
         return jsonify({"value": value})
 
-    @app.route("/routine/<scope>/<name>", methods=["GET"])
-    def get_routine(scope: str, name: str):
-        """Get routine definition by scope and name."""
+    @app.route("/api/runner/routine/<scope>/<name>", methods=["GET"])
+    def api_runner_get_routine(scope: str, name: str):
+        """
+        Get routine definition by scope and name.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
         routine = runtime.get_routine(scope, name)
         if routine is None:
             return jsonify({"error": f"Routine not found: {scope}.{name}"}), 404
         return jsonify(routine)
 
-    @app.route("/routines", methods=["GET"])
-    def get_all_routines():
-        """Get all routines."""
+    @app.route("/api/runner/routines", methods=["GET"])
+    def api_runner_get_all_routines():
+        """
+        Get all routines.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
         return jsonify(runtime.get_all_routines())
 
-    @app.route("/state/<path:test_id>", methods=["GET"])
-    def get_state(test_id: str):
-        """Get state from a test."""
+    @app.route("/api/runner/state/<path:test_id>", methods=["GET"])
+    def api_runner_get_state(test_id: str):
+        """
+        Get state for a test.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
         state = runtime.get_test_state(test_id)
         return jsonify(state)
 
-    @app.route("/state/<path:test_id>", methods=["POST"])
-    def update_state(test_id: str):
-        """Merge state into a test."""
+    @app.route("/api/runner/state/<path:test_id>", methods=["POST"])
+    def api_runner_update_state(test_id: str):
+        """
+        Merge state into a test.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
         data = request.get_json() or {}
         runtime.update_test_state(test_id, data)
         return jsonify({"status": "ok"})
 
-    @app.route("/capture/<path:test_id>", methods=["POST"])
-    def capture(test_id: str):
-        """Store a captured variable."""
+    @app.route("/api/runner/capture/<path:test_id>", methods=["POST"])
+    def api_runner_capture(test_id: str):
+        """
+        Store captured variables for a test.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
         data = request.get_json() or {}
         for name, value in data.items():
             runtime.set_captured(test_id, name, value)
         return jsonify({"status": "ok"})
 
-    @app.route("/progress/<path:test_id>", methods=["POST"])
-    def progress(test_id: str):
-        """Update progress for a test."""
+    @app.route("/api/runner/progress/<path:test_id>", methods=["POST"])
+    def api_runner_progress(test_id: str):
+        """
+        Update progress for a test.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
         data = request.get_json() or {}
         runtime.update_progress(
             test_id,
@@ -111,28 +160,55 @@ def create_app() -> Flask:
         )
         return jsonify({"status": "ok"})
 
-    @app.route("/progress/<path:test_id>", methods=["GET"])
-    def get_progress(test_id: str):
-        """Get progress for a test."""
+    @app.route("/api/runner/progress/<path:test_id>", methods=["GET"])
+    def api_runner_get_progress(test_id: str):
+        """
+        Get progress for a test.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
         return jsonify(runtime.get_progress(test_id))
 
-    @app.route("/log/<path:test_id>", methods=["POST"])
-    def log_message(test_id: str):
-        """Log a message from a test."""
+    @app.route("/api/runner/log/<path:test_id>", methods=["POST"])
+    def api_runner_log_message(test_id: str):
+        """
+        Log a message from a test.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
         data = request.get_json() or {}
         level = data.get("level", "info")
         message = data.get("message", "")
-        # For now, just print. Later can stream to UI.
         print(f"[{test_id}] [{level.upper()}] {message}")
         return jsonify({"status": "ok"})
 
-    @app.route("/context/<path:test_id>", methods=["GET"])
-    def get_context(test_id: str):
-        """Get full test context."""
+    @app.route("/api/runner/context/<path:test_id>", methods=["GET"])
+    def api_runner_get_context(test_id: str):
+        """
+        Get full test context.
+
+        Query params:
+            run_id: str (optional) - The run ID for tracking
+        """
         ctx = runtime.get_test_context(test_id)
         if ctx is None:
             return jsonify({"error": f"Test context not found: {test_id}"}), 404
         return jsonify(ctx.to_dict())
+
+    @app.route("/api/runner/should-cancel/<run_id>", methods=["GET"])
+    def api_runner_should_cancel(run_id: str):
+        """
+        Check if a run has been requested to cancel.
+
+        CLI calls this before starting each test to support cooperative cancellation.
+
+        Returns:
+            cancel_requested: bool - True if cancellation has been requested
+        """
+        cancel_requested = repo.is_cancel_requested(run_id)
+        return jsonify({"cancel_requested": cancel_requested})
 
     # =========================================================================
     # Dashboard API Endpoints
@@ -224,7 +300,7 @@ def create_app() -> Flask:
         return jsonify(detail.to_dict())
 
     # =========================================================================
-    # Run Management API (New Architecture)
+    # Run Management API
     # =========================================================================
 
     @app.route("/api/runs", methods=["POST"])
@@ -370,6 +446,7 @@ def create_app() -> Flask:
                 "running": uc_data["running"],
                 "passed": uc_data["passed"],
                 "failed": uc_data["failed"],
+                "crashed": uc_data["crashed"],
                 "skipped": uc_data["skipped"],
                 "total": uc_data["total"],
             })
@@ -392,6 +469,7 @@ def create_app() -> Flask:
             duration_ms: int (optional)
             error_message: str (optional)
             steps: list (optional) - Step results
+            assertions: list (optional) - Assertion results
             skip_reason: str (optional)
         """
         run = repo.get_run(run_id)
@@ -427,10 +505,24 @@ def create_app() -> Flask:
         if not test:
             return jsonify({"error": f"Test not found: {test_id}"}), 404
 
+        # Store assertion results if provided
+        assertions = data.get("assertions")
+        if assertions and test.id:
+            for assertion in assertions:
+                repo.create_assertion_result(
+                    test_result_id=test.id,
+                    assertion_index=assertion.get("index", 0),
+                    expression=assertion.get("expr", ""),
+                    message=assertion.get("message"),
+                    passed=assertion.get("passed", False),
+                    actual_value=assertion.get("actual_value"),
+                    expected_value=assertion.get("expected_value"),
+                )
+
         # Emit SSE event
         if status == TestStatus.RUNNING:
             sse_manager.emit_test_started(run_id, test_id, test.name or test_id)
-        elif status in (TestStatus.PASSED, TestStatus.FAILED, TestStatus.SKIPPED):
+        elif status in (TestStatus.PASSED, TestStatus.FAILED, TestStatus.CRASHED, TestStatus.SKIPPED):
             sse_manager.emit_test_completed(
                 run_id, test_id, status.value,
                 data.get("duration_ms", 0),
@@ -470,6 +562,32 @@ def create_app() -> Flask:
         )
 
         return jsonify(run.to_dict())
+
+    @app.route("/api/runs/<run_id>/cancel", methods=["POST"])
+    def api_cancel_run(run_id: str):
+        """
+        Request cancellation of a running test run.
+
+        Sets cancel_requested flag. CLI will check this before starting each test.
+        """
+        run = repo.get_run(run_id)
+        if not run:
+            return jsonify({"error": f"Run not found: {run_id}"}), 404
+
+        if run.status not in (RunStatus.PENDING, RunStatus.RUNNING):
+            return jsonify({"error": f"Cannot cancel run with status: {run.status.value}"}), 400
+
+        # Set cancel_requested flag
+        repo.request_cancel(run_id)
+
+        # Emit SSE event for UI update
+        from .sse import SSEEvent
+        sse_manager.emit(
+            SSEEvent(type="cancel_requested", data={"run_id": run_id}),
+            run_id=run_id,
+        )
+
+        return jsonify({"success": True, "run_id": run_id, "cancel_requested": True})
 
     @app.route("/api/stats", methods=["GET"])
     def api_stats():
@@ -987,6 +1105,96 @@ def create_app() -> Flask:
     # Test Case Editor API Endpoints
     # =========================================================================
 
+    # =========================================================================
+    # Suite Config Editor API Endpoints
+    # =========================================================================
+
+    @app.route("/api/suites/<int:suite_id>/config", methods=["GET"])
+    def api_get_suite_config(suite_id: int):
+        """
+        Get suite config.yaml content (for config editor).
+
+        Returns the structure of config.yaml with support for editing.
+        """
+        import os
+        from .yaml_utils import load_yaml_file, get_test_case_structure
+
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        config_path = os.path.join(suite.folder_path, "config.yaml")
+
+        if not os.path.isfile(config_path):
+            return jsonify({"error": f"Config not found: {config_path}"}), 404
+
+        try:
+            # Load with comment preservation
+            yaml_data = load_yaml_file(config_path)
+            structure = get_test_case_structure(yaml_data)
+
+            # Read raw content for display
+            with open(config_path, 'r') as f:
+                raw_yaml = f.read()
+
+            return jsonify({
+                "suite_id": suite_id,
+                "path": config_path,
+                "raw_yaml": raw_yaml,
+                "structure": structure,
+            })
+        except Exception as e:
+            return jsonify({"error": f"Failed to read config: {str(e)}"}), 500
+
+    @app.route("/api/suites/<int:suite_id>/config", methods=["PUT"])
+    def api_update_suite_config(suite_id: int):
+        """
+        Update suite config.yaml content.
+
+        Request body:
+            updates: dict - Structured field updates (preserves comments)
+        """
+        import os
+        from .yaml_utils import load_yaml_file, save_yaml_file, merge_yaml_updates
+
+        suite = repo.get_suite(suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {suite_id}"}), 404
+
+        config_path = os.path.join(suite.folder_path, "config.yaml")
+
+        if not os.path.isfile(config_path):
+            return jsonify({"error": f"Config not found: {config_path}"}), 404
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON body"}), 400
+
+        if "updates" not in data:
+            return jsonify({"error": "Must provide 'updates'"}), 400
+
+        try:
+            # Load existing, merge updates, save (preserves comments)
+            yaml_data = load_yaml_file(config_path)
+            merge_yaml_updates(yaml_data, data["updates"])
+            save_yaml_file(yaml_data, config_path)
+
+            # Return updated content
+            with open(config_path, 'r') as f:
+                raw_yaml = f.read()
+
+            return jsonify({
+                "success": True,
+                "suite_id": suite_id,
+                "raw_yaml": raw_yaml,
+            })
+        except Exception as e:
+            return jsonify({"error": f"Failed to save config: {str(e)}"}), 500
+
+    # =========================================================================
+    # Test Case Editor API Endpoints
+    # =========================================================================
+
     @app.route("/api/suites/<int:suite_id>/tests/<path:test_id>/yaml", methods=["GET"])
     def api_get_test_yaml(suite_id: int, test_id: str):
         """
@@ -1232,21 +1440,152 @@ def create_app() -> Flask:
         except Exception as e:
             return jsonify({"error": f"Failed to delete step: {str(e)}"}), 500
 
+    @app.route("/api/runs/<run_id>/rerun", methods=["POST"])
+    def api_rerun(run_id: str):
+        """
+        Rerun a previous test run with the same filters.
+
+        Reads the original run's suite_id and filters, then launches CLI
+        with the same configuration.
+
+        Returns:
+            started: True if subprocess launched
+            pid: Process ID of CLI subprocess
+            description: What's being run
+            original_run_id: The run being rerun
+        """
+        import subprocess
+        import sys
+        import os
+        import tempfile
+        from pathlib import Path
+
+        # Get original run
+        run = repo.get_run(run_id)
+        if not run:
+            return jsonify({"error": f"Run not found: {run_id}"}), 404
+
+        if not run.suite_id:
+            return jsonify({"error": "Cannot rerun: no suite_id associated with this run"}), 400
+
+        suite = repo.get_suite(run.suite_id)
+        if not suite:
+            return jsonify({"error": f"Suite not found: {run.suite_id}"}), 404
+
+        if not os.path.isdir(suite.folder_path):
+            return jsonify({"error": f"Directory not found: {suite.folder_path}"}), 400
+
+        # Get test IDs from original run's test_results
+        original_tests = repo.list_test_results(run_id)
+        if not original_tests:
+            return jsonify({"error": "No tests found in original run"}), 400
+
+        # Determine the scope: single tc, single uc, or full suite
+        test_ids = [t.test_id for t in original_tests]
+        use_cases = set(t.use_case for t in original_tests)
+
+        if len(test_ids) == 1:
+            # Single test case
+            run_scope = ("tc", test_ids[0])
+        elif len(use_cases) == 1:
+            # Multiple tests but all in same use case
+            run_scope = ("uc", list(use_cases)[0])
+        else:
+            # Multiple use cases - run full suite
+            run_scope = ("all", None)
+
+        # Determine tsuite venv path (relative to this package)
+        tsuite_dir = Path(__file__).parent.parent
+        venv_python = tsuite_dir / "venv" / "bin" / "python"
+
+        if not venv_python.exists():
+            # Fallback to system python
+            venv_python = sys.executable
+
+        # Build CLI command (uses --api-url to call back to this server)
+        api_url = f"http://{request.host}"
+        cmd = [
+            str(venv_python),
+            "-m", "tsuite.cli",
+            "--suite-path", suite.folder_path,
+            "--api-url", api_url,
+        ]
+
+        # Add scope flag based on original run
+        scope_type, scope_value = run_scope
+        if scope_type == "tc":
+            cmd.extend(["--tc", scope_value])
+        elif scope_type == "uc":
+            cmd.extend(["--uc", scope_value])
+        else:
+            cmd.append("--all")
+
+        # Add docker flag if mode is docker
+        if suite.mode.value == "docker":
+            cmd.append("--docker")
+
+        # Start subprocess (non-blocking) - CLI will create run and update via API
+        try:
+            output_path = tempfile.mktemp(prefix='tsuite_run_', suffix='.log')
+            output_file = open(output_path, 'w')
+
+            process = subprocess.Popen(
+                cmd,
+                stdout=output_file,
+                stderr=subprocess.STDOUT,
+                cwd=suite.folder_path,
+                env={
+                    **os.environ,
+                    "PYTHONUNBUFFERED": "1",
+                },
+            )
+
+            # Close file handle - subprocess inherits the FD and can write independently
+            output_file.close()
+
+            # Build description of what's running
+            if scope_type == "tc":
+                description = f"Rerunning test case: {scope_value}"
+            elif scope_type == "uc":
+                description = f"Rerunning use case: {scope_value}"
+            else:
+                description = f"Rerunning all tests in: {suite.suite_name}"
+
+            return jsonify({
+                "started": True,
+                "pid": process.pid,
+                "description": description,
+                "mode": suite.mode.value,
+                "log_file": output_path,
+                "original_run_id": run_id,
+            }), 202
+
+        except Exception as e:
+            return jsonify({"error": f"Failed to start rerun: {str(e)}"}), 500
+
     @app.route("/api/suites/<int:suite_id>/run", methods=["POST"])
     def api_run_suite(suite_id: int):
         """
-        Run tests in a suite. Can run all tests, a specific use case, or test case.
+        Run tests in a suite (dumb launcher - Phase 3).
+
+        API server just builds CLI command and launches subprocess.
+        CLI will create run_id and update status via API (eventual consistency).
 
         Request body (optional):
             uc: Use case to run (e.g., "uc01_scaffolding")
             tc: Test case to run (e.g., "uc01_scaffolding/tc01_python_agent")
+            tags: List of tags to filter by
+            skip_tags: List of tags to skip
 
         Returns:
-            run_id: ID of the started run
-            message: Status message
+            started: True if subprocess launched
+            pid: Process ID of CLI subprocess
+            description: What's being run
         """
         import subprocess
+        import sys
         import os
+        import tempfile
         from pathlib import Path
 
         suite = repo.get_suite(suite_id)
@@ -1259,21 +1598,24 @@ def create_app() -> Flask:
         data = request.get_json() or {}
         uc = data.get("uc")
         tc = data.get("tc")
+        tags = data.get("tags", [])
+        skip_tags = data.get("skip_tags", [])
 
         # Determine tsuite venv path (relative to this package)
         tsuite_dir = Path(__file__).parent.parent
         venv_python = tsuite_dir / "venv" / "bin" / "python"
 
         if not venv_python.exists():
-            return jsonify({"error": f"Python venv not found: {venv_python}"}), 500
+            # Fallback to system python
+            venv_python = sys.executable
 
-        # Build command
-        # Use a different port (9998) so it doesn't conflict with the API server (9999)
+        # Build CLI command (uses --api-url to call back to this server)
+        api_url = f"http://{request.host}"
         cmd = [
             str(venv_python),
             "-m", "tsuite.cli",
             "--suite-path", suite.folder_path,
-            "--port", "9998",
+            "--api-url", api_url,
         ]
 
         # Add filter flags
@@ -1284,28 +1626,21 @@ def create_app() -> Flask:
         else:
             cmd.append("--all")
 
+        # Add tag filters
+        for tag in tags:
+            cmd.extend(["--tag", tag])
+        for skip_tag in skip_tags:
+            cmd.extend(["--skip-tag", skip_tag])
+
         # Add docker flag if mode is docker
         if suite.mode.value == "docker":
             cmd.append("--docker")
 
-        # Determine the event server URL for the subprocess to send events back
-        # The subprocess runs on the host machine (not in Docker), so it can
-        # reach localhost directly. The Docker containers communicate via
-        # host.docker.internal to the test server, but SSE events are forwarded
-        # from the subprocess, not from inside Docker.
-        event_server_url = f"http://{request.host}"
-        import sys
-        print(f"[RUN DEBUG] Starting test with TSUITE_EVENT_SERVER={event_server_url}", file=sys.stderr, flush=True)
-
-        # Start subprocess (non-blocking)
+        # Start subprocess (non-blocking) - CLI will create run and update via API
         try:
-            # Write subprocess output to temp file for debugging
-            import tempfile
             output_path = tempfile.mktemp(prefix='tsuite_run_', suffix='.log')
-            print(f"[RUN DEBUG] Subprocess output will be at: {output_path}", file=sys.stderr, flush=True)
-
-            # Run subprocess directly (no shell) with file handle redirection
             output_file = open(output_path, 'w')
+
             process = subprocess.Popen(
                 cmd,
                 stdout=output_file,
@@ -1314,10 +1649,11 @@ def create_app() -> Flask:
                 env={
                     **os.environ,
                     "PYTHONUNBUFFERED": "1",
-                    "TSUITE_EVENT_SERVER": event_server_url,
                 },
             )
-            print(f"[RUN DEBUG] Subprocess started with PID {process.pid}", file=sys.stderr, flush=True)
+
+            # Close file handle - subprocess inherits the FD and can write independently
+            output_file.close()
 
             # Build description of what's running
             if tc:
@@ -1332,7 +1668,7 @@ def create_app() -> Flask:
                 "pid": process.pid,
                 "description": description,
                 "mode": suite.mode.value,
-                "command": " ".join(cmd),
+                "log_file": output_path,
             }), 202
 
         except Exception as e:
@@ -1495,48 +1831,6 @@ def _parse_suite_config(folder_path: str) -> dict:
         "test_count": len(tests),
         "use_cases": list(use_cases.values()),
     }
-
-
-class RunnerServer:
-    """
-    Manages the Flask server lifecycle.
-
-    Runs in a background thread so tests can execute concurrently.
-    """
-
-    def __init__(self, host: str = "0.0.0.0", port: int = 9999):
-        self.host = host
-        self.port = port
-        self.app = create_app()
-        self.server = None
-        self.thread = None
-
-    def start(self):
-        """Start the server in a background thread."""
-        self.server = make_server(self.host, self.port, self.app, threaded=True)
-        self.thread = threading.Thread(target=self.server.serve_forever)
-        self.thread.daemon = True
-        self.thread.start()
-
-    def stop(self):
-        """Stop the server."""
-        if self.server:
-            self.server.shutdown()
-        if self.thread:
-            self.thread.join(timeout=5)
-
-    def get_url(self) -> str:
-        """Get the server URL for containers to use."""
-        # For Docker containers on Mac/Windows, use host.docker.internal
-        # On Linux, we'd need to use the host's IP or --network=host
-        return f"http://host.docker.internal:{self.port}"
-
-    def __enter__(self):
-        self.start()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.stop()
 
 
 def main():

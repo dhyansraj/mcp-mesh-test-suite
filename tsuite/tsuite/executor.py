@@ -52,11 +52,13 @@ class StepExecutor:
         routine_resolver: RoutineResolver,
         context: TestContext,
         server_url: str,
+        suite_path: Path | None = None,
     ):
         self.handlers = handlers
         self.routine_resolver = routine_resolver
         self.context = context
         self.server_url = server_url
+        self.suite_path = suite_path
 
     def execute_step(self, step: dict, step_index: int) -> StepResult:
         """Execute a single step."""
@@ -104,9 +106,21 @@ class StepExecutor:
         # Update context with result
         self.context.last = result
 
-        # Handle capture
-        if "capture" in step and result.success:
-            self.context.captured[step["capture"]] = result.stdout
+        # Handle capture - store both stdout (for backward compat) and full result
+        if "capture" in step:
+            capture_name = step["capture"]
+            # Always store full step result for ${steps.<name>.exit_code} etc.
+            self.context.steps[capture_name] = {
+                "exit_code": result.exit_code,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "success": result.success,
+                "duration": result.duration,
+                "error": result.error,
+            }
+            # Store stdout in captured for backward compatibility
+            if result.success:
+                self.context.captured[capture_name] = result.stdout
 
         # Handle state updates
         if "state" in step and result.success:
@@ -172,6 +186,7 @@ class StepExecutor:
             # Update routine context with captured values
             routine_context["captured"] = self.context.captured
             routine_context["state"] = self.context.state
+            routine_context["steps"] = self.context.steps
             routine_context["last"] = {
                 "exit_code": result.exit_code,
                 "stdout": result.stdout,
@@ -182,10 +197,11 @@ class StepExecutor:
 
     def _build_exec_context(self) -> dict:
         """Build execution context for handlers/expressions."""
-        return {
+        ctx = {
             "config": runtime.get_config(),
             "state": self.context.state,
             "captured": self.context.captured,
+            "steps": self.context.steps,  # Step results by capture name
             "last": {
                 "exit_code": self.context.last.exit_code,
                 "stdout": self.context.last.stdout,
@@ -195,6 +211,29 @@ class StepExecutor:
             "test_id": self.context.test_id,
             "server_url": self.server_url,
         }
+
+        # Add suite_path and artifacts_path for standalone mode
+        if self.suite_path:
+            ctx["suite_path"] = str(self.suite_path)
+            # artifacts_path: suite_path/suites/<test_id>/artifacts
+            artifacts_path = self.suite_path / "suites" / self.context.test_id / "artifacts"
+            if artifacts_path.exists():
+                ctx["artifacts_path"] = str(artifacts_path)
+            else:
+                ctx["artifacts_path"] = ""
+            # uc_artifacts_path: suite_path/suites/<uc>/artifacts
+            uc_artifacts_path = self.suite_path / "suites" / self.context.uc / "artifacts"
+            if uc_artifacts_path.exists():
+                ctx["uc_artifacts_path"] = str(uc_artifacts_path)
+            else:
+                ctx["uc_artifacts_path"] = ""
+        else:
+            # No suite_path - set empty values
+            ctx["suite_path"] = ""
+            ctx["artifacts_path"] = ""
+            ctx["uc_artifacts_path"] = ""
+
+        return ctx
 
     def _interpolate_step(self, step: dict, context: dict) -> dict:
         """Interpolate variables in step parameters."""
@@ -235,11 +274,13 @@ class TestExecutor:
         routine_resolver: RoutineResolver,
         server_url: str,
         base_workdir: Path,
+        suite_path: Path | None = None,
     ):
         self.handlers = handlers
         self.routine_resolver = routine_resolver
         self.server_url = server_url
         self.base_workdir = base_workdir
+        self.suite_path = suite_path
 
     def execute(self, test: TestCase) -> TestResult:
         """Execute a test case."""
@@ -262,6 +303,7 @@ class TestExecutor:
             routine_resolver=self.routine_resolver,
             context=context,
             server_url=self.server_url,
+            suite_path=self.suite_path,
         )
 
         step_results = []
@@ -324,13 +366,15 @@ class TestExecutor:
                 expr = assertion.get("expr", "")
                 message = assertion.get("message", expr)
 
-                passed, details = evaluator.evaluate(expr)
+                passed, details, values = evaluator.evaluate(expr)
                 assertion_results.append({
                     "index": i,
                     "expr": expr,
                     "message": message,
                     "passed": passed,
                     "details": details,
+                    "expected_value": values.get("expected_value"),
+                    "actual_value": values.get("actual_value"),
                 })
 
                 if passed:

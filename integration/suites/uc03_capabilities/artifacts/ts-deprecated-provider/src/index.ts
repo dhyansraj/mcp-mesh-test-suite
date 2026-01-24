@@ -12,7 +12,7 @@ const server = new FastMCP({
 
 const agent = mesh(server, {
   name: "ts-deprecated-provider",
-  port: 9042,
+  httpPort: 9042,
 });
 
 agent.addTool({

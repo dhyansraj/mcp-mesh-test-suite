@@ -10,7 +10,7 @@ ENV/
 *.egg-info/
 .eggs/
 dist/
-build/
+/build/
 
 # Node
 node_modules/
@@ -36,3 +36,13 @@ reports/
 .env
 .env.local
 *.db*
+
+# External repos
+mcp-mesh/
+
+# Claude Code
+.claude/
+
+# Build outputs
+src-tests/out/
+/mcp-mesh

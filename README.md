@@ -46,59 +46,54 @@ Integration test suites organized by use case:
 ## Quick Start
 
 ```bash
-# 1. Setup Python environment (Python 3.11 required)
-cd lib-tests
-python3.11 -m venv venv
-source venv/bin/activate
-pip install -e ../tsuite
+# 1. Setup (first time only)
+cd tsuite && python3.11 -m venv venv && source venv/bin/activate && pip install -r requirements.txt -e .
+cd ../dashboard && npm install
 
-# 2. Build the Docker image
-tsuite --all
+# 2. Build the Docker image (lib-tests)
+./start.sh --cli --suite-path lib-tests
 
 # 3. Run integration tests
-cd ../integration
-python3.11 -m venv venv
-source venv/bin/activate
-pip install -e ../tsuite
+./start.sh --cli --docker
+```
 
-tsuite --all --docker
+## Running the Suite
+
+Use `start.sh` to run CLI, API server, or dashboard:
+
+```bash
+./start.sh --api          # Start API server (http://localhost:9999)
+./start.sh --ui           # Start dashboard UI (http://localhost:3000)
+./start.sh --cli          # Run CLI with default suite (integration/suites)
+./start.sh --all          # Start API + UI in background, then wait
+```
+
+### CLI Options
+
+```bash
+./start.sh --cli                              # Run all tests
+./start.sh --cli --uc uc01_registry           # Run specific use case
+./start.sh --cli --tc tc01_simple             # Run specific test case
+./start.sh --cli --docker                     # Run tests in Docker mode
+./start.sh --cli --standalone                 # Run tests without Docker
+./start.sh --cli --suite-path /path/to/suite  # Run specific suite
 ```
 
 ## Dashboard
 
-The test suite includes a web dashboard for viewing test results and managing test suites.
-
-### Starting the Dashboard
+The web dashboard provides real-time test monitoring and suite management.
 
 ```bash
-# Terminal 1: Start the API server
-cd mcp-mesh-test-suite
-source tsuite/venv/bin/activate
-python -m tsuite.server --port 9999
+# Terminal 1: Start API server
+./start.sh --api
 
-# Terminal 2: Start the web server
-cd mcp-mesh-test-suite/dashboard
-npm install  # first time only
-npm run dev
+# Terminal 2: Start dashboard
+./start.sh --ui
 ```
 
 The dashboard will be available at http://localhost:3000
 
-You can add test suites via Settings → Add Suite in the dashboard UI.
-
-Alternatively, pre-sync suites at startup:
-```bash
-python -m tsuite.server --port 9999 --suites integration,lib-tests
-```
-
-### Running Tests with Dashboard
-
-When running tests while the dashboard server is running, use a different port:
-
-```bash
-# In integration/ or lib-tests/ directory
-tsuite --all --docker --port 9998
-```
+Add test suites via Settings → Add Suite in the dashboard UI.
 
 ## Configuration
 

@@ -19,12 +19,13 @@ test:
     capture: pypi_check
 
   # Create temp venv and install package
+  # Note: mcp-mesh-core requires Python 3.11 (wheels only available for cp311)
   - handler: shell
     command: |
       TMPDIR=$(mktemp -d)
       cd $TMPDIR
       echo "Creating virtual environment in $TMPDIR..."
-      python3 -m venv venv
+      python3.11 -m venv venv
       source venv/bin/activate
       echo "Installing mcp-mesh==${config.packages.sdk_python_version}..."
       pip install mcp-mesh==${config.packages.sdk_python_version}

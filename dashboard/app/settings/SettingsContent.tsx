@@ -16,6 +16,7 @@ import {
   Check,
   Edit,
   X,
+  Settings,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -42,6 +43,7 @@ import {
   formatRelativeTime,
 } from "@/lib/api";
 import { TestCaseTree, TestCaseEditor } from "@/components/test-editor";
+import { SuiteConfigEditor } from "@/components/suite-editor";
 
 interface SettingsContentProps {
   initialSuites: Suite[];
@@ -72,10 +74,17 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
     testName: string;
   } | null>(null);
 
+  // Config editor state
+  const [configSuiteId, setConfigSuiteId] = useState<number | null>(null);
+
   // Load directory listing when dialog opens or path changes
   useEffect(() => {
     if (isAddDialogOpen) {
-      loadDirectory(folderPath || undefined);
+      // Try to restore last browsed path from localStorage
+      const lastPath = typeof window !== 'undefined'
+        ? localStorage.getItem('tsuite-last-browse-path')
+        : null;
+      loadDirectory(lastPath || undefined);
     }
   }, [isAddDialogOpen]);
 
@@ -89,6 +98,10 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
       setDirectories(result.directories);
       setIsSuite(result.is_suite);
       setFolderPath(result.path);
+      // Remember last browsed path
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('tsuite-last-browse-path', result.path);
+      }
     } catch (err) {
       setBrowseError(err instanceof Error ? err.message : "Failed to load directory");
     } finally {
@@ -319,9 +332,9 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
             </div>
           ) : (
             <div className="flex flex-col gap-3">
-              {suites.map((suite) => (
+              {suites.map((suite, idx) => (
                 <Card
-                  key={suite.id}
+                  key={suite.id || `suite-${idx}`}
                   className="rounded-md bg-muted/30 hover:bg-muted/50 transition-colors"
                 >
                   <CardContent className="px-4 py-3">
@@ -367,6 +380,16 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
                           variant="ghost"
                           size="icon"
                           onClick={() => {
+                            setConfigSuiteId(suite.id);
+                          }}
+                          title="Edit config"
+                        >
+                          <Settings className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => {
                             setEditingSuiteId(suite.id);
                             setSelectedTest(null);
                           }}
@@ -407,6 +430,35 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
         </CardContent>
       </Card>
 
+      {/* Config Editor Section */}
+      {configSuiteId && (
+        <Card className="rounded-md">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+            <CardTitle className="text-lg font-medium">
+              Edit Config -{" "}
+              {suites.find((s) => s.id === configSuiteId)?.suite_name}
+            </CardTitle>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setConfigSuiteId(null)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <div className="border rounded-md overflow-hidden h-[600px]">
+              <SuiteConfigEditor
+                suiteId={configSuiteId}
+                suiteName={
+                  suites.find((s) => s.id === configSuiteId)?.suite_name || ""
+                }
+              />
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Test Case Editor Section */}
       {editingSuiteId && (
         <Card className="rounded-md">
@@ -433,7 +485,7 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
                 <div className="p-2 border-b bg-muted/30">
                   <span className="text-sm font-medium">Test Cases</span>
                 </div>
-                <ScrollArea className="flex-1">
+                <ScrollArea className="flex-1 h-0">
                   <div className="p-2">
                     <TestCaseTree
                       suiteId={editingSuiteId}

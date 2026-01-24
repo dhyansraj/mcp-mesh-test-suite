@@ -21,8 +21,10 @@ export default async function RunDetailPage({ params }: Props) {
     return (
       <div className="flex flex-col">
         <Header
-          title={`Run ${id}`}
-          subtitle={`${run.total_tests} tests • ${run.status}`}
+          title={run.display_name
+            ? `${run.suite_name} / ${run.display_name}`
+            : run.suite_name || `Run ${id.slice(0, 8)}`}
+          subtitle={`${id.slice(0, 8)} • ${run.total_tests} tests • ${run.status}`}
         />
 
         <div className="flex-1 p-6">

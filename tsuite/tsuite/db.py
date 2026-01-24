@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL DEFAULT 1
 );
-INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 2);
+INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 3);
 
 -- Each test run session
 CREATE TABLE IF NOT EXISTS runs (
@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS runs (
     skipped INTEGER DEFAULT 0,
     duration_ms INTEGER,
     filters TEXT,
-    mode TEXT DEFAULT 'docker' CHECK(mode IN ('standalone', 'docker'))
+    mode TEXT DEFAULT 'docker' CHECK(mode IN ('standalone', 'docker')),
+    cancel_requested INTEGER DEFAULT 0
 );
 
 -- Individual test case results (also used for live tracking)
@@ -99,6 +100,7 @@ CREATE TABLE IF NOT EXISTS assertion_results (
     message TEXT,
     passed INTEGER NOT NULL,
     actual_value TEXT,
+    expected_value TEXT,
     UNIQUE(test_result_id, assertion_index)
 );
 
@@ -174,6 +176,10 @@ def get_connection() -> sqlite3.Connection:
         _local.connection.row_factory = sqlite3.Row
         # Enable foreign keys
         _local.connection.execute("PRAGMA foreign_keys = ON")
+        # Wait up to 30s for locks instead of failing immediately
+        _local.connection.execute("PRAGMA busy_timeout = 30000")
+        # Enable WAL mode for better concurrency (allows concurrent reads during writes)
+        _local.connection.execute("PRAGMA journal_mode = WAL")
 
     return _local.connection
 
@@ -225,3 +231,9 @@ def commit() -> None:
     """Commit the current transaction."""
     conn = get_connection()
     conn.commit()
+
+
+def migrate_db() -> None:
+    """Run database migrations to update schema."""
+    # No migrations needed - schema is created fresh with all columns
+    pass

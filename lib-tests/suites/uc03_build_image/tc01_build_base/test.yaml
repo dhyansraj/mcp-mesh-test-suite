@@ -23,11 +23,9 @@ test:
   # Get the Dockerfile path (artifacts are in the same directory as test.yaml)
   - handler: shell
     command: |
-      # Find the test directory
-      SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-      # Fallback to finding by pattern
-      DOCKERFILE=$(find /Users/dhyanraj/workspace/github/mcp-mesh/mcp-mesh-lib-test-suites -name "Dockerfile" -path "*tc01_build_base*" | head -1)
-      if [ -z "$DOCKERFILE" ]; then
+      # Find the Dockerfile in lib-tests suite
+      DOCKERFILE=$(find /Users/dhyanraj/workspace/github/mcp-mesh-test-suite/lib-tests -name "Dockerfile" -path "*tc01_build_base*" 2>/dev/null | head -1)
+      if [ -z "$DOCKERFILE" ] || [ ! -f "$DOCKERFILE" ]; then
         echo "ERROR: Dockerfile not found"
         exit 1
       fi
@@ -50,6 +48,7 @@ test:
       echo "  Dockerfile: $DOCKERFILE_DIR/Dockerfile"
 
       docker build \
+        --no-cache \
         --build-arg VERSION=$VERSION \
         --build-arg PIP_VERSION=$PIP_VERSION \
         -t $IMAGE_NAME \

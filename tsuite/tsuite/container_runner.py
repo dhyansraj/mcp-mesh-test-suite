@@ -22,6 +22,20 @@ from tsuite.expressions import ExpressionEvaluator
 from tsuite.client import RunnerClient
 from tsuite.discovery import load_config
 
+# Import handlers from the handlers module
+from handlers import pip_install, npm_install
+
+
+def _step_result_to_dict(result: StepResult) -> dict:
+    """Convert StepResult dataclass to dict for step tracking."""
+    return {
+        "success": result.success,
+        "exit_code": result.exit_code,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "error": result.error,
+    }
+
 
 def run_test(test_yaml_path: str, suite_path: str):
     """
@@ -63,6 +77,7 @@ def run_test(test_yaml_path: str, suite_path: str):
         "config": config,
         "state": {},
         "captured": {},
+        "steps": {},  # Step results by capture name
         "last": {"exit_code": 0, "stdout": "", "stderr": ""},
         "workdir": "/workspace",
         "test_id": test_id,
@@ -126,9 +141,20 @@ def run_test(test_yaml_path: str, suite_path: str):
                 "stderr": result.get("stderr", ""),
             }
 
-            # Handle capture
-            if "capture" in step and result["success"]:
-                context["captured"][step["capture"]] = result.get("stdout", "")
+            # Handle capture - store both stdout (for backward compat) and full result
+            if "capture" in step:
+                capture_name = step["capture"]
+                # Always store full step result for ${steps.<name>.exit_code} etc.
+                context["steps"][capture_name] = {
+                    "exit_code": result.get("exit_code", 0),
+                    "stdout": result.get("stdout", ""),
+                    "stderr": result.get("stderr", ""),
+                    "success": result.get("success", False),
+                    "error": result.get("error"),
+                }
+                # Store stdout in captured for backward compatibility
+                if result["success"]:
+                    context["captured"][capture_name] = result.get("stdout", "")
 
             # Handle state
             if "state" in step and result["success"]:
@@ -143,13 +169,15 @@ def run_test(test_yaml_path: str, suite_path: str):
             expr = assertion.get("expr", "")
             message = assertion.get("message", expr)
 
-            passed, details = evaluator.evaluate(expr)
+            passed, details, metadata = evaluator.evaluate(expr)
             results["assertions"].append({
                 "index": i,
                 "expr": expr,
                 "message": message,
                 "passed": passed,
                 "details": details,
+                "actual_value": metadata.get("actual_value"),
+                "expected_value": metadata.get("expected_value"),
             })
 
             status = "PASS" if passed else "FAIL"
@@ -191,6 +219,7 @@ def run_test(test_yaml_path: str, suite_path: str):
                 steps_passed=steps_passed,
                 steps_failed=steps_failed,
                 steps=results["steps"],
+                assertions=results["assertions"],
             )
         else:
             client.report_test_failed(
@@ -201,6 +230,7 @@ def run_test(test_yaml_path: str, suite_path: str):
                 steps_passed=steps_passed,
                 steps_failed=steps_failed,
                 steps=results["steps"],
+                assertions=results["assertions"],
             )
 
     # Print summary
@@ -238,6 +268,10 @@ def execute_step(step: dict, context: dict, routines: dict, client: RunnerClient
         return execute_http(interpolated, context)
     elif handler_name == "wait":
         return execute_wait(interpolated, context)
+    elif handler_name == "pip-install":
+        return _step_result_to_dict(pip_install.execute(interpolated, context))
+    elif handler_name == "npm-install":
+        return _step_result_to_dict(npm_install.execute(interpolated, context))
     else:
         return {"success": False, "error": f"Unknown handler: {handler_name}"}
 
@@ -291,9 +325,22 @@ def execute_routine(step: dict, context: dict, routines: dict, client: RunnerCli
             "stderr": result.get("stderr", ""),
         }
 
-        if "capture" in routine_step and result.get("success"):
-            routine_context["captured"][routine_step["capture"]] = result.get("stdout", "")
-            context["captured"][routine_step["capture"]] = result.get("stdout", "")
+        if "capture" in routine_step:
+            capture_name = routine_step["capture"]
+            # Always store full step result for ${steps.<name>.exit_code} etc.
+            step_result = {
+                "exit_code": result.get("exit_code", 0),
+                "stdout": result.get("stdout", ""),
+                "stderr": result.get("stderr", ""),
+                "success": result.get("success", False),
+                "error": result.get("error"),
+            }
+            routine_context["steps"][capture_name] = step_result
+            context["steps"][capture_name] = step_result
+            # Store stdout in captured for backward compatibility
+            if result.get("success"):
+                routine_context["captured"][capture_name] = result.get("stdout", "")
+                context["captured"][capture_name] = result.get("stdout", "")
 
     return {"success": True, "exit_code": 0, "stdout": "", "stderr": ""}
 
@@ -328,6 +375,7 @@ def execute_shell(step: dict, context: dict) -> dict:
         result = subprocess.run(
             command,
             shell=True,
+            executable="/bin/bash",  # Use bash explicitly for bashisms like &>
             cwd=workdir,
             capture_output=True,
             text=True,

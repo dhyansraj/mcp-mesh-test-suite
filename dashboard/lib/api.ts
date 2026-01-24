@@ -4,18 +4,32 @@
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:9999";
 
+export interface RunFilters {
+  uc?: string[];
+  tc?: string[];
+  tags?: string[];
+}
+
 export interface Run {
   run_id: string;
+  suite_id: number | null;
+  suite_name: string | null;
+  display_name: string | null;  // Computed: tc name, uc name, or suite name
   started_at: string | null;
   finished_at: string | null;
   status: "pending" | "running" | "completed" | "failed" | "cancelled";
   total_tests: number;
+  pending_count: number;
+  running_count: number;
   passed: number;
   failed: number;
   skipped: number;
   duration_ms: number | null;
   cli_version: string | null;
   docker_image: string | null;
+  filters: RunFilters | null;
+  mode: string | null;
+  cancel_requested: boolean;
 }
 
 export interface RunSummary extends Run {
@@ -29,7 +43,7 @@ export interface TestResult {
   use_case: string;
   test_case: string;
   name: string;
-  status: "pending" | "running" | "passed" | "failed" | "skipped";
+  status: "pending" | "running" | "passed" | "failed" | "crashed" | "skipped";
   started_at: string | null;
   finished_at: string | null;
   duration_ms: number | null;
@@ -272,7 +286,7 @@ export interface RunResponse {
 
 export async function runTests(
   suiteId: number,
-  options?: { uc?: string; tc?: string }
+  options?: { uc?: string; tc?: string; tags?: string[] }
 ): Promise<RunResponse> {
   const res = await fetch(`${API_BASE}/api/suites/${suiteId}/run`, {
     method: "POST",
@@ -286,6 +300,39 @@ export async function runTests(
   return res.json();
 }
 
+export interface RerunResponse extends RunResponse {
+  original_run_id: string;
+}
+
+export async function rerunFromRun(run: Run | RunExtended): Promise<RerunResponse> {
+  // Use the dedicated rerun endpoint - API determines filters from run_id
+  const res = await fetch(`${API_BASE}/api/runs/${run.run_id}/rerun`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "Failed to start rerun");
+  }
+  return res.json();
+}
+
+export interface CancelResponse {
+  success: boolean;
+  run_id: string;
+  cancel_requested: boolean;
+}
+
+export async function cancelRun(runId: string): Promise<CancelResponse> {
+  const res = await fetch(`${API_BASE}/api/runs/${runId}/cancel`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "Failed to cancel run");
+  }
+  return res.json();
+}
+
 // Run Tree API Functions
 
 export interface RunTestTreeUseCase {
@@ -293,8 +340,11 @@ export interface RunTestTreeUseCase {
   tests: TestResult[];
   passed: number;
   failed: number;
+  crashed: number;
+  skipped: number;
   pending: number;
   running: number;
+  total: number;
 }
 
 export interface RunTestTreeResponse {
@@ -311,13 +361,8 @@ export async function getRunTestsTree(runId: string): Promise<RunTestTreeRespons
   return res.json();
 }
 
-export interface RunExtended extends Run {
-  pending_count: number;
-  running_count: number;
-  suite_id: number | null;
-  filters: Record<string, unknown> | null;
-  mode: string;
-}
+// RunExtended is now the same as Run (all fields included in Run)
+export type RunExtended = Run;
 
 export async function getRunExtended(runId: string): Promise<RunExtended> {
   const res = await fetch(`${API_BASE}/api/runs/${runId}`, {
@@ -361,6 +406,7 @@ export function getStatusColor(status: string): string {
     case "completed":
       return "text-success";
     case "failed":
+    case "crashed":
       return "text-destructive";
     case "running":
       return "text-primary";
@@ -380,6 +426,7 @@ export function getStatusBgColor(status: string): string {
     case "completed":
       return "bg-success/20 text-success";
     case "failed":
+    case "crashed":
       return "bg-destructive/20 text-destructive";
     case "running":
       return "bg-primary/20 text-primary";
@@ -557,6 +604,77 @@ export async function deleteTestStep(
   if (!res.ok) {
     const error = await res.json();
     throw new Error(error.error || "Failed to delete step");
+  }
+  return res.json();
+}
+
+// ============================================================================
+// Suite Config Editor API Functions
+// ============================================================================
+
+export interface SuiteConfigStructure {
+  suite?: {
+    name?: string;
+    mode?: "docker" | "standalone";
+  };
+  packages?: {
+    mode?: "auto" | "local" | "published";
+    cli_version?: string;
+    sdk_python_version?: string;
+    sdk_typescript_version?: string;
+    local?: {
+      wheels_dir?: string;
+      packages_dir?: string;
+    };
+  };
+  docker?: {
+    base_image?: string;
+    network?: string;
+  };
+  execution?: {
+    max_workers?: number;
+    timeout?: number;
+  };
+  reports?: {
+    output_dir?: string;
+    formats?: string[];
+    keep_last?: number;
+  };
+  aliases?: Record<string, string>;
+}
+
+export interface SuiteConfigResponse {
+  suite_id: number;
+  path: string;
+  raw_yaml: string;
+  structure: SuiteConfigStructure;
+}
+
+export async function getSuiteConfig(
+  suiteId: number
+): Promise<SuiteConfigResponse> {
+  const res = await fetch(`${API_BASE}/api/suites/${suiteId}/config`, {
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "Failed to fetch config");
+  }
+  return res.json();
+}
+
+export async function updateSuiteConfig(
+  suiteId: number,
+  updates: Partial<SuiteConfigStructure>
+): Promise<{ success: boolean; suite_id: number; raw_yaml: string }> {
+  const res = await fetch(`${API_BASE}/api/suites/${suiteId}/config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ updates }),
+  });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "Failed to update config");
   }
   return res.json();
 }

@@ -36,6 +36,7 @@ class TestContext:
     workdir: Path
     captured: dict[str, Any] = field(default_factory=dict)
     state: dict[str, Any] = field(default_factory=dict)
+    steps: dict[str, dict] = field(default_factory=dict)  # Step results by capture name
     last: StepResult = field(default_factory=StepResult)
 
     def to_dict(self) -> dict:
@@ -48,6 +49,7 @@ class TestContext:
             "workdir": str(self.workdir),
             "captured": self.captured,
             "state": self.state,
+            "steps": self.steps,
             "last": {
                 "exit_code": self.last.exit_code,
                 "stdout": self.last.stdout,
