@@ -110,6 +110,12 @@ PAGES: dict[str, ManPage] = {
         description="REST API server and web dashboard",
         aliases=["server", "dashboard", "ui"],
     ),
+    "scaffold": ManPage(
+        name="scaffold",
+        title="Scaffold",
+        description="Generate test cases from agent directories",
+        aliases=["generate", "gen"],
+    ),
 }
 
 # Build alias lookup
