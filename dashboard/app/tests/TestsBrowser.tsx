@@ -225,11 +225,11 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
               return (
                 <div key={suite.id} className="border rounded-md overflow-hidden">
                   {/* Suite Header */}
-                  <div className="flex items-center gap-2 p-3 hover:bg-muted/50 transition-colors">
-                    <button
-                      onClick={() => toggleSuite(suite.id)}
-                      className="flex items-center gap-2 flex-1 text-left"
-                    >
+                  <div
+                    className="flex items-center gap-2 p-3 hover:bg-muted/50 transition-colors cursor-pointer"
+                    onClick={() => toggleSuite(suite.id)}
+                  >
+                    <div className="flex items-center gap-2 flex-1">
                       {isExpanded ? (
                         <ChevronDown className="h-4 w-4 text-muted-foreground" />
                       ) : (
@@ -243,7 +243,7 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
                       <span className="font-medium flex-1">
                         {suite.suite_name}
                       </span>
-                    </button>
+                    </div>
                     <Badge
                       variant="outline"
                       className={cn(
@@ -302,11 +302,11 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
                             return (
                               <div key={ucKey}>
                                 {/* Use Case Header */}
-                                <div className="flex items-center gap-2 px-3 py-2 pl-8 hover:bg-muted/50 transition-colors">
-                                  <button
-                                    onClick={() => toggleUseCase(ucKey)}
-                                    className="flex items-center gap-2 flex-1 text-left"
-                                  >
+                                <div
+                                  className="flex items-center gap-2 px-3 py-2 pl-8 hover:bg-muted/50 transition-colors cursor-pointer"
+                                  onClick={() => toggleUseCase(ucKey)}
+                                >
+                                  <div className="flex items-center gap-2 flex-1">
                                     {isUcExpanded ? (
                                       <ChevronDown className="h-3 w-3 text-muted-foreground" />
                                     ) : (
@@ -320,7 +320,7 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
                                     <span className="text-sm font-medium">
                                       {ucGroup.useCase}
                                     </span>
-                                  </button>
+                                  </div>
                                   <span className="text-xs text-muted-foreground">
                                     {ucGroup.testCases.reduce(
                                       (sum, tc) => sum + tc.tests.length,

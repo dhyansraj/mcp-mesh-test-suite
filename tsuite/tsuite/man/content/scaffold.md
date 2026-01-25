@@ -18,6 +18,10 @@ tsuite scaffold --suite ./my-suite --uc uc01_tags --tc tc01_test ./agent1
 
 # Preview without creating files
 tsuite scaffold --suite ./my-suite --uc uc01_tags --tc tc01_test --dry-run ./agent1
+
+# Generate test.yaml for agents already in artifacts (skip copy)
+tsuite scaffold --suite ./my-suite --uc uc01_tags --tc tc01_test \
+  --skip-artifact-copy ./my-suite/suites/uc01_tags/tc01_test/artifacts/agent1
 ```
 
 ## Options
@@ -32,6 +36,7 @@ tsuite scaffold --suite ./my-suite --uc uc01_tags --tc tc01_test --dry-run ./age
 | `--dry-run` | Preview without creating files |
 | `--force` | Overwrite existing test case |
 | `--no-interactive` | Skip prompts, use defaults |
+| `--skip-artifact-copy` | Skip copying artifacts, just generate test.yaml |
 
 ## Agent Detection
 

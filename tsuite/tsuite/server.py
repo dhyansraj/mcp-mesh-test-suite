@@ -978,11 +978,7 @@ def create_app() -> Flask:
         )
 
         updated = repo.get_suite(suite_id)
-        return jsonify({
-            "synced": True,
-            "test_count": updated.test_count,
-            "last_synced_at": updated.last_synced_at.isoformat() if updated.last_synced_at else None,
-        })
+        return jsonify(updated.to_dict())
 
     @app.route("/api/suites/<int:suite_id>/resolve", methods=["POST"])
     def api_resolve_tests(suite_id: int):

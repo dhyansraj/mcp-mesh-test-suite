@@ -1628,6 +1628,7 @@ def man_cmd(topic: str | None, list_topics: bool):
 @click.option("--no-interactive", is_flag=True, help="Skip prompts, use defaults")
 @click.option("--dry-run", is_flag=True, help="Preview without creating files")
 @click.option("--force", is_flag=True, help="Overwrite existing TC")
+@click.option("--skip-artifact-copy", is_flag=True, help="Skip copying artifacts, just generate test.yaml")
 @click.argument("agent_dirs", nargs=-1, required=True, type=click.Path(exists=True))
 def scaffold_cmd(
     suite_path: str,
@@ -1638,6 +1639,7 @@ def scaffold_cmd(
     no_interactive: bool,
     dry_run: bool,
     force: bool,
+    skip_artifact_copy: bool,
     agent_dirs: tuple,
 ):
     """Generate test case from agent directories.
@@ -1731,6 +1733,7 @@ def scaffold_cmd(
             test_name=test_name,
             dry_run=dry_run,
             force=force,
+            skip_artifact_copy=skip_artifact_copy,
         )
 
         # Run scaffold

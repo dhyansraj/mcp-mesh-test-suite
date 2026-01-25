@@ -290,11 +290,17 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
           )}
           onClick={() => setFilter(filter === "passed" ? null : "passed")}
         >
-          <CardContent className="flex items-center gap-4 p-4">
-            <CheckCircle className="h-8 w-8 text-success" />
-            <div>
-              <p className="text-2xl font-bold">{stats.passed}</p>
-              <p className="text-sm text-muted-foreground">Passed</p>
+          <CardContent className="p-4">
+            <div className="flex items-start justify-between">
+              <div className="flex flex-col">
+                <div className="p-2 rounded-lg w-fit bg-success/20">
+                  <CheckCircle className="h-5 w-5 text-success" />
+                </div>
+                <p className="mt-2 text-sm text-muted-foreground">Passed</p>
+              </div>
+              <span className="text-5xl font-bold leading-none text-success">
+                {stats.passed}
+              </span>
             </div>
           </CardContent>
         </Card>
@@ -307,11 +313,17 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
           )}
           onClick={() => setFilter(filter === "failed" ? null : "failed")}
         >
-          <CardContent className="flex items-center gap-4 p-4">
-            <XCircle className="h-8 w-8 text-destructive" />
-            <div>
-              <p className="text-2xl font-bold">{stats.failed}</p>
-              <p className="text-sm text-muted-foreground">Failed</p>
+          <CardContent className="p-4">
+            <div className="flex items-start justify-between">
+              <div className="flex flex-col">
+                <div className="p-2 rounded-lg w-fit bg-destructive/20">
+                  <XCircle className="h-5 w-5 text-destructive" />
+                </div>
+                <p className="mt-2 text-sm text-muted-foreground">Failed</p>
+              </div>
+              <span className="text-5xl font-bold leading-none text-destructive">
+                {stats.failed}
+              </span>
             </div>
           </CardContent>
         </Card>

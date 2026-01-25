@@ -46,6 +46,7 @@ import {
   Play,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import SlotCounter from "react-slot-counter";
 
 // ============================================================================
 // StatsCards Component
@@ -119,15 +120,19 @@ function StatsCards({
             onClick={() => onFilterClick?.(isActive ? "" : card.status)}
           >
             <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div className={cn("p-2 rounded-lg", card.bgColor)}>
-                  <Icon
-                    className={cn("h-5 w-5", card.color, card.iconClass)}
-                  />
+              <div className="flex items-start justify-between">
+                <div className="flex flex-col">
+                  <div className={cn("p-2 rounded-lg w-fit", card.bgColor)}>
+                    <Icon
+                      className={cn("h-5 w-5", card.color, card.iconClass)}
+                    />
+                  </div>
+                  <p className="mt-2 text-sm text-muted-foreground">{card.label}</p>
                 </div>
-                <span className="text-2xl font-bold">{card.value}</span>
+                <span className={cn("text-5xl font-bold leading-none", card.color)}>
+                  <SlotCounter value={card.value} sequentialAnimationMode />
+                </span>
               </div>
-              <p className="mt-2 text-sm text-muted-foreground">{card.label}</p>
             </CardContent>
           </Card>
         );
@@ -895,7 +900,7 @@ export function LiveFeed() {
 
           {displayedRunId && (
             <div className="flex items-center gap-2 rounded bg-primary/10 px-4 py-2">
-              {currentRunId === displayedRunId && !run?.cancel_requested ? (
+              {currentRunId === displayedRunId && run?.status === "running" && !run?.cancel_requested ? (
                 <span className="relative flex h-3 w-3">
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75"></span>
                   <span className="relative inline-flex h-3 w-3 rounded-full bg-primary"></span>

@@ -39,6 +39,7 @@ class ScaffoldConfig:
     test_name: Optional[str] = None
     dry_run: bool = False
     force: bool = False
+    skip_artifact_copy: bool = False  # Skip copying, just generate test.yaml
 
 
 class ScaffoldError(Exception):
@@ -480,8 +481,9 @@ def run_scaffold(config: ScaffoldConfig) -> None:
             f"Use --force to overwrite."
         )
 
-    # Check for artifact conflicts
-    check_artifact_conflicts(artifacts_dir, config.agents, config.force)
+    # Check for artifact conflicts (skip if not copying)
+    if not config.skip_artifact_copy:
+        check_artifact_conflicts(artifacts_dir, config.agents, config.force)
 
     if config.dry_run:
         console.print("\n[bold cyan]Dry run - no files will be created[/bold cyan]\n")
@@ -508,19 +510,25 @@ def run_scaffold(config: ScaffoldConfig) -> None:
     elif config.force:
         console.print(f"[yellow]![/yellow] Overwriting TC: {config.uc_name}/{config.tc_name}/")
 
-    # Create artifacts directory
-    if not artifacts_dir.exists():
-        if config.dry_run:
-            console.print(f"[dim]Would create artifacts: {artifacts_dir}[/dim]")
-        else:
-            artifacts_dir.mkdir(parents=True)
+    # Create artifacts directory (skip if not copying)
+    if not config.skip_artifact_copy:
+        if not artifacts_dir.exists():
+            if config.dry_run:
+                console.print(f"[dim]Would create artifacts: {artifacts_dir}[/dim]")
+            else:
+                artifacts_dir.mkdir(parents=True)
 
-    # Copy agents
-    console.print(f"[green]✓[/green] Copying artifacts:")
-    for agent in config.agents:
-        copy_agent_to_artifacts(agent, artifacts_dir, config.dry_run)
-        type_label = "TypeScript" if agent.agent_type == "typescript" else "Python"
-        console.print(f"    - {agent.name} ({type_label})")
+        # Copy agents
+        console.print(f"[green]✓[/green] Copying artifacts:")
+        for agent in config.agents:
+            copy_agent_to_artifacts(agent, artifacts_dir, config.dry_run)
+            type_label = "TypeScript" if agent.agent_type == "typescript" else "Python"
+            console.print(f"    - {agent.name} ({type_label})")
+    else:
+        console.print(f"[yellow]![/yellow] Skipping artifact copy (--skip-artifact-copy)")
+        for agent in config.agents:
+            type_label = "TypeScript" if agent.agent_type == "typescript" else "Python"
+            console.print(f"    - {agent.name} ({type_label})")
 
     # Generate test.yaml
     test_yaml_path = tc_dir / "test.yaml"

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutDashboard, History, Radio, Settings, FolderTree } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useLiveRun } from "@/lib/live-run-context";
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
@@ -15,6 +16,7 @@ const navigation = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { currentRunId } = useLiveRun();
 
   return (
     <aside className="flex h-screen w-64 flex-col border-r border-border bg-sidebar">
@@ -48,7 +50,7 @@ export function Sidebar() {
             >
               <item.icon className="h-5 w-5" />
               {item.name}
-              {item.name === "Live" && (
+              {item.name === "Live" && currentRunId && (
                 <span className="ml-auto flex h-2 w-2">
                   <span className="absolute inline-flex h-2 w-2 animate-ping rounded-full bg-primary opacity-75"></span>
                   <span className="relative inline-flex h-2 w-2 rounded-full bg-primary"></span>
