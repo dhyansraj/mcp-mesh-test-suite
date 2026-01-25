@@ -167,10 +167,16 @@ def clean_npm_local_references(package_json_path: Path) -> bool:
     Replaces:
         "@mcpmesh/sdk": "file:../../../packages/sdk"
     With:
-        "@mcpmesh/sdk": "${config.packages.sdk_typescript_version}"
+        "@mcpmesh/sdk": "0.8.0-beta.9"
+
+    The npm-install handler will override these with local tarballs or
+    specific published versions based on the config mode at runtime.
 
     Returns True if changes were made.
     """
+    # Default version for @mcpmesh packages (last stable beta with TS support)
+    MCPMESH_DEFAULT_VERSION = "0.8.0-beta.9"
+
     try:
         content = package_json_path.read_text()
         pkg_data = json.loads(content)
@@ -179,25 +185,17 @@ def clean_npm_local_references(package_json_path: Path) -> bool:
 
     changed = False
 
-    # Mapping of package names to config variables
-    package_mapping = {
-        "@mcpmesh/sdk": "${config.packages.sdk_typescript_version}",
-        "@mcpmesh/cli": "${config.packages.cli_version}",
-        "@mcpmesh/core": "${config.packages.core_version}",
-    }
-
     for dep_key in ["dependencies", "devDependencies"]:
         deps = pkg_data.get(dep_key, {})
         for pkg_name, version in list(deps.items()):
             if isinstance(version, str) and version.startswith("file:"):
-                # Replace with config variable or remove
-                if pkg_name in package_mapping:
-                    deps[pkg_name] = package_mapping[pkg_name]
-                    changed = True
+                # Replace local file references
+                # @mcpmesh packages use specific version, others use "*"
+                if pkg_name.startswith("@mcpmesh/"):
+                    deps[pkg_name] = MCPMESH_DEFAULT_VERSION
                 else:
-                    # Unknown local package - use latest
-                    deps[pkg_name] = "latest"
-                    changed = True
+                    deps[pkg_name] = "*"
+                changed = True
 
     if changed:
         package_json_path.write_text(json.dumps(pkg_data, indent=2) + "\n")
@@ -569,5 +567,6 @@ def print_completion_message(
     # Check if any npm cleanup was done
     ts_agents = [a for a in config.agents if a.agent_type == "typescript"]
     if ts_agents:
-        console.print("  • Local npm references (file:...) have been updated to use")
-        console.print("    published versions (${config.packages.*})")
+        console.print("  • Local npm references (file:...) have been replaced with")
+        console.print("    default versions. The npm-install handler will override")
+        console.print("    @mcpmesh packages with local tarballs or configured versions.")

@@ -58,8 +58,12 @@ Only essential files are copied (whitelist):
 - `src/` directory
 - `prompts/` directory (if exists)
 
-Local npm references (`file:../..`) are automatically updated to use
-published versions (`${config.packages.sdk_typescript_version}`).
+Local npm references (`file:../..`) are automatically replaced:
+- `@mcpmesh/*` packages → `0.8.0-beta.9` (default working version)
+- Other packages → `*`
+
+The `npm-install` handler overrides @mcpmesh packages with local tarballs
+or configured versions based on the config mode at runtime.
 
 ### Python Agents
 
