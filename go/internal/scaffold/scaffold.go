@@ -2,6 +2,7 @@
 package scaffold
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -159,11 +160,15 @@ func cleanNpmLocalReferences(packageJSONPath string) (bool, error) {
 	}
 
 	if changed {
-		newData, err := json.MarshalIndent(pkgData, "", "  ")
-		if err != nil {
+		// Use Encoder with SetEscapeHTML(false) to prevent escaping >, <, &
+		var buf bytes.Buffer
+		encoder := json.NewEncoder(&buf)
+		encoder.SetEscapeHTML(false)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(pkgData); err != nil {
 			return false, err
 		}
-		if err := os.WriteFile(packageJSONPath, append(newData, '\n'), 0644); err != nil {
+		if err := os.WriteFile(packageJSONPath, buf.Bytes(), 0644); err != nil {
 			return false, err
 		}
 	}
@@ -431,11 +436,30 @@ test:
     capture: agent_list
 
   # === TODO: Add your test steps below ===
+  #
+  # Example: Call a tool and capture result
+  # - name: "Call calculate tool"
+  #   handler: shell
+  #   command: 'meshctl call calculate ''{"a": 10, "b": 5, "operator": "+"}'''
+  #   workdir: /workspace
+  #   capture: calculate_result
 
 assertions:
 %s
 
-  # TODO: Add your assertions here
+  # === Assertion Examples ===
+  #
+  # String contains:
+  # - expr: "${captured.agent_list} contains 'my-agent'"
+  #   message: "my-agent should be registered"
+  #
+  # JSON extraction with jq (numeric comparison - no quotes):
+  # - expr: ${jq:captured.calculate_result:.content[0].text | fromjson | .result} == 15
+  #   message: "Result should be 15"
+  #
+  # JSON extraction with jq (string comparison - with quotes):
+  # - expr: "${jq:captured.calculate_result:.content[0].text | fromjson | .status} == 'success'"
+  #   message: "Status should be success"
 
 post_run:
   - handler: shell

@@ -120,11 +120,16 @@ jobs:
           name: dashboard
           path: go/cmd/tsuite/dashboard
 
+      - name: Set version from tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
       - name: Build Go binaries
         working-directory: go
         run: |
-          # Build CLI (with embedded dashboard)
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o bin/tsuite ./cmd/tsuite
+          # Build CLI (with embedded dashboard) - inject version via ldflags
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags "-X main.version=${{ env.VERSION }}" -o bin/tsuite ./cmd/tsuite
 
           # Build runner (native)
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o bin/tsuite-runner ./cmd/runner
@@ -134,7 +139,7 @@ jobs:
         working-directory: go
         run: |
           # Darwin needs linux runner for Docker mode
-          GOOS=linux GOARCH=${{ matrix.goarch }} go build -o bin/tsuite-runner-linux ./cmd/runner
+          GOOS=linux GOARCH=${{ matrix.goarch }} go build -ldflags "-X main.version=${{ env.VERSION }}" -o bin/tsuite-runner-linux ./cmd/runner
 
       - name: Upload binaries artifact
         uses: actions/upload-artifact@v4

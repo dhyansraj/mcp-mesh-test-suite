@@ -10,7 +10,7 @@ import {
   FileText,
   Container,
   Terminal,
-  TestTube,
+  FlaskConical,
   Play,
   Loader2,
 } from "lucide-react";
@@ -209,7 +209,7 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
       <Card className="rounded-md">
         <CardHeader className="pb-4">
           <CardTitle className="text-lg font-medium flex items-center gap-2">
-            <TestTube className="h-5 w-5" />
+            <FlaskConical className="h-5 w-5" />
             Test Browser
           </CardTitle>
         </CardHeader>

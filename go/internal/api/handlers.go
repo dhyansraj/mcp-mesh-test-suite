@@ -1404,6 +1404,19 @@ func (s *Server) deleteRun(c *gin.Context) {
 	})
 }
 
+// ==================== Stats ====================
+
+// getStats handles GET /api/stats
+func (s *Server) getStats(c *gin.Context) {
+	stats, err := s.repo.GetRunStats()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, stats)
+}
+
 // ==================== SSE Events ====================
 
 // streamEvents handles GET /api/events

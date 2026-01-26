@@ -1,11 +1,14 @@
 .PHONY: build build-cli build-runner run clean deps test build-dashboard build-with-dashboard
 
+# Version can be overridden: make build VERSION=1.2.3
+VERSION ?= dev
+
 # Build both binaries (CLI and runner) - native for current platform
 build: build-cli build-runner
 
 # Build just the CLI binary
 build-cli:
-	go build -o bin/tsuite ./cmd/tsuite
+	go build -ldflags "-X main.version=$(VERSION)" -o bin/tsuite ./cmd/tsuite
 
 # Build dashboard from Next.js source
 build-dashboard:

@@ -18,12 +18,14 @@ import (
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/client"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/config"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/db"
+	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/man"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/runner"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/scaffold"
 )
 
 var (
-	version = "0.1.0-go"
+	// version is set at build time via ldflags: -ldflags "-X main.version=X.Y.Z"
+	version = "dev"
 )
 
 // Run command flags
@@ -321,9 +323,10 @@ func runTestsWithRunnerParallel(ctx context.Context, cancelFunc context.CancelFu
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "tsuite",
-		Short: "Test suite runner for mcp-mesh",
-		Long: `tsuite is the test suite runner for mcp-mesh.
-It provides CLI commands and API server for running and managing tests.`,
+		Short: "YAML-driven integration test framework",
+		Long: `mcp-mesh-tsuite - YAML-driven integration test framework.
+
+Features: embedded dashboard UI, Docker/standalone modes for isolation, parallel test execution.`,
 		Version: version,
 	}
 
@@ -452,6 +455,25 @@ Examples:
 	scaffoldCmd.Flags().BoolVar(&scaffoldNoInteractive, "no-interactive", false, "Skip prompts, use defaults")
 	scaffoldCmd.MarkFlagRequired("suite")
 	rootCmd.AddCommand(scaffoldCmd)
+
+	// Man command
+	manCmd := &cobra.Command{
+		Use:   "man [topic]",
+		Short: "View documentation for tsuite",
+		Long: `View documentation for tsuite.
+
+Examples:
+  tsuite man --list           List all topics
+  tsuite man quickstart       View quickstart guide
+  tsuite man handlers         View handlers documentation
+  tsuite man --raw handlers   Output raw markdown (for LLM usage)`,
+		Args: cobra.MaximumNArgs(1),
+		Run:  runMan,
+	}
+	var manListTopics, manRaw bool
+	manCmd.Flags().BoolVar(&manListTopics, "list", false, "List available topics")
+	manCmd.Flags().BoolVar(&manRaw, "raw", false, "Output raw markdown without formatting (for LLM usage)")
+	rootCmd.AddCommand(manCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -1251,8 +1273,16 @@ func runScaffold(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Validate agent directories
-	agentPaths := args
+	// Validate agent directories - filter out empty strings
+	var agentPaths []string
+	for _, arg := range args {
+		if strings.TrimSpace(arg) != "" {
+			agentPaths = append(agentPaths, arg)
+		}
+	}
+	if len(agentPaths) == 0 {
+		return fmt.Errorf("at least one agent directory is required")
+	}
 	if err := scaffold.ValidateNoParentDirs(agentPaths); err != nil {
 		return err
 	}
@@ -1319,4 +1349,42 @@ func runScaffold(cmd *cobra.Command, args []string) error {
 	}
 
 	return scaffold.Run(config)
+}
+
+// =============================================================================
+// Man Command
+// =============================================================================
+
+func runMan(cmd *cobra.Command, args []string) {
+	listTopics, _ := cmd.Flags().GetBool("list")
+	raw, _ := cmd.Flags().GetBool("raw")
+	renderer := man.NewRenderer(os.Stdout)
+
+	if listTopics || len(args) == 0 {
+		renderer.RenderList()
+		return
+	}
+
+	topic := args[0]
+	page := man.GetPage(topic)
+	if page == nil {
+		renderer.RenderNotFound(topic)
+		os.Exit(1)
+	}
+
+	if raw {
+		// Output raw markdown for LLM usage
+		content, err := page.GetContent()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(content)
+		return
+	}
+
+	if err := renderer.RenderPage(page); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 }

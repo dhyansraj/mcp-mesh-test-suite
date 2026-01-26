@@ -9,7 +9,7 @@ import {
   RefreshCw,
   Container,
   Terminal,
-  TestTube,
+  FlaskConical,
   Folder,
   ChevronUp,
   Home,
@@ -365,7 +365,7 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
                         </p>
                         <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
                           <span className="flex items-center gap-1">
-                            <TestTube className="h-3 w-3" />
+                            <FlaskConical className="h-3 w-3" />
                             {suite.test_count} tests
                           </span>
                           {suite.last_synced_at && (

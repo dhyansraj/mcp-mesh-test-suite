@@ -89,6 +89,9 @@ func (s *Server) setupRoutes() {
 		api.POST("/suites/:id/test-step/:phase/*test_id", s.addTestStepHandler)
 		api.DELETE("/suites/:id/test-step/:phase/:index/*test_id", s.deleteTestStepHandler)
 
+		// Stats
+		api.GET("/stats", s.getStats)
+
 		// Runs
 		api.GET("/runs", s.listRuns)
 		api.POST("/runs", s.createRun)

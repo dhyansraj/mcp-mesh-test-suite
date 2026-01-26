@@ -906,6 +906,59 @@ func (r *Repository) CreateAssertionResult(ar *models.AssertionResult) error {
 	return nil
 }
 
+// RunStats holds aggregate statistics across all runs
+type RunStats struct {
+	TotalRuns          int64   `json:"total_runs"`
+	TotalTestsExecuted int64   `json:"total_tests_executed"`
+	TotalPassed        int64   `json:"total_passed"`
+	TotalFailed        int64   `json:"total_failed"`
+	AvgRunDurationMS   *int64  `json:"avg_run_duration_ms"`
+	PassRate           float64 `json:"pass_rate"`
+}
+
+// GetRunStats returns aggregate statistics across all completed/failed runs
+func (r *Repository) GetRunStats() (*RunStats, error) {
+	row := r.db.QueryRow(`
+		SELECT
+			COUNT(*) as total_runs,
+			COALESCE(SUM(total_tests), 0) as total_tests_executed,
+			COALESCE(SUM(passed), 0) as total_passed,
+			COALESCE(SUM(failed), 0) as total_failed,
+			AVG(duration_ms) as avg_run_duration_ms
+		FROM runs
+		WHERE status IN ('completed', 'failed')
+	`)
+
+	stats := &RunStats{}
+	var avgDuration sql.NullFloat64
+
+	err := row.Scan(
+		&stats.TotalRuns,
+		&stats.TotalTestsExecuted,
+		&stats.TotalPassed,
+		&stats.TotalFailed,
+		&avgDuration,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if avgDuration.Valid {
+		avg := int64(avgDuration.Float64)
+		stats.AvgRunDurationMS = &avg
+	}
+
+	// Calculate pass rate
+	total := stats.TotalPassed + stats.TotalFailed
+	if total > 0 {
+		stats.PassRate = float64(stats.TotalPassed) / float64(total) * 100
+		// Round to 2 decimal places
+		stats.PassRate = float64(int(stats.PassRate*100)) / 100
+	}
+
+	return stats, nil
+}
+
 // Helper functions for null values
 func nullString(ns sql.NullString) interface{} {
 	if ns.Valid {

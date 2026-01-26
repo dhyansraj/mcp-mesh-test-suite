@@ -1,7 +1,7 @@
 "use client";
 
 import { Card, CardContent } from "@/components/ui/card";
-import { Activity, CheckCircle, Clock, TestTube } from "lucide-react";
+import { Activity, CheckCircle, Clock, FlaskConical } from "lucide-react";
 import { formatDuration } from "@/lib/api";
 
 interface StatsCardsProps {
@@ -42,7 +42,7 @@ export function StatsCards({
     {
       name: "Total Tests",
       value: totalTests.toString(),
-      icon: TestTube,
+      icon: FlaskConical,
       color: "text-secondary",
       bgColor: "bg-secondary/10",
     },
