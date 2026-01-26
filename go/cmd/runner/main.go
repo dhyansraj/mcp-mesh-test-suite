@@ -6,9 +6,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -26,6 +28,7 @@ var (
 	runID        string
 	testID       string
 	workdir      string
+	logDir       string
 	jsonOutput   bool
 )
 
@@ -46,6 +49,7 @@ It is typically invoked by the tsuite CLI, either directly or inside a container
 	rootCmd.Flags().StringVar(&runID, "run-id", "", "Run identifier (env: TSUITE_RUN_ID)")
 	rootCmd.Flags().StringVar(&testID, "test-id", "", "Test identifier (env: TSUITE_TEST_ID)")
 	rootCmd.Flags().StringVar(&workdir, "workdir", "", "Working directory for test execution")
+	rootCmd.Flags().StringVar(&logDir, "log-dir", "", "Directory for worker.log and mcp-mesh logs (env: TSUITE_LOG_DIR)")
 	rootCmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON to stdout")
 
 	if err := rootCmd.Execute(); err != nil {
@@ -64,6 +68,9 @@ func runTest(cmd *cobra.Command, args []string) error {
 	}
 	if testID == "" {
 		testID = os.Getenv("TSUITE_TEST_ID")
+	}
+	if logDir == "" {
+		logDir = os.Getenv("TSUITE_LOG_DIR")
 	}
 
 	// Validate required parameters
@@ -100,6 +107,27 @@ func runTest(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("test.yaml not found: %s", testYamlPath)
 	}
 
+	// Setup worker logger if log-dir is specified
+	var workerLog *WorkerLogger
+	if logDir != "" {
+		os.MkdirAll(logDir, 0755)
+		workerLog, err = NewWorkerLogger(logDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to create worker log: %v\n", err)
+		} else {
+			defer workerLog.Close()
+			workerLog.Log("=== Test Execution Started ===")
+			workerLog.Log("Test ID: %s", testID)
+			workerLog.Log("Suite Path: %s", absPath)
+		}
+
+		// Set MCP_MESH_LOG_DIR for mcp-mesh agents (standalone mode)
+		// This ensures agent logs go to the same location as in docker mode
+		mcpLogsDir := filepath.Join(logDir, "logs")
+		os.MkdirAll(mcpLogsDir, 0755)
+		os.Setenv("MCP_MESH_LOG_DIR", mcpLogsDir)
+	}
+
 	// Create API client if configured
 	var apiClient *client.RunnerClient
 	if apiURL != "" && runID != "" {
@@ -122,14 +150,25 @@ func runTest(cmd *cobra.Command, args []string) error {
 	// Create test runner and execute
 	testRunner, err := runner.NewTestRunner(absPath, apiURL, runID, workdir)
 	if err != nil {
+		if workerLog != nil {
+			workerLog.Log("ERROR: Failed to create test runner: %v", err)
+		}
 		reportError(apiClient, err.Error())
 		return err
 	}
 
 	result, err := testRunner.RunTest(testID)
 	if err != nil {
+		if workerLog != nil {
+			workerLog.Log("ERROR: Test execution failed: %v", err)
+		}
 		reportError(apiClient, err.Error())
 		return err
+	}
+
+	// Log result to worker log
+	if workerLog != nil {
+		workerLog.LogResult(result)
 	}
 
 	// Report result to API
@@ -256,4 +295,112 @@ func convertResultToJSON(result *runner.TestResult) map[string]any {
 		"steps":        steps,
 		"assertions":   assertions,
 	}
+}
+
+// =============================================================================
+// Worker Logger
+// =============================================================================
+
+// WorkerLogger writes execution trace to worker.log
+type WorkerLogger struct {
+	file   *os.File
+	writer io.Writer
+}
+
+// NewWorkerLogger creates a new worker logger
+func NewWorkerLogger(logDir string) (*WorkerLogger, error) {
+	logPath := filepath.Join(logDir, "worker.log")
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, err
+	}
+	return &WorkerLogger{
+		file:   file,
+		writer: file,
+	}, nil
+}
+
+// Close closes the log file
+func (w *WorkerLogger) Close() error {
+	if w.file != nil {
+		return w.file.Close()
+	}
+	return nil
+}
+
+// Log writes a formatted message to the log
+func (w *WorkerLogger) Log(format string, args ...any) {
+	timestamp := time.Now().Format("2006-01-02 15:04:05.000")
+	msg := fmt.Sprintf(format, args...)
+	fmt.Fprintf(w.writer, "[%s] %s\n", timestamp, msg)
+}
+
+// LogResult writes the test result to the log
+func (w *WorkerLogger) LogResult(result *runner.TestResult) {
+	w.Log("=== Test Result ===")
+	if result.Passed {
+		w.Log("Status: PASSED")
+	} else {
+		w.Log("Status: FAILED")
+		if result.Error != "" {
+			w.Log("Error: %s", result.Error)
+		}
+	}
+	w.Log("Duration: %.2fs", result.Duration.Seconds())
+
+	// Log steps
+	if len(result.Steps) > 0 {
+		w.Log("")
+		w.Log("--- Steps ---")
+		for _, step := range result.Steps {
+			status := "✓"
+			if !step.Success {
+				status = "✗"
+			}
+			w.Log("[%s] %s: %s (%s)", status, step.Phase, step.Name, step.Handler)
+			if step.Stdout != "" {
+				w.Log("  stdout: %s", truncate(step.Stdout, 500))
+			}
+			if step.Stderr != "" {
+				w.Log("  stderr: %s", truncate(step.Stderr, 500))
+			}
+			if step.Error != "" {
+				w.Log("  error: %s", step.Error)
+			}
+		}
+	}
+
+	// Log assertions
+	if len(result.Assertions) > 0 {
+		w.Log("")
+		w.Log("--- Assertions ---")
+		for _, assertion := range result.Assertions {
+			status := "✓"
+			if !assertion.Passed {
+				status = "✗"
+			}
+			w.Log("[%s] %s", status, assertion.Expr)
+			if assertion.Message != "" {
+				w.Log("  message: %s", assertion.Message)
+			}
+			if !assertion.Passed {
+				w.Log("  actual: %s", assertion.Actual)
+				w.Log("  expected: %s", assertion.Expected)
+			}
+		}
+	}
+
+	w.Log("")
+	w.Log("=== Test Execution Completed ===")
+}
+
+// truncate truncates a string to maxLen characters
+func truncate(s string, maxLen int) string {
+	// Replace newlines with spaces for single-line output
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", "")
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

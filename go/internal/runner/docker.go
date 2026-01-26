@@ -232,16 +232,30 @@ func (e *DockerExecutor) ExecuteTest(ctx context.Context, testID string, testCon
 		}
 	}
 
-	// Create and mount logs directory
+	// Create and mount logs directory for unified logging
+	// Structure: ~/.tsuite/runs/{run_id}/{uc}/{tc}/
+	//   - worker.log: runner execution trace
+	//   - logs/: mcp-mesh agent logs
 	if e.runID != "" && len(parts) >= 2 {
-		logsPath := filepath.Join(os.Getenv("HOME"), ".tsuite", "runs", e.runID, parts[0], parts[1], "logs")
+		testLogDir := filepath.Join(os.Getenv("HOME"), ".tsuite", "runs", e.runID, parts[0], parts[1])
+		logsPath := filepath.Join(testLogDir, "logs")
 		if err := os.MkdirAll(logsPath, 0755); err == nil {
+			// Mount parent directory for worker.log
+			mounts = append(mounts, mount.Mount{
+				Type:     mount.TypeBind,
+				Source:   testLogDir,
+				Target:   "/var/log/tsuite",
+				ReadOnly: false,
+			})
+			// Mount logs subdir for mcp-mesh agent logs
 			mounts = append(mounts, mount.Mount{
 				Type:     mount.TypeBind,
 				Source:   logsPath,
 				Target:   "/root/.mcp-mesh/logs",
 				ReadOnly: false,
 			})
+			// Set env var for runner to know where to write worker.log
+			env = append(env, "TSUITE_LOG_DIR=/var/log/tsuite")
 		}
 	}
 
@@ -373,7 +387,7 @@ func (e *DockerExecutor) ensureImage(ctx context.Context, imageName string) erro
 // buildTestCommand creates the command to run inside the container
 func (e *DockerExecutor) buildTestCommand(testID string) []string {
 	// Run the Go runner binary (mounted at /usr/local/bin/tsuite-runner)
-	// Environment variables TSUITE_API, TSUITE_RUN_ID, TSUITE_TEST_ID are already set
+	// Environment variables TSUITE_API, TSUITE_RUN_ID, TSUITE_TEST_ID, TSUITE_LOG_DIR are already set
 	script := fmt.Sprintf(`
 set -e
 
@@ -382,7 +396,7 @@ if ! command -v jq &> /dev/null; then
     apt-get update -qq && apt-get install -y -qq jq 2>/dev/null || true
 fi
 
-# Run the Go test runner
+# Run the Go test runner (uses TSUITE_LOG_DIR env var for logging)
 /usr/local/bin/tsuite-runner \
     --test-yaml /tests/suites/%s/test.yaml \
     --suite-path /tests

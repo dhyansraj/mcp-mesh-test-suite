@@ -113,6 +113,15 @@ func runTestWithRunner(ctx context.Context, runnerBinary, suitePath, testID, api
 	}
 	if runID != "" {
 		args = append(args, "--run-id", runID)
+
+		// Set log directory for unified logging (standalone mode)
+		// Structure: ~/.tsuite/runs/{run_id}/{uc}/{tc}/
+		parts := strings.SplitN(testID, "/", 2)
+		if len(parts) == 2 {
+			logDir := filepath.Join(os.Getenv("HOME"), ".tsuite", "runs", runID, parts[0], parts[1])
+			os.MkdirAll(logDir, 0755)
+			args = append(args, "--log-dir", logDir)
+		}
 	}
 	if baseWorkdir != "" {
 		testWorkdir := filepath.Join(baseWorkdir, strings.ReplaceAll(testID, "/", "_"))
