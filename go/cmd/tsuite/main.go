@@ -283,6 +283,7 @@ Features: embedded dashboard UI, Docker/standalone modes for isolation, parallel
 
 	var apiPort int
 	apiCmd.Flags().IntVarP(&apiPort, "port", "p", 9999, "Server port")
+	apiCmd.Flags().BoolP("detach", "d", false, "Run server in background")
 
 	rootCmd.AddCommand(apiCmd)
 
@@ -426,6 +427,7 @@ Examples:
 
 func runAPIServer(cmd *cobra.Command, args []string) error {
 	port, _ := cmd.Flags().GetInt("port")
+	detach, _ := cmd.Flags().GetBool("detach")
 
 	// Check if already running
 	running, existingPID := isServerRunning()
@@ -435,9 +437,16 @@ func runAPIServer(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Handle detach mode
+	if detach && os.Getenv("TSUITE_DETACHED") != "1" {
+		return startDetached(port)
+	}
+
 	// Set database path (use same location as Python version)
 	dbPath := db.DefaultDBPath()
-	fmt.Printf("Using database: %s\n", dbPath)
+	if os.Getenv("TSUITE_DETACHED") != "1" {
+		fmt.Printf("Using database: %s\n", dbPath)
+	}
 
 	// Write PID file
 	tsuiteDir := getTsuiteHome()
@@ -445,8 +454,13 @@ func runAPIServer(cmd *cobra.Command, args []string) error {
 	pidFile := getPidFile()
 	os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
 
+	// Also save the port for status command
+	portFile := filepath.Join(tsuiteDir, "server.port")
+	os.WriteFile(portFile, []byte(fmt.Sprintf("%d", port)), 0644)
+
 	// Clean up PID file on exit
 	defer os.Remove(pidFile)
+	defer os.Remove(portFile)
 
 	server, err := api.NewServer(port)
 	if err != nil {
@@ -454,6 +468,57 @@ func runAPIServer(cmd *cobra.Command, args []string) error {
 	}
 
 	return server.Run()
+}
+
+func startDetached(port int) error {
+	// Get executable path
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	// Build command: tsuite api --port <port> (without --detach)
+	cmdArgs := []string{"api", "--port", fmt.Sprintf("%d", port)}
+
+	proc := exec.Command(exe, cmdArgs...)
+	proc.Env = append(os.Environ(), "TSUITE_DETACHED=1")
+
+	// Redirect stdout/stderr to log file
+	tsuiteDir := getTsuiteHome()
+	os.MkdirAll(tsuiteDir, 0755)
+	logFile, err := os.OpenFile(filepath.Join(tsuiteDir, "server.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to create log file: %w", err)
+	}
+	proc.Stdout = logFile
+	proc.Stderr = logFile
+
+	// Start the detached process
+	if err := proc.Start(); err != nil {
+		logFile.Close()
+		return fmt.Errorf("failed to start server: %w", err)
+	}
+
+	// Wait a moment and check if it's running
+	time.Sleep(500 * time.Millisecond)
+
+	running, pid := isServerRunning()
+	if !running {
+		// Read last few lines of log for error info
+		logFile.Close()
+		logContent, _ := os.ReadFile(filepath.Join(tsuiteDir, "server.log"))
+		lines := strings.Split(string(logContent), "\n")
+		lastLines := lines
+		if len(lines) > 5 {
+			lastLines = lines[len(lines)-5:]
+		}
+		return fmt.Errorf("server failed to start. Check %s/server.log:\n%s", tsuiteDir, strings.Join(lastLines, "\n"))
+	}
+
+	fmt.Printf("Server started in background (PID: %d, port: %d)\n", pid, port)
+	fmt.Printf("Logs: %s/server.log\n", tsuiteDir)
+	fmt.Println("Use 'tsuite stop' to stop the server")
+	return nil
 }
 
 func runTests(cmd *cobra.Command, args []string) error {
