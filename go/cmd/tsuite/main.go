@@ -396,7 +396,7 @@ Examples:
 		RunE: runScaffold,
 	}
 	var scaffoldSuite, scaffoldUC, scaffoldTC, scaffoldName, scaffoldArtifactLevel string
-	var scaffoldDryRun, scaffoldForce, scaffoldSkipCopy, scaffoldNoInteractive bool
+	var scaffoldDryRun, scaffoldForce, scaffoldSkipCopy, scaffoldNoInteractive, scaffoldSymlink bool
 	scaffoldCmd.Flags().StringVar(&scaffoldSuite, "suite", "", "Path to test suite (required)")
 	scaffoldCmd.Flags().StringVar(&scaffoldUC, "uc", "", "Use case name (e.g., uc01_tags)")
 	scaffoldCmd.Flags().StringVar(&scaffoldTC, "tc", "", "Test case name (e.g., tc01_test)")
@@ -405,6 +405,7 @@ Examples:
 	scaffoldCmd.Flags().BoolVar(&scaffoldDryRun, "dry-run", false, "Preview without creating files")
 	scaffoldCmd.Flags().BoolVar(&scaffoldForce, "force", false, "Overwrite existing TC")
 	scaffoldCmd.Flags().BoolVar(&scaffoldSkipCopy, "skip-artifact-copy", false, "Skip copying artifacts")
+	scaffoldCmd.Flags().BoolVar(&scaffoldSymlink, "symlink", false, "Create symlinks to agents instead of copying")
 	scaffoldCmd.Flags().BoolVar(&scaffoldNoInteractive, "no-interactive", false, "Skip prompts, use defaults")
 	scaffoldCmd.MarkFlagRequired("suite")
 	rootCmd.AddCommand(scaffoldCmd)
@@ -1223,6 +1224,7 @@ func runScaffold(cmd *cobra.Command, args []string) error {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	force, _ := cmd.Flags().GetBool("force")
 	skipCopy, _ := cmd.Flags().GetBool("skip-artifact-copy")
+	useSymlinks, _ := cmd.Flags().GetBool("symlink")
 	noInteractive, _ := cmd.Flags().GetBool("no-interactive")
 
 	// Resolve suite path
@@ -1309,6 +1311,7 @@ func runScaffold(cmd *cobra.Command, args []string) error {
 		DryRun:           dryRun,
 		Force:            force,
 		SkipArtifactCopy: skipCopy,
+		UseSymlinks:      useSymlinks,
 	}
 
 	return scaffold.Run(config)

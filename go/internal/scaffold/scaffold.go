@@ -32,6 +32,7 @@ type Config struct {
 	DryRun           bool
 	Force            bool
 	SkipArtifactCopy bool
+	UseSymlinks      bool // Create symlinks instead of copying artifacts
 }
 
 // ValidateSuite checks that suite exists and has config.yaml.
@@ -236,6 +237,33 @@ func copyAgentToArtifacts(agent *AgentInfo, artifactsDir string, dryRun bool) (s
 		return targetPath, copyTypeScriptAgent(agent, targetPath)
 	}
 	return targetPath, copyPythonAgent(agent, targetPath)
+}
+
+// symlinkAgentToArtifacts creates a symlink to agent directory in artifacts.
+// This is useful for testing existing examples without copying them.
+func symlinkAgentToArtifacts(agent *AgentInfo, artifactsDir string, dryRun bool) (string, error) {
+	targetPath := filepath.Join(artifactsDir, agent.Name)
+
+	// Get absolute path of agent directory for the symlink target
+	absAgentPath, err := filepath.Abs(agent.Path)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	if dryRun {
+		fmt.Printf("  Would symlink: %s → %s\n", targetPath, absAgentPath)
+		return targetPath, nil
+	}
+
+	// Remove existing if present (file, dir, or symlink)
+	os.RemoveAll(targetPath)
+
+	// Create symlink
+	if err := os.Symlink(absAgentPath, targetPath); err != nil {
+		return "", fmt.Errorf("failed to create symlink: %w", err)
+	}
+
+	return targetPath, nil
 }
 
 // copyTypeScriptAgent copies TypeScript agent using whitelist approach.
@@ -535,20 +563,35 @@ func Run(config *Config) error {
 		fmt.Printf("! Overwriting TC: %s/%s/\n", config.UCName, config.TCName)
 	}
 
-	// Copy artifacts
+	// Copy or symlink artifacts
 	if !config.SkipArtifactCopy {
 		if !config.DryRun {
 			os.MkdirAll(artifactsDir, 0755)
 		}
 
-		fmt.Println("✓ Copying artifacts:")
-		for _, agent := range config.Agents {
-			copyAgentToArtifacts(&agent, artifactsDir, config.DryRun)
-			typeLabel := "Python"
-			if agent.AgentType == "typescript" {
-				typeLabel = "TypeScript"
+		if config.UseSymlinks {
+			fmt.Println("✓ Creating artifact symlinks:")
+			for _, agent := range config.Agents {
+				_, err := symlinkAgentToArtifacts(&agent, artifactsDir, config.DryRun)
+				if err != nil {
+					return fmt.Errorf("failed to create symlink for %s: %w", agent.Name, err)
+				}
+				typeLabel := "Python"
+				if agent.AgentType == "typescript" {
+					typeLabel = "TypeScript"
+				}
+				fmt.Printf("    - %s → %s (%s)\n", agent.Name, agent.Path, typeLabel)
 			}
-			fmt.Printf("    - %s (%s)\n", agent.Name, typeLabel)
+		} else {
+			fmt.Println("✓ Copying artifacts:")
+			for _, agent := range config.Agents {
+				copyAgentToArtifacts(&agent, artifactsDir, config.DryRun)
+				typeLabel := "Python"
+				if agent.AgentType == "typescript" {
+					typeLabel = "TypeScript"
+				}
+				fmt.Printf("    - %s (%s)\n", agent.Name, typeLabel)
+			}
 		}
 	} else {
 		fmt.Println("! Skipping artifact copy (--skip-artifact-copy)")
