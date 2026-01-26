@@ -47,19 +47,8 @@ func (s *Server) listSuites(c *gin.Context) {
 
 // getSuite handles GET /api/suites/:id
 func (s *Server) getSuite(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid suite ID"})
-		return
-	}
-
-	suite, err := s.repo.GetSuiteByID(id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if suite == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Suite not found"})
+	suite, ok := s.getSuiteByIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -209,19 +198,8 @@ func (s *Server) createSuite(c *gin.Context) {
 
 // updateSuite handles PUT /api/suites/:id
 func (s *Server) updateSuite(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid suite ID"})
-		return
-	}
-
-	suite, err := s.repo.GetSuiteByID(id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if suite == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Suite not found"})
+	suite, ok := s.getSuiteByIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -252,46 +230,24 @@ func (s *Server) updateSuite(c *gin.Context) {
 
 // deleteSuite handles DELETE /api/suites/:id
 func (s *Server) deleteSuite(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid suite ID"})
+	suite, ok := s.getSuiteByIDParam(c)
+	if !ok {
 		return
 	}
 
-	suite, err := s.repo.GetSuiteByID(id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if suite == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Suite not found"})
-		return
-	}
-
-	if err := s.repo.DeleteSuite(id); err != nil {
+	if err := s.repo.DeleteSuite(suite.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"deleted": true, "id": id})
+	c.JSON(http.StatusOK, gin.H{"deleted": true, "id": suite.ID})
 }
 
 // syncSuite handles POST /api/suites/:id/sync
 // Re-reads config.yaml and updates the cached config in the database
 func (s *Server) syncSuite(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid suite ID"})
-		return
-	}
-
-	suite, err := s.repo.GetSuiteByID(id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if suite == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Suite not found"})
+	suite, ok := s.getSuiteByIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -356,19 +312,8 @@ func (s *Server) syncSuite(c *gin.Context) {
 
 // getSuiteTests handles GET /api/suites/:id/tests
 func (s *Server) getSuiteTests(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid suite ID"})
-		return
-	}
-
-	suite, err := s.repo.GetSuiteByID(id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if suite == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Suite not found"})
+	suite, ok := s.getSuiteByIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -407,7 +352,7 @@ func (s *Server) getSuiteTests(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"suite_id": id,
+		"suite_id": suite.ID,
 		"tests":    tests,
 		"count":    len(tests),
 	})
@@ -469,20 +414,13 @@ func (s *Server) getLatestRun(c *gin.Context) {
 
 // getRun handles GET /api/runs/:run_id
 func (s *Server) getRun(c *gin.Context) {
-	runID := c.Param("run_id")
-
-	run, err := s.repo.GetRunByID(runID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if run == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Run not found"})
+	run, ok := s.getRunByIDParam(c)
+	if !ok {
 		return
 	}
 
 	// Get test results
-	tests, err := s.repo.GetTestResultsByRunID(runID)
+	tests, err := s.repo.GetTestResultsByRunID(run.RunID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -516,19 +454,12 @@ func (s *Server) getRun(c *gin.Context) {
 
 // getRunTests handles GET /api/runs/:run_id/tests
 func (s *Server) getRunTests(c *gin.Context) {
-	runID := c.Param("run_id")
-
-	run, err := s.repo.GetRunByID(runID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if run == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Run not found"})
+	run, ok := s.getRunByIDParam(c)
+	if !ok {
 		return
 	}
 
-	tests, err := s.repo.GetTestResultsByRunID(runID)
+	tests, err := s.repo.GetTestResultsByRunID(run.RunID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -551,7 +482,7 @@ func (s *Server) getRunTests(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"run_id": runID,
+		"run_id": run.RunID,
 		"tests":  tests,
 		"count":  len(tests),
 	})
@@ -559,19 +490,12 @@ func (s *Server) getRunTests(c *gin.Context) {
 
 // getRunTestsTree handles GET /api/runs/:run_id/tests/tree
 func (s *Server) getRunTestsTree(c *gin.Context) {
-	runID := c.Param("run_id")
-
-	run, err := s.repo.GetRunByID(runID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if run == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Run not found"})
+	run, ok := s.getRunByIDParam(c)
+	if !ok {
 		return
 	}
 
-	tests, err := s.repo.GetTestResultsByRunID(runID)
+	tests, err := s.repo.GetTestResultsByRunID(run.RunID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -639,7 +563,7 @@ func (s *Server) getRunTestsTree(c *gin.Context) {
 	})
 
 	c.JSON(http.StatusOK, gin.H{
-		"run_id":    runID,
+		"run_id":    run.RunID,
 		"run":       run,
 		"use_cases": useCases,
 	})
@@ -1105,36 +1029,29 @@ func (s *Server) updateTestStatusByPath(c *gin.Context) {
 
 // completeRun handles POST /api/runs/:run_id/complete
 func (s *Server) completeRun(c *gin.Context) {
-	runID := c.Param("run_id")
-
-	run, err := s.repo.GetRunByID(runID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if run == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Run not found"})
+	run, ok := s.getRunByIDParam(c)
+	if !ok {
 		return
 	}
 
-	if err := s.repo.CompleteRun(runID); err != nil {
+	if err := s.repo.CompleteRun(run.RunID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to complete run: " + err.Error()})
 		return
 	}
 
 	// Get updated run
-	run, _ = s.repo.GetRunByID(runID)
+	run, _ = s.repo.GetRunByID(run.RunID)
 
 	// Emit SSE run_completed event
 	durationMS := int64(0)
 	if run.DurationMS.Valid {
 		durationMS = run.DurationMS.Int64
 	}
-	s.sseHub.EmitRunCompleted(runID, run.Passed, run.Failed, run.Skipped, durationMS)
+	s.sseHub.EmitRunCompleted(run.RunID, run.Passed, run.Failed, run.Skipped, durationMS)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":     true,
-		"run_id":      runID,
+		"run_id":      run.RunID,
 		"status":      run.Status,
 		"passed":      run.Passed,
 		"failed":      run.Failed,
@@ -1145,15 +1062,8 @@ func (s *Server) completeRun(c *gin.Context) {
 // rerunTests handles POST /api/runs/:run_id/rerun
 // Like Python, this spawns CLI subprocess to actually run tests
 func (s *Server) rerunTests(c *gin.Context) {
-	runID := c.Param("run_id")
-
-	run, err := s.repo.GetRunByID(runID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if run == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Run not found"})
+	run, ok := s.getRunByIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -1175,7 +1085,7 @@ func (s *Server) rerunTests(c *gin.Context) {
 	}
 
 	// Get tests from original run to determine scope
-	tests, err := s.repo.GetTestResultsByRunID(runID)
+	tests, err := s.repo.GetTestResultsByRunID(run.RunID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -1277,7 +1187,7 @@ func (s *Server) rerunTests(c *gin.Context) {
 		"description":     description,
 		"mode":            suite.Mode,
 		"log_file":        logPath,
-		"original_run_id": runID,
+		"original_run_id": run.RunID,
 	})
 }
 
@@ -1581,19 +1491,8 @@ func nullInt64Value(ni sql.NullInt64) any {
 
 // getSuiteConfig handles GET /api/suites/:id/config
 func (s *Server) getSuiteConfig(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid suite ID"})
-		return
-	}
-
-	suite, err := s.repo.GetSuiteByID(id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if suite == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Suite not found"})
+	suite, ok := s.getSuiteByIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -1620,7 +1519,7 @@ func (s *Server) getSuiteConfig(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"suite_id":  id,
+		"suite_id":  suite.ID,
 		"path":      configPath,
 		"raw_yaml":  string(rawYAML),
 		"structure": structure,
@@ -1629,19 +1528,8 @@ func (s *Server) getSuiteConfig(c *gin.Context) {
 
 // updateSuiteConfig handles PUT /api/suites/:id/config
 func (s *Server) updateSuiteConfig(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid suite ID"})
-		return
-	}
-
-	suite, err := s.repo.GetSuiteByID(id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if suite == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Suite not found"})
+	suite, ok := s.getSuiteByIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -1722,19 +1610,10 @@ func mergeUpdates(config map[string]any, updates map[string]any) {
 
 // ==================== Test Case YAML Editor ====================
 
-// Helper to strip leading slash from wildcard params
-func stripLeadingSlash(s string) string {
-	if len(s) > 0 && s[0] == '/' {
-		return s[1:]
-	}
-	return s
-}
-
 // getTestYAMLHandler handles GET /api/suites/:id/test-yaml/*test_id
 func (s *Server) getTestYAMLHandler(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid suite ID"})
+	id, ok := s.parseSuiteID(c)
+	if !ok {
 		return
 	}
 	testID := stripLeadingSlash(c.Param("test_id"))
@@ -1743,9 +1622,8 @@ func (s *Server) getTestYAMLHandler(c *gin.Context) {
 
 // updateTestYAMLHandler handles PUT /api/suites/:id/test-yaml/*test_id
 func (s *Server) updateTestYAMLHandler(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid suite ID"})
+	id, ok := s.parseSuiteID(c)
+	if !ok {
 		return
 	}
 	testID := stripLeadingSlash(c.Param("test_id"))
@@ -1754,9 +1632,8 @@ func (s *Server) updateTestYAMLHandler(c *gin.Context) {
 
 // getTestStepsHandler handles GET /api/suites/:id/test-steps/*test_id
 func (s *Server) getTestStepsHandler(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid suite ID"})
+	id, ok := s.parseSuiteID(c)
+	if !ok {
 		return
 	}
 	testID := stripLeadingSlash(c.Param("test_id"))
@@ -1765,9 +1642,8 @@ func (s *Server) getTestStepsHandler(c *gin.Context) {
 
 // updateTestStepHandler handles PUT /api/suites/:id/test-step/:phase/:index/*test_id
 func (s *Server) updateTestStepHandler(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid suite ID"})
+	id, ok := s.parseSuiteID(c)
+	if !ok {
 		return
 	}
 	phase := c.Param("phase")
@@ -1782,9 +1658,8 @@ func (s *Server) updateTestStepHandler(c *gin.Context) {
 
 // addTestStepHandler handles POST /api/suites/:id/test-step/:phase/*test_id
 func (s *Server) addTestStepHandler(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid suite ID"})
+	id, ok := s.parseSuiteID(c)
+	if !ok {
 		return
 	}
 	phase := c.Param("phase")
@@ -1794,9 +1669,8 @@ func (s *Server) addTestStepHandler(c *gin.Context) {
 
 // deleteTestStepHandler handles DELETE /api/suites/:id/test-step/:phase/:index/*test_id
 func (s *Server) deleteTestStepHandler(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid suite ID"})
+	id, ok := s.parseSuiteID(c)
+	if !ok {
 		return
 	}
 	phase := c.Param("phase")
@@ -1811,13 +1685,8 @@ func (s *Server) deleteTestStepHandler(c *gin.Context) {
 
 // getTestYAML returns test YAML content
 func (s *Server) getTestYAML(c *gin.Context, suiteID int64, testID string) {
-	suite, err := s.repo.GetSuiteByID(suiteID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if suite == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Suite not found"})
+	suite, ok := s.getSuiteOrError(c, suiteID)
+	if !ok {
 		return
 	}
 
@@ -1855,13 +1724,8 @@ func (s *Server) getTestYAML(c *gin.Context, suiteID int64, testID string) {
 
 // updateTestYAML updates test YAML content (preserves comments and key ordering)
 func (s *Server) updateTestYAML(c *gin.Context, suiteID int64, testID string) {
-	suite, err := s.repo.GetSuiteByID(suiteID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if suite == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Suite not found"})
+	suite, ok := s.getSuiteOrError(c, suiteID)
+	if !ok {
 		return
 	}
 
@@ -1931,13 +1795,8 @@ func (s *Server) updateTestYAML(c *gin.Context, suiteID int64, testID string) {
 
 // getTestSteps returns test steps
 func (s *Server) getTestSteps(c *gin.Context, suiteID int64, testID string) {
-	suite, err := s.repo.GetSuiteByID(suiteID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if suite == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Suite not found"})
+	suite, ok := s.getSuiteOrError(c, suiteID)
+	if !ok {
 		return
 	}
 
@@ -1990,18 +1849,12 @@ func (s *Server) getTestSteps(c *gin.Context, suiteID int64, testID string) {
 
 // updateTestStep updates a single step (preserves comments and key ordering)
 func (s *Server) updateTestStep(c *gin.Context, suiteID int64, testID, phase string, index int) {
-	if phase != "pre_run" && phase != "test" && phase != "post_run" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid phase: " + phase})
+	if !validatePhase(c, phase) {
 		return
 	}
 
-	suite, err := s.repo.GetSuiteByID(suiteID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if suite == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Suite not found"})
+	suite, ok := s.getSuiteOrError(c, suiteID)
+	if !ok {
 		return
 	}
 
@@ -2048,18 +1901,12 @@ func (s *Server) updateTestStep(c *gin.Context, suiteID int64, testID, phase str
 
 // addTestStep adds a new step
 func (s *Server) addTestStep(c *gin.Context, suiteID int64, testID, phase string) {
-	if phase != "pre_run" && phase != "test" && phase != "post_run" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid phase: " + phase})
+	if !validatePhase(c, phase) {
 		return
 	}
 
-	suite, err := s.repo.GetSuiteByID(suiteID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if suite == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Suite not found"})
+	suite, ok := s.getSuiteOrError(c, suiteID)
+	if !ok {
 		return
 	}
 
@@ -2114,18 +1961,12 @@ func (s *Server) addTestStep(c *gin.Context, suiteID int64, testID, phase string
 
 // deleteTestStep deletes a step
 func (s *Server) deleteTestStep(c *gin.Context, suiteID int64, testID, phase string, index int) {
-	if phase != "pre_run" && phase != "test" && phase != "post_run" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid phase: " + phase})
+	if !validatePhase(c, phase) {
 		return
 	}
 
-	suite, err := s.repo.GetSuiteByID(suiteID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if suite == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Suite not found"})
+	suite, ok := s.getSuiteOrError(c, suiteID)
+	if !ok {
 		return
 	}
 
@@ -2169,19 +2010,8 @@ func (s *Server) deleteTestStep(c *gin.Context, suiteID int64, testID, phase str
 // runSuite handles POST /api/suites/:id/run
 // Launches the Go CLI as a subprocess to run tests
 func (s *Server) runSuite(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid suite ID"})
-		return
-	}
-
-	suite, err := s.repo.GetSuiteByID(id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if suite == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Suite not found"})
+	suite, ok := s.getSuiteByIDParam(c)
+	if !ok {
 		return
 	}
 
