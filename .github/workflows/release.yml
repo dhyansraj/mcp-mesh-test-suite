@@ -98,11 +98,11 @@ jobs:
             goos: linux
             goarch: arm64
             pkg: linux-arm64
-          - os: macos-13  # Intel Mac
+          - os: macos-15  # Intel Mac
             goos: darwin
             goarch: amd64
             pkg: darwin-x64
-          - os: macos-14  # M1 Mac
+          - os: macos-15-xlarge  # M1 Mac
             goos: darwin
             goarch: arm64
             pkg: darwin-arm64
@@ -116,6 +116,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+          cache-dependency-path: go/go.sum
 
       - name: Download dashboard artifact
         uses: actions/download-artifact@v4
