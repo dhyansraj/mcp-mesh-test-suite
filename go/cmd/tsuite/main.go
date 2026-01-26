@@ -18,6 +18,7 @@ import (
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/client"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/config"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/db"
+	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/executor"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/man"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/runner"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/scaffold"
@@ -174,25 +175,8 @@ func runTestWithRunner(ctx context.Context, runnerBinary, suitePath, testID, api
 func runTestsWithRunnerSequential(ctx context.Context, cancelFunc context.CancelFunc, runnerBinary, suitePath string, tests []string, apiURL, runID, baseWorkdir string, timeout time.Duration) (passed, failed, skipped int, failedTests []string, cancelled bool) {
 	apiClient := client.NewClient(apiURL)
 
-	// Start cancel checker goroutine - polls API every 2 seconds
-	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if runID != "" {
-					if isCancelled, _ := apiClient.CheckCancelRequested(runID); isCancelled {
-						fmt.Println("\n[CANCEL] Cancel requested - terminating...")
-						cancelFunc()
-						return
-					}
-				}
-			}
-		}
-	}()
+	// Start cancel checker goroutine
+	executor.StartCancelChecker(ctx, cancelFunc, apiClient, runID)
 
 	for _, testID := range tests {
 		// Check if cancelled before starting test
@@ -228,37 +212,12 @@ func runTestsWithRunnerSequential(ctx context.Context, cancelFunc context.Cancel
 // runTestsWithRunnerParallel runs tests in parallel using the external runner binary
 // Returns: passed, failed, skipped, failedTests, cancelled
 func runTestsWithRunnerParallel(ctx context.Context, cancelFunc context.CancelFunc, runnerBinary, suitePath string, tests []string, workers int, apiURL, runID, baseWorkdir string, timeout time.Duration) (passed, failed, skipped int, failedTests []string, cancelled bool) {
-	type testResult struct {
-		testID    string
-		passed    bool
-		error     string
-		duration  time.Duration
-		cancelled bool
-	}
-
 	testCh := make(chan string, len(tests))
-	resultCh := make(chan testResult, len(tests))
+	resultCh := make(chan executor.TestResult, len(tests))
+	apiClient := client.NewClient(apiURL)
 
-	// Start cancel checker goroutine - polls API every 2 seconds
-	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		apiClient := client.NewClient(apiURL)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if runID != "" {
-					if isCancelled, _ := apiClient.CheckCancelRequested(runID); isCancelled {
-						fmt.Println("\n[CANCEL] Cancel requested - terminating workers...")
-						cancelFunc()
-						return
-					}
-				}
-			}
-		}
-	}()
+	// Start cancel checker goroutine
+	executor.StartCancelChecker(ctx, cancelFunc, apiClient, runID)
 
 	// Start workers
 	var wg sync.WaitGroup
@@ -270,18 +229,18 @@ func runTestsWithRunnerParallel(ctx context.Context, cancelFunc context.CancelFu
 				// Check if cancelled before starting test
 				select {
 				case <-ctx.Done():
-					resultCh <- testResult{testID: testID, cancelled: true}
+					resultCh <- executor.TestResult{TestID: testID, Cancelled: true}
 					continue
 				default:
 				}
 
 				testPassed, testError, duration, wasCancelled := runTestWithRunner(ctx, runnerBinary, suitePath, testID, apiURL, runID, baseWorkdir, timeout)
-				resultCh <- testResult{
-					testID:    testID,
-					passed:    testPassed,
-					error:     testError,
-					duration:  duration,
-					cancelled: wasCancelled,
+				resultCh <- executor.TestResult{
+					TestID:    testID,
+					Passed:    testPassed,
+					Error:     testError,
+					Duration:  duration,
+					Cancelled: wasCancelled,
 				}
 			}
 		}()
@@ -300,24 +259,8 @@ func runTestsWithRunnerParallel(ctx context.Context, cancelFunc context.CancelFu
 	}()
 
 	// Collect results
-	var mu sync.Mutex
-	for result := range resultCh {
-		mu.Lock()
-		if result.cancelled {
-			fmt.Printf("[SKIP] %s (cancelled)\n", result.testID)
-			skipped++
-			cancelled = true
-		} else if result.passed {
-			fmt.Printf("[PASS] %s (%.1fs)\n", result.testID, result.duration.Seconds())
-			passed++
-		} else {
-			fmt.Printf("[FAIL] %s - %s (%.1fs)\n", result.testID, result.error, result.duration.Seconds())
-			failed++
-			failedTests = append(failedTests, result.testID)
-		}
-		mu.Unlock()
-	}
-	return
+	results := executor.CollectResults(resultCh)
+	return results.Passed, results.Failed, results.Skipped, results.FailedTests, results.Cancelled
 }
 
 func main() {
@@ -745,25 +688,10 @@ func runTestsSequentialWithDocker(ctx context.Context, cancelFunc context.Cancel
 	}
 	defer dockerExec.Close()
 
-	// Start cancel checker goroutine - polls API every 2 seconds
-	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if runID != "" && apiClient != nil {
-					if isCancelled, _ := apiClient.CheckCancelRequested(runID); isCancelled {
-						fmt.Println("\n[CANCEL] Cancel requested - terminating...")
-						cancelFunc()
-						return
-					}
-				}
-			}
-		}
-	}()
+	// Start cancel checker goroutine
+	if apiClient != nil {
+		executor.StartCancelChecker(ctx, cancelFunc, apiClient, runID)
+	}
 
 	for _, testID := range tests {
 		// Check if cancelled before starting test
@@ -838,36 +766,13 @@ func runTestsSequentialWithDocker(ctx context.Context, cancelFunc context.Cancel
 }
 
 func runTestsParallelWithDocker(ctx context.Context, cancelFunc context.CancelFunc, suitePath string, tests []string, workers int, apiClient *client.Client, runID string, baseWorkdir string, dockerImage string, serverURL string) (passed, failed, skipped int, failedTests []string, cancelled bool) {
-	type testResult struct {
-		testID    string
-		passed    bool
-		error     string
-		duration  time.Duration
-		cancelled bool
-	}
-
 	testCh := make(chan string, len(tests))
-	resultCh := make(chan testResult, len(tests))
+	resultCh := make(chan executor.TestResult, len(tests))
 
-	// Start cancel checker goroutine - polls API every 2 seconds
-	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if runID != "" && apiClient != nil {
-					if isCancelled, _ := apiClient.CheckCancelRequested(runID); isCancelled {
-						fmt.Println("\n[CANCEL] Cancel requested - terminating workers...")
-						cancelFunc()
-						return
-					}
-				}
-			}
-		}
-	}()
+	// Start cancel checker goroutine
+	if apiClient != nil {
+		executor.StartCancelChecker(ctx, cancelFunc, apiClient, runID)
+	}
 
 	// Start workers
 	var wg sync.WaitGroup
@@ -886,7 +791,7 @@ func runTestsParallelWithDocker(ctx context.Context, cancelFunc context.CancelFu
 				fmt.Printf("Worker %d: Failed to create Docker executor: %v\n", workerID, err)
 				// Mark all remaining tests as failed
 				for testID := range testCh {
-					resultCh <- testResult{testID: testID, passed: false, error: err.Error()}
+					resultCh <- executor.TestResult{TestID: testID, Passed: false, Error: err.Error()}
 				}
 				return
 			}
@@ -896,7 +801,7 @@ func runTestsParallelWithDocker(ctx context.Context, cancelFunc context.CancelFu
 				// Check if cancelled before starting test
 				select {
 				case <-ctx.Done():
-					resultCh <- testResult{testID: testID, cancelled: true}
+					resultCh <- executor.TestResult{TestID: testID, Cancelled: true}
 					continue
 				default:
 				}
@@ -916,7 +821,7 @@ func runTestsParallelWithDocker(ctx context.Context, cancelFunc context.CancelFu
 
 				// Check if cancelled during test
 				if ctx.Err() == context.Canceled {
-					resultCh <- testResult{testID: testID, cancelled: true}
+					resultCh <- executor.TestResult{TestID: testID, Cancelled: true}
 					continue
 				}
 
@@ -945,11 +850,11 @@ func runTestsParallelWithDocker(ctx context.Context, cancelFunc context.CancelFu
 					duration = result.Duration
 				}
 
-				resultCh <- testResult{
-					testID:   testID,
-					passed:   testPassed,
-					error:    testError,
-					duration: duration,
+				resultCh <- executor.TestResult{
+					TestID:   testID,
+					Passed:   testPassed,
+					Error:    testError,
+					Duration: duration,
 				}
 				// Note: Go runner inside container reports final status with steps to API
 			}
@@ -969,24 +874,8 @@ func runTestsParallelWithDocker(ctx context.Context, cancelFunc context.CancelFu
 	}()
 
 	// Collect results
-	var mu sync.Mutex
-	for result := range resultCh {
-		mu.Lock()
-		if result.cancelled {
-			fmt.Printf("[SKIP] %s (cancelled)\n", result.testID)
-			skipped++
-			cancelled = true
-		} else if result.passed {
-			fmt.Printf("[PASS] %s (%.1fs)\n", result.testID, result.duration.Seconds())
-			passed++
-		} else {
-			fmt.Printf("[FAIL] %s - %s (%.1fs)\n", result.testID, result.error, result.duration.Seconds())
-			failed++
-			failedTests = append(failedTests, result.testID)
-		}
-		mu.Unlock()
-	}
-	return
+	results := executor.CollectResults(resultCh)
+	return results.Passed, results.Failed, results.Skipped, results.FailedTests, results.Cancelled
 }
 
 func listTests(cmd *cobra.Command, args []string) error {

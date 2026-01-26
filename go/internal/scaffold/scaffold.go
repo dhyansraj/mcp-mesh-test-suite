@@ -510,7 +510,7 @@ func Run(config *Config) error {
 	}
 
 	if config.DryRun {
-		fmt.Println("\nDry run - no files will be created\n")
+		fmt.Println("\nDry run - no files will be created")
 	}
 
 	// Create UC if needed
