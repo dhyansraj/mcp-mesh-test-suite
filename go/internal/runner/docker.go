@@ -208,27 +208,33 @@ func (e *DockerExecutor) ExecuteTest(ctx context.Context, testID string, testCon
 	}
 
 	// Auto-mount TC-local artifacts directory if it exists
+	// Resolve symlinks to ensure Docker mounts the actual target directory
 	artifactsPath := filepath.Join(e.suitePath, "suites", testID, "artifacts")
-	if info, err := os.Stat(artifactsPath); err == nil && info.IsDir() {
-		mounts = append(mounts, mount.Mount{
-			Type:     mount.TypeBind,
-			Source:   artifactsPath,
-			Target:   "/artifacts",
-			ReadOnly: true,
-		})
+	if resolved, err := filepath.EvalSymlinks(artifactsPath); err == nil {
+		if info, err := os.Stat(resolved); err == nil && info.IsDir() {
+			mounts = append(mounts, mount.Mount{
+				Type:     mount.TypeBind,
+				Source:   resolved,
+				Target:   "/artifacts",
+				ReadOnly: true,
+			})
+		}
 	}
 
 	// Auto-mount UC-level artifacts directory if it exists
+	// Resolve symlinks to ensure Docker mounts the actual target directory
 	parts := strings.Split(testID, "/")
 	if len(parts) >= 1 {
 		ucArtifactsPath := filepath.Join(e.suitePath, "suites", parts[0], "artifacts")
-		if info, err := os.Stat(ucArtifactsPath); err == nil && info.IsDir() {
-			mounts = append(mounts, mount.Mount{
-				Type:     mount.TypeBind,
-				Source:   ucArtifactsPath,
-				Target:   "/uc-artifacts",
-				ReadOnly: true,
-			})
+		if resolved, err := filepath.EvalSymlinks(ucArtifactsPath); err == nil {
+			if info, err := os.Stat(resolved); err == nil && info.IsDir() {
+				mounts = append(mounts, mount.Mount{
+					Type:     mount.TypeBind,
+					Source:   resolved,
+					Target:   "/uc-artifacts",
+					ReadOnly: true,
+				})
+			}
 		}
 	}
 
