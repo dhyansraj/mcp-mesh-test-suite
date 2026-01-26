@@ -87,27 +87,23 @@ jobs:
   # ===========================================
   build-go-binaries:
     needs: build-dashboard
+    # Go cross-compiles natively - no need for platform-specific runners
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
-            goos: linux
+          - goos: linux
             goarch: amd64
             pkg: linux-x64
-          - os: ubuntu-latest
-            goos: linux
+          - goos: linux
             goarch: arm64
             pkg: linux-arm64
-          - os: macos-15  # Intel Mac
-            goos: darwin
+          - goos: darwin
             goarch: amd64
             pkg: darwin-x64
-          - os: macos-15-xlarge  # M1 Mac
-            goos: darwin
+          - goos: darwin
             goarch: arm64
             pkg: darwin-arm64
-
-    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
