@@ -371,11 +371,13 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          set -e  # Exit on first error
           # Publish platform packages first (main package depends on them)
           for pkg in tsuite-darwin-arm64 tsuite-darwin-x64 tsuite-linux-arm64 tsuite-linux-x64; do
             echo "Publishing @mcpmesh/$pkg..."
             cd packages/$pkg
             npm publish --access public
+            echo "✓ Published @mcpmesh/$pkg"
             cd ../..
           done
 
@@ -383,6 +385,8 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          set -e  # Exit on first error
           echo "Publishing @mcpmesh/tsuite..."
           cd packages/tsuite
           npm publish --access public
+          echo "✓ Published @mcpmesh/tsuite"
