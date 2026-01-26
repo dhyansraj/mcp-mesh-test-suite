@@ -509,7 +509,7 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading, suiteId, on
               )}
 
               {/* Steps */}
-              {testDetail.steps.length > 0 && (
+              {testDetail.steps && testDetail.steps.length > 0 && (
                 <div>
                   <h4 className="font-medium mb-3 flex items-center gap-2">
                     <Terminal className="h-4 w-4" />
@@ -583,7 +583,7 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading, suiteId, on
               )}
 
               {/* Assertions */}
-              {testDetail.assertions.length > 0 && (
+              {testDetail.assertions && testDetail.assertions.length > 0 && (
                 <div>
                   <h4 className="font-medium mb-3 flex items-center gap-2">
                     <FileText className="h-4 w-4" />
@@ -660,7 +660,7 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading, suiteId, on
               )}
 
               {/* No details */}
-              {testDetail.steps.length === 0 && testDetail.assertions.length === 0 && (
+              {(!testDetail.steps || testDetail.steps.length === 0) && (!testDetail.assertions || testDetail.assertions.length === 0) && (
                 <div className="text-center py-8 text-muted-foreground">
                   <Terminal className="h-12 w-12 mx-auto mb-4 opacity-50" />
                   <p>No step or assertion details available for this test.</p>

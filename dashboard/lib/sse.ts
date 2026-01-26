@@ -87,7 +87,7 @@ export function useSSE(options: UseSSEOptions = {}): UseSSEResult {
         // Track current run
         if (event.type === "run_started" && event.run_id) {
           setCurrentRunId(event.run_id);
-        } else if (event.type === "run_completed") {
+        } else if (event.type === "run_completed" || event.type === "run_cancelled") {
           setCurrentRunId(null);
         }
 
