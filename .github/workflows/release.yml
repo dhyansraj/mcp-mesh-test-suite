@@ -1,4 +1,4 @@
-name: Release to PyPI and npm
+name: Release to npm
 
 on:
   push:
@@ -37,50 +37,50 @@ jobs:
           retention-days: 1
 
   # ===========================================
-  # PyPI Release (Python)
+  # PyPI Release (Python) - DISABLED
   # ===========================================
-  publish-pypi:
-    needs: build-dashboard
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download dashboard artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: dashboard
-          path: tsuite/tsuite/dashboard
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install build tools
-        run: pip install build
-
-      - name: Set version from tag
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          sed -i "s/version=\".*\"/version=\"$VERSION\"/" tsuite/setup.py
-          echo "Set version to $VERSION"
-          grep version tsuite/setup.py
-
-      - name: Build package
-        run: |
-          cd tsuite
-          python -m build
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: tsuite/dist/
+  # publish-pypi:
+  #   needs: build-dashboard
+  #   runs-on: ubuntu-latest
+  #   environment: pypi
+  #   permissions:
+  #     id-token: write
+  #
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+  #
+  #     - name: Download dashboard artifact
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: dashboard
+  #         path: tsuite/tsuite/dashboard
+  #
+  #     - name: Setup Python
+  #       uses: actions/setup-python@v5
+  #       with:
+  #         python-version: '3.11'
+  #
+  #     - name: Install build tools
+  #       run: pip install build
+  #
+  #     - name: Set version from tag
+  #       run: |
+  #         VERSION=${GITHUB_REF#refs/tags/v}
+  #         echo "VERSION=$VERSION" >> $GITHUB_ENV
+  #         sed -i "s/version=\".*\"/version=\"$VERSION\"/" tsuite/setup.py
+  #         echo "Set version to $VERSION"
+  #         grep version tsuite/setup.py
+  #
+  #     - name: Build package
+  #       run: |
+  #         cd tsuite
+  #         python -m build
+  #
+  #     - name: Publish to PyPI
+  #       uses: pypa/gh-action-pypi-publish@release/v1
+  #       with:
+  #         packages-dir: tsuite/dist/
 
   # ===========================================
   # npm Release (Go binaries)
