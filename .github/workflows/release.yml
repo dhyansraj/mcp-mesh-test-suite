@@ -1,4 +1,4 @@
-name: Release to PyPI
+name: Release to PyPI and npm
 
 on:
   push:
@@ -36,12 +36,15 @@ jobs:
           path: dashboard/out
           retention-days: 1
 
-  publish:
+  # ===========================================
+  # PyPI Release (Python)
+  # ===========================================
+  publish-pypi:
     needs: build-dashboard
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      id-token: write  # Required for trusted publishing
+      id-token: write
 
     steps:
       - name: Checkout
@@ -78,3 +81,306 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: tsuite/dist/
+
+  # ===========================================
+  # npm Release (Go binaries)
+  # ===========================================
+  build-go-binaries:
+    needs: build-dashboard
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            pkg: linux-x64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            pkg: linux-arm64
+          - os: macos-13  # Intel Mac
+            goos: darwin
+            goarch: amd64
+            pkg: darwin-x64
+          - os: macos-14  # M1 Mac
+            goos: darwin
+            goarch: arm64
+            pkg: darwin-arm64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Download dashboard artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dashboard
+          path: go/cmd/tsuite/dashboard
+
+      - name: Build Go binaries
+        working-directory: go
+        run: |
+          # Build CLI (with embedded dashboard)
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o bin/tsuite ./cmd/tsuite
+
+          # Build runner (native)
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o bin/tsuite-runner ./cmd/runner
+
+      - name: Build Linux runner for Docker (darwin only)
+        if: matrix.goos == 'darwin'
+        working-directory: go
+        run: |
+          # Darwin needs linux runner for Docker mode
+          GOOS=linux GOARCH=${{ matrix.goarch }} go build -o bin/tsuite-runner-linux ./cmd/runner
+
+      - name: Upload binaries artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.pkg }}
+          path: go/bin/
+          retention-days: 1
+
+  publish-npm:
+    needs: build-go-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Set version from tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare platform packages
+        run: |
+          # Create package directories
+          mkdir -p packages/tsuite
+          mkdir -p packages/tsuite-darwin-arm64/bin
+          mkdir -p packages/tsuite-darwin-x64/bin
+          mkdir -p packages/tsuite-linux-arm64/bin
+          mkdir -p packages/tsuite-linux-x64/bin
+
+          # Copy binaries to platform packages
+          cp artifacts/binaries-darwin-arm64/* packages/tsuite-darwin-arm64/bin/
+          cp artifacts/binaries-darwin-x64/* packages/tsuite-darwin-x64/bin/
+          cp artifacts/binaries-linux-arm64/* packages/tsuite-linux-arm64/bin/
+          cp artifacts/binaries-linux-x64/* packages/tsuite-linux-x64/bin/
+
+          # Make binaries executable
+          chmod +x packages/*/bin/*
+
+      - name: Create main package (tsuite)
+        run: |
+          cat > packages/tsuite/package.json << EOF
+          {
+            "name": "@mcpmesh/tsuite",
+            "version": "${VERSION}",
+            "description": "Test suite runner for MCP Mesh",
+            "bin": {
+              "tsuite": "bin/tsuite"
+            },
+            "scripts": {
+              "postinstall": "node scripts/postinstall.js"
+            },
+            "optionalDependencies": {
+              "@mcpmesh/tsuite-darwin-arm64": "${VERSION}",
+              "@mcpmesh/tsuite-darwin-x64": "${VERSION}",
+              "@mcpmesh/tsuite-linux-arm64": "${VERSION}",
+              "@mcpmesh/tsuite-linux-x64": "${VERSION}"
+            },
+            "repository": {
+              "type": "git",
+              "url": "https://github.com/mcpmesh/mcp-mesh-test-suite"
+            },
+            "license": "MIT",
+            "engines": {
+              "node": ">=16"
+            }
+          }
+          EOF
+
+          # Replace literal \${VERSION} if any (shouldn't be needed but safety check)
+          sed -i "s/\\\${VERSION}/${VERSION}/g" packages/tsuite/package.json
+
+          # Create bin wrapper script
+          mkdir -p packages/tsuite/bin
+          cat > packages/tsuite/bin/tsuite << 'BINEOF'
+          #!/usr/bin/env node
+          const { execFileSync } = require('child_process');
+          const path = require('path');
+          const fs = require('fs');
+
+          const platforms = {
+            'darwin-arm64': '@mcpmesh/tsuite-darwin-arm64',
+            'darwin-x64': '@mcpmesh/tsuite-darwin-x64',
+            'linux-arm64': '@mcpmesh/tsuite-linux-arm64',
+            'linux-x64': '@mcpmesh/tsuite-linux-x64',
+          };
+
+          const platform = `${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}`;
+          const pkgName = platforms[platform];
+
+          if (!pkgName) {
+            console.error(`Unsupported platform: ${process.platform}-${process.arch}`);
+            process.exit(1);
+          }
+
+          // Find the binary
+          let binaryPath;
+          try {
+            const pkgPath = require.resolve(`${pkgName}/package.json`);
+            binaryPath = path.join(path.dirname(pkgPath), 'bin', 'tsuite');
+          } catch (e) {
+            console.error(`Platform package ${pkgName} not found. Try reinstalling @mcpmesh/tsuite`);
+            process.exit(1);
+          }
+
+          if (!fs.existsSync(binaryPath)) {
+            console.error(`Binary not found at ${binaryPath}`);
+            process.exit(1);
+          }
+
+          // Execute the binary with all arguments
+          try {
+            execFileSync(binaryPath, process.argv.slice(2), { stdio: 'inherit' });
+          } catch (e) {
+            process.exit(e.status || 1);
+          }
+          BINEOF
+          chmod +x packages/tsuite/bin/tsuite
+
+          # Create postinstall script
+          mkdir -p packages/tsuite/scripts
+          cat > packages/tsuite/scripts/postinstall.js << 'POSTEOF'
+          // Verify platform package was installed
+          const platforms = {
+            'darwin-arm64': '@mcpmesh/tsuite-darwin-arm64',
+            'darwin-x64': '@mcpmesh/tsuite-darwin-x64',
+            'linux-arm64': '@mcpmesh/tsuite-linux-arm64',
+            'linux-x64': '@mcpmesh/tsuite-linux-x64',
+          };
+
+          const platform = `${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}`;
+          const pkgName = platforms[platform];
+
+          try {
+            require.resolve(`${pkgName}/package.json`);
+            console.log(`✓ @mcpmesh/tsuite installed successfully for ${platform}`);
+          } catch (e) {
+            console.warn(`⚠ Platform package ${pkgName} not installed. Some features may not work.`);
+          }
+          POSTEOF
+
+      - name: Create darwin-arm64 package
+        run: |
+          cat > packages/tsuite-darwin-arm64/package.json << EOF
+          {
+            "name": "@mcpmesh/tsuite-darwin-arm64",
+            "version": "${VERSION}",
+            "description": "tsuite binary for macOS ARM64 (Apple Silicon)",
+            "os": ["darwin"],
+            "cpu": ["arm64"],
+            "repository": {
+              "type": "git",
+              "url": "https://github.com/mcpmesh/mcp-mesh-test-suite"
+            },
+            "license": "MIT"
+          }
+          EOF
+
+      - name: Create darwin-x64 package
+        run: |
+          cat > packages/tsuite-darwin-x64/package.json << EOF
+          {
+            "name": "@mcpmesh/tsuite-darwin-x64",
+            "version": "${VERSION}",
+            "description": "tsuite binary for macOS x64 (Intel)",
+            "os": ["darwin"],
+            "cpu": ["x64"],
+            "repository": {
+              "type": "git",
+              "url": "https://github.com/mcpmesh/mcp-mesh-test-suite"
+            },
+            "license": "MIT"
+          }
+          EOF
+
+      - name: Create linux-arm64 package
+        run: |
+          cat > packages/tsuite-linux-arm64/package.json << EOF
+          {
+            "name": "@mcpmesh/tsuite-linux-arm64",
+            "version": "${VERSION}",
+            "description": "tsuite binary for Linux ARM64",
+            "os": ["linux"],
+            "cpu": ["arm64"],
+            "repository": {
+              "type": "git",
+              "url": "https://github.com/mcpmesh/mcp-mesh-test-suite"
+            },
+            "license": "MIT"
+          }
+          EOF
+
+      - name: Create linux-x64 package
+        run: |
+          cat > packages/tsuite-linux-x64/package.json << EOF
+          {
+            "name": "@mcpmesh/tsuite-linux-x64",
+            "version": "${VERSION}",
+            "description": "tsuite binary for Linux x64",
+            "os": ["linux"],
+            "cpu": ["x64"],
+            "repository": {
+              "type": "git",
+              "url": "https://github.com/mcpmesh/mcp-mesh-test-suite"
+            },
+            "license": "MIT"
+          }
+          EOF
+
+      - name: List package contents
+        run: |
+          echo "=== Package structure ==="
+          find packages -type f | head -50
+          echo ""
+          echo "=== Binary sizes ==="
+          ls -lh packages/*/bin/* 2>/dev/null || true
+
+      - name: Publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # Publish platform packages first (main package depends on them)
+          for pkg in tsuite-darwin-arm64 tsuite-darwin-x64 tsuite-linux-arm64 tsuite-linux-x64; do
+            echo "Publishing @mcpmesh/$pkg..."
+            cd packages/$pkg
+            npm publish --access public
+            cd ../..
+          done
+
+      - name: Publish main package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          echo "Publishing @mcpmesh/tsuite..."
+          cd packages/tsuite
+          npm publish --access public

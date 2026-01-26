@@ -743,7 +743,8 @@ export function LiveFeed() {
     if (
       latestEvent.type === "test_started" ||
       latestEvent.type === "test_completed" ||
-      latestEvent.type === "run_completed"
+      latestEvent.type === "run_completed" ||
+      latestEvent.type === "run_cancelled"
     ) {
       // Refetch data
       Promise.all([

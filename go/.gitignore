@@ -1,0 +1,5 @@
+# Build output
+bin/
+
+# Embedded dashboard (generated during build)
+cmd/tsuite/dashboard/

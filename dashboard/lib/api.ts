@@ -333,6 +333,23 @@ export async function cancelRun(runId: string): Promise<CancelResponse> {
   return res.json();
 }
 
+export interface DeleteResponse {
+  success: boolean;
+  run_id: string;
+  deleted: boolean;
+}
+
+export async function deleteRun(runId: string): Promise<DeleteResponse> {
+  const res = await fetch(`${API_BASE}/api/runs/${runId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "Failed to delete run");
+  }
+  return res.json();
+}
+
 // Run Tree API Functions
 
 export interface RunTestTreeUseCase {
@@ -502,7 +519,7 @@ export async function getTestCaseYaml(
   testId: string
 ): Promise<TestCaseYaml> {
   const res = await fetch(
-    `${API_BASE}/api/suites/${suiteId}/tests/${testId}/yaml`,
+    `${API_BASE}/api/suites/${suiteId}/test-yaml/${testId}`,
     { cache: "no-store" }
   );
   if (!res.ok) {
@@ -518,7 +535,7 @@ export async function updateTestCaseYaml(
   options: { raw_yaml?: string; updates?: Partial<TestCaseStructure> }
 ): Promise<{ success: boolean; test_id: string; raw_yaml: string }> {
   const res = await fetch(
-    `${API_BASE}/api/suites/${suiteId}/tests/${testId}/yaml`,
+    `${API_BASE}/api/suites/${suiteId}/test-yaml/${testId}`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -537,7 +554,7 @@ export async function getTestSteps(
   testId: string
 ): Promise<TestStepsResponse> {
   const res = await fetch(
-    `${API_BASE}/api/suites/${suiteId}/tests/${testId}/steps`,
+    `${API_BASE}/api/suites/${suiteId}/test-steps/${testId}`,
     { cache: "no-store" }
   );
   if (!res.ok) {
@@ -555,7 +572,7 @@ export async function updateTestStep(
   step: Partial<TestStep>
 ): Promise<{ success: boolean }> {
   const res = await fetch(
-    `${API_BASE}/api/suites/${suiteId}/tests/${testId}/steps/${phase}/${index}`,
+    `${API_BASE}/api/suites/${suiteId}/test-step/${phase}/${index}/${testId}`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -577,7 +594,7 @@ export async function addTestStep(
   index?: number
 ): Promise<{ success: boolean }> {
   const res = await fetch(
-    `${API_BASE}/api/suites/${suiteId}/tests/${testId}/steps/${phase}`,
+    `${API_BASE}/api/suites/${suiteId}/test-step/${phase}/${testId}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -598,7 +615,7 @@ export async function deleteTestStep(
   index: number
 ): Promise<{ success: boolean }> {
   const res = await fetch(
-    `${API_BASE}/api/suites/${suiteId}/tests/${testId}/steps/${phase}/${index}`,
+    `${API_BASE}/api/suites/${suiteId}/test-step/${phase}/${index}/${testId}`,
     { method: "DELETE" }
   );
   if (!res.ok) {

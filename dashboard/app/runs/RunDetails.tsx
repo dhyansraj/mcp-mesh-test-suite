@@ -10,6 +10,8 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -22,6 +24,7 @@ import {
   getTestDetail,
   rerunFromRun,
   cancelRun,
+  deleteRun,
   runTests,
 } from "@/lib/api";
 import {
@@ -40,6 +43,7 @@ import {
   RotateCcw,
   StopCircle,
   Play,
+  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -91,6 +95,8 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [rerunning, setRerunning] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const useCases = useMemo(() => groupTestsByUseCase(tests), [tests]);
 
@@ -117,6 +123,19 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
       console.error("Failed to cancel:", error);
     } finally {
       setCancelling(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      await deleteRun(run.run_id);
+      setShowDeleteConfirm(false);
+      router.push("/runs");
+    } catch (error) {
+      console.error("Failed to delete:", error);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -211,6 +230,16 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
                   Rerun
                 </Button>
               )}
+              {/* Delete button */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowDeleteConfirm(true)}
+                className="gap-2 text-destructive border-destructive/50 hover:bg-destructive/10"
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete
+              </Button>
             </div>
           </div>
 
@@ -349,6 +378,39 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
         suiteId={run.suite_id}
         onRerunTest={handleRerunTest}
       />
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Run</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this run? This will permanently remove the run and all associated test results, steps, and assertions. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              onClick={() => setShowDeleteConfirm(false)}
+              disabled={deleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDelete}
+              disabled={deleting}
+            >
+              {deleting ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <Trash2 className="h-4 w-4 mr-2" />
+              )}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
