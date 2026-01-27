@@ -450,12 +450,12 @@ func mountArtifactsDir(artifactsPath string, containerBasePath string) []mount.M
 			continue
 		}
 
-		// Verify the resolved path exists and is a directory
-		resolvedInfo, err := os.Stat(resolved)
-		if err != nil || !resolvedInfo.IsDir() {
+		// Verify the resolved path exists
+		if _, err := os.Stat(resolved); err != nil {
 			continue
 		}
 
+		// Mount both files and directories
 		mounts = append(mounts, mount.Mount{
 			Type:     mount.TypeBind,
 			Source:   resolved,

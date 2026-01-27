@@ -164,11 +164,13 @@ func (r *Repository) GetAllRuns(suiteID *int64, limit int) ([]models.Run, error)
 		       r.docker_image, r.total_tests, r.pending_count, r.running_count,
 		       r.passed, r.failed, r.skipped, r.duration_ms, r.filters, r.mode,
 		       r.cancel_requested,
-		       COALESCE(
-		           (SELECT test_case FROM test_results WHERE run_id = r.run_id LIMIT 1),
-		           r.suite_name,
-		           s.suite_name
-		       ) as display_name
+		       CASE
+		           WHEN (SELECT COUNT(*) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+		               THEN (SELECT tr.test_id FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+		           WHEN (SELECT COUNT(DISTINCT tr.use_case) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+		               THEN (SELECT tr.use_case FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+		           ELSE NULL
+		       END as display_name
 		FROM runs r
 		LEFT JOIN suites s ON r.suite_id = s.id
 	`
@@ -230,11 +232,13 @@ func (r *Repository) GetRunByID(runID string) (*models.Run, error) {
 		       r.docker_image, r.total_tests, r.pending_count, r.running_count,
 		       r.passed, r.failed, r.skipped, r.duration_ms, r.filters, r.mode,
 		       r.cancel_requested,
-		       COALESCE(
-		           (SELECT test_case FROM test_results WHERE run_id = r.run_id LIMIT 1),
-		           r.suite_name,
-		           s.suite_name
-		       ) as display_name
+		       CASE
+		           WHEN (SELECT COUNT(*) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+		               THEN (SELECT tr.test_id FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+		           WHEN (SELECT COUNT(DISTINCT tr.use_case) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+		               THEN (SELECT tr.use_case FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+		           ELSE NULL
+		       END as display_name
 		FROM runs r
 		LEFT JOIN suites s ON r.suite_id = s.id
 		WHERE r.run_id = ?
@@ -283,11 +287,13 @@ func (r *Repository) GetRunningRun() (*models.Run, error) {
 		       r.docker_image, r.total_tests, r.pending_count, r.running_count,
 		       r.passed, r.failed, r.skipped, r.duration_ms, r.filters, r.mode,
 		       r.cancel_requested,
-		       COALESCE(
-		           (SELECT test_case FROM test_results WHERE run_id = r.run_id LIMIT 1),
-		           r.suite_name,
-		           s.suite_name
-		       ) as display_name
+		       CASE
+		           WHEN (SELECT COUNT(*) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+		               THEN (SELECT tr.test_id FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+		           WHEN (SELECT COUNT(DISTINCT tr.use_case) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
+		               THEN (SELECT tr.use_case FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
+		           ELSE NULL
+		       END as display_name
 		FROM runs r
 		LEFT JOIN suites s ON r.suite_id = s.id
 		WHERE r.status = 'running'

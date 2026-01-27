@@ -295,6 +295,7 @@ func copyAgentToArtifacts(agent *AgentInfo, artifactsDir string, dryRun bool) (s
 
 // symlinkAgentToArtifacts creates a symlink to agent directory in artifacts.
 // This is useful for testing existing examples without copying them.
+// Uses relative paths to make symlinks portable across machines.
 func symlinkAgentToArtifacts(agent *AgentInfo, artifactsDir string, dryRun bool) (string, error) {
 	targetPath := filepath.Join(artifactsDir, agent.Name)
 
@@ -304,16 +305,24 @@ func symlinkAgentToArtifacts(agent *AgentInfo, artifactsDir string, dryRun bool)
 		return "", fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
+	// Calculate relative path from symlink location to target
+	// This makes the symlink portable across machines
+	relPath, err := filepath.Rel(artifactsDir, absAgentPath)
+	if err != nil {
+		// Fall back to absolute path if relative fails
+		relPath = absAgentPath
+	}
+
 	if dryRun {
-		fmt.Printf("  Would symlink: %s → %s\n", targetPath, absAgentPath)
+		fmt.Printf("  Would symlink: %s → %s\n", targetPath, relPath)
 		return targetPath, nil
 	}
 
 	// Remove existing if present (file, dir, or symlink)
 	os.RemoveAll(targetPath)
 
-	// Create symlink
-	if err := os.Symlink(absAgentPath, targetPath); err != nil {
+	// Create symlink with relative path
+	if err := os.Symlink(relPath, targetPath); err != nil {
 		return "", fmt.Errorf("failed to create symlink: %w", err)
 	}
 
@@ -669,14 +678,19 @@ func Run(config *Config) error {
 			if config.UseSymlinks {
 				fmt.Println("✓ Creating artifact symlink:")
 				absPath, _ := filepath.Abs(config.FlatScriptDir)
+				// Calculate relative path for portable symlinks
+				relPath, err := filepath.Rel(artifactsDir, absPath)
+				if err != nil {
+					relPath = absPath // Fall back to absolute if relative fails
+				}
 				if config.DryRun {
-					fmt.Printf("  Would symlink: %s → %s\n", targetPath, absPath)
+					fmt.Printf("  Would symlink: %s → %s\n", targetPath, relPath)
 				} else {
 					os.RemoveAll(targetPath)
-					if err := os.Symlink(absPath, targetPath); err != nil {
+					if err := os.Symlink(relPath, targetPath); err != nil {
 						return fmt.Errorf("failed to create symlink: %w", err)
 					}
-					fmt.Printf("    - %s → %s (%d scripts)\n", dirName, absPath, len(config.Agents))
+					fmt.Printf("    - %s → %s (%d scripts)\n", dirName, relPath, len(config.Agents))
 				}
 			} else {
 				fmt.Println("✓ Copying artifacts:")

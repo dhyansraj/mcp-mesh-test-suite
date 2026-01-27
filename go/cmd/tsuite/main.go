@@ -817,6 +817,13 @@ func runTestsSequentialWithDocker(ctx context.Context, cancelFunc context.Cancel
 			testPassed = false
 			testError = err.Error()
 			duration = 0
+			// Report failure to API since runner never started
+			if apiClient != nil && runID != "" {
+				apiClient.UpdateTestStatus(runID, testID, &client.UpdateTestStatusRequest{
+					Status:       "failed",
+					ErrorMessage: testError,
+				})
+			}
 		} else {
 			testPassed = result.ExitCode == 0 && result.Error == nil
 			if result.Error != nil {
@@ -915,6 +922,13 @@ func runTestsParallelWithDocker(ctx context.Context, cancelFunc context.CancelFu
 					testPassed = false
 					testError = err.Error()
 					duration = 0
+					// Report failure to API since runner never started
+					if apiClient != nil && runID != "" {
+						apiClient.UpdateTestStatus(runID, testID, &client.UpdateTestStatusRequest{
+							Status:       "failed",
+							ErrorMessage: testError,
+						})
+					}
 				} else {
 					testPassed = result.ExitCode == 0 && result.Error == nil
 					if result.Error != nil {
