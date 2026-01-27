@@ -32,7 +32,9 @@ type Config struct {
 	DryRun           bool
 	Force            bool
 	SkipArtifactCopy bool
-	UseSymlinks      bool // Create symlinks instead of copying artifacts
+	UseSymlinks      bool   // Create symlinks instead of copying artifacts
+	FlatScriptDir    string // For --filter mode: directory containing flat scripts
+	Filter           string // Glob pattern for flat script discovery (e.g., "*.py")
 }
 
 // ValidateSuite checks that suite exists and has config.yaml.
@@ -105,6 +107,58 @@ func ValidateAgentDir(agentPath string) (*AgentInfo, error) {
 	}
 
 	return nil, fmt.Errorf("cannot detect agent type for: %s\nExpected package.json (TypeScript) or main.py (Python)", agentPath)
+}
+
+// DiscoverScriptsByFilter scans a directory for files matching the filter pattern.
+// Used for flat directories containing standalone scripts (e.g., examples/simple/*.py).
+// Returns AgentInfo for each matched file, where the entry point is the file itself.
+func DiscoverScriptsByFilter(dirPath string, filter string) ([]AgentInfo, error) {
+	info, err := os.Stat(dirPath)
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("directory does not exist: %s", dirPath)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("not a directory: %s", dirPath)
+	}
+
+	// Match files using glob pattern
+	pattern := filepath.Join(dirPath, filter)
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid glob pattern '%s': %w", filter, err)
+	}
+
+	var agents []AgentInfo
+	for _, match := range matches {
+		fileInfo, err := os.Stat(match)
+		if err != nil || fileInfo.IsDir() {
+			continue // Skip directories and unreadable files
+		}
+
+		filename := filepath.Base(match)
+		name := strings.TrimSuffix(filename, filepath.Ext(filename))
+
+		// Determine agent type from extension
+		agentType := ""
+		switch filepath.Ext(filename) {
+		case ".py":
+			agentType = "python"
+		case ".ts":
+			agentType = "typescript"
+		default:
+			// Skip files with unrecognized extensions
+			continue
+		}
+
+		agents = append(agents, AgentInfo{
+			Path:       dirPath, // All scripts share the same parent directory
+			Name:       name,
+			AgentType:  agentType,
+			EntryPoint: filename, // Entry point is the file itself
+		})
+	}
+
+	return agents, nil
 }
 
 // ValidateNoParentDirs ensures no agent path is a parent of another.
@@ -348,6 +402,9 @@ func GenerateTestYAML(config *Config) string {
 		artifactPath = "/uc-artifacts"
 	}
 
+	// Check if this is flat script mode (--filter was used)
+	isFlatScriptMode := config.Filter != ""
+
 	// Separate by type
 	var tsAgents, pyAgents []AgentInfo
 	for _, a := range agents {
@@ -376,30 +433,53 @@ func GenerateTestYAML(config *Config) string {
 		preRun = strings.Join(preRunLines, "\n")
 	}
 
-	// Build copy commands
+	// Build copy commands and paths for start
 	var copyCommands []string
-	for _, a := range agents {
-		copyCommands = append(copyCommands, fmt.Sprintf("      cp -r %s/%s /workspace/", artifactPath, a.Name))
-	}
-
-	// Build install steps
 	var installSteps []string
-	for _, agent := range agents {
-		if agent.AgentType == "typescript" {
-			installSteps = append(installSteps, fmt.Sprintf(`  - name: "Install %s dependencies"
+	var startSteps []string
+
+	if isFlatScriptMode {
+		// Flat script mode: all scripts in one directory
+		dirName := filepath.Base(config.FlatScriptDir)
+		copyCommands = append(copyCommands, fmt.Sprintf("      cp -r %s/%s /workspace/", artifactPath, dirName))
+
+		// No install steps for flat scripts (standalone)
+
+		// Start each script
+		for _, agent := range agents {
+			startSteps = append(startSteps, fmt.Sprintf(`  - name: "Start %s"
+    handler: shell
+    command: "meshctl start %s/%s -d"
+    workdir: /workspace`, agent.Name, dirName, agent.EntryPoint))
+		}
+
+		// Single wait after all starts
+		startSteps = append(startSteps, fmt.Sprintf(`
+  - name: "Wait for agents to register"
+    handler: wait
+    seconds: %d`, 5+len(agents)*2)) // Base 5s + 2s per agent
+	} else {
+		// Standard mode: each agent is its own directory
+		for _, a := range agents {
+			copyCommands = append(copyCommands, fmt.Sprintf("      cp -r %s/%s /workspace/", artifactPath, a.Name))
+		}
+
+		// Build install steps
+		for _, agent := range agents {
+			if agent.AgentType == "typescript" {
+				installSteps = append(installSteps, fmt.Sprintf(`  - name: "Install %s dependencies"
     handler: npm-install
     path: /workspace/%s`, agent.Name, agent.Name))
-		} else if agent.HasRequirements {
-			installSteps = append(installSteps, fmt.Sprintf(`  - name: "Install %s dependencies"
+			} else if agent.HasRequirements {
+				installSteps = append(installSteps, fmt.Sprintf(`  - name: "Install %s dependencies"
     handler: pip-install
     path: /workspace/%s`, agent.Name, agent.Name))
+			}
 		}
-	}
 
-	// Build start steps
-	var startSteps []string
-	for _, agent := range agents {
-		startSteps = append(startSteps, fmt.Sprintf(`  - name: "Start %s"
+		// Build start steps with wait per agent
+		for _, agent := range agents {
+			startSteps = append(startSteps, fmt.Sprintf(`  - name: "Start %s"
     handler: shell
     command: "meshctl start %s/%s -d"
     workdir: /workspace
@@ -407,6 +487,7 @@ func GenerateTestYAML(config *Config) string {
   - name: "Wait for %s to register"
     handler: wait
     seconds: 8`, agent.Name, agent.Name, agent.EntryPoint, agent.Name))
+		}
 	}
 
 	// Build assertions
@@ -526,12 +607,23 @@ func Run(config *Config) error {
 	}
 
 	// Check for artifact conflicts
+	isFlatScriptMode := config.Filter != ""
 	if !config.SkipArtifactCopy {
 		if _, err := os.Stat(artifactsDir); err == nil {
-			for _, agent := range config.Agents {
-				target := filepath.Join(artifactsDir, agent.Name)
+			if isFlatScriptMode {
+				// Flat script mode: check for the directory name
+				dirName := filepath.Base(config.FlatScriptDir)
+				target := filepath.Join(artifactsDir, dirName)
 				if _, err := os.Stat(target); err == nil && !config.Force {
-					return fmt.Errorf("artifact conflict - %s already exists\nUse --force to overwrite", agent.Name)
+					return fmt.Errorf("artifact conflict - %s already exists\nUse --force to overwrite", dirName)
+				}
+			} else {
+				// Standard mode: check each agent
+				for _, agent := range config.Agents {
+					target := filepath.Join(artifactsDir, agent.Name)
+					if _, err := os.Stat(target); err == nil && !config.Force {
+						return fmt.Errorf("artifact conflict - %s already exists\nUse --force to overwrite", agent.Name)
+					}
 				}
 			}
 		}
@@ -569,28 +661,72 @@ func Run(config *Config) error {
 			os.MkdirAll(artifactsDir, 0755)
 		}
 
-		if config.UseSymlinks {
-			fmt.Println("✓ Creating artifact symlinks:")
+		if isFlatScriptMode {
+			// Flat script mode: copy/symlink the whole directory once
+			dirName := filepath.Base(config.FlatScriptDir)
+			targetPath := filepath.Join(artifactsDir, dirName)
+
+			if config.UseSymlinks {
+				fmt.Println("✓ Creating artifact symlink:")
+				absPath, _ := filepath.Abs(config.FlatScriptDir)
+				if config.DryRun {
+					fmt.Printf("  Would symlink: %s → %s\n", targetPath, absPath)
+				} else {
+					os.RemoveAll(targetPath)
+					if err := os.Symlink(absPath, targetPath); err != nil {
+						return fmt.Errorf("failed to create symlink: %w", err)
+					}
+					fmt.Printf("    - %s → %s (%d scripts)\n", dirName, absPath, len(config.Agents))
+				}
+			} else {
+				fmt.Println("✓ Copying artifacts:")
+				if config.DryRun {
+					fmt.Printf("  Would copy: %s → %s\n", config.FlatScriptDir, targetPath)
+				} else {
+					os.RemoveAll(targetPath)
+					os.MkdirAll(targetPath, 0755)
+					// Only copy files matching the filter pattern
+					for _, agent := range config.Agents {
+						srcFile := filepath.Join(config.FlatScriptDir, agent.EntryPoint)
+						dstFile := filepath.Join(targetPath, agent.EntryPoint)
+						if err := copyFile(srcFile, dstFile); err != nil {
+							return fmt.Errorf("failed to copy %s: %w", agent.EntryPoint, err)
+						}
+					}
+					fmt.Printf("    - %s (%d scripts)\n", dirName, len(config.Agents))
+				}
+			}
+
+			// List discovered scripts
+			fmt.Println("  Scripts:")
 			for _, agent := range config.Agents {
-				_, err := symlinkAgentToArtifacts(&agent, artifactsDir, config.DryRun)
-				if err != nil {
-					return fmt.Errorf("failed to create symlink for %s: %w", agent.Name, err)
-				}
-				typeLabel := "Python"
-				if agent.AgentType == "typescript" {
-					typeLabel = "TypeScript"
-				}
-				fmt.Printf("    - %s → %s (%s)\n", agent.Name, agent.Path, typeLabel)
+				fmt.Printf("    - %s\n", agent.EntryPoint)
 			}
 		} else {
-			fmt.Println("✓ Copying artifacts:")
-			for _, agent := range config.Agents {
-				copyAgentToArtifacts(&agent, artifactsDir, config.DryRun)
-				typeLabel := "Python"
-				if agent.AgentType == "typescript" {
-					typeLabel = "TypeScript"
+			// Standard mode: copy/symlink each agent directory
+			if config.UseSymlinks {
+				fmt.Println("✓ Creating artifact symlinks:")
+				for _, agent := range config.Agents {
+					_, err := symlinkAgentToArtifacts(&agent, artifactsDir, config.DryRun)
+					if err != nil {
+						return fmt.Errorf("failed to create symlink for %s: %w", agent.Name, err)
+					}
+					typeLabel := "Python"
+					if agent.AgentType == "typescript" {
+						typeLabel = "TypeScript"
+					}
+					fmt.Printf("    - %s → %s (%s)\n", agent.Name, agent.Path, typeLabel)
 				}
-				fmt.Printf("    - %s (%s)\n", agent.Name, typeLabel)
+			} else {
+				fmt.Println("✓ Copying artifacts:")
+				for _, agent := range config.Agents {
+					copyAgentToArtifacts(&agent, artifactsDir, config.DryRun)
+					typeLabel := "Python"
+					if agent.AgentType == "typescript" {
+						typeLabel = "TypeScript"
+					}
+					fmt.Printf("    - %s (%s)\n", agent.Name, typeLabel)
+				}
 			}
 		}
 	} else {

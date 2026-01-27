@@ -390,12 +390,18 @@ Copies agent source directories to suite artifacts and generates test.yaml
 with setup, agent startup, and placeholder test steps.
 
 Examples:
+  # Standard agent directory (has main.py or package.json)
   tsuite scaffold --suite ./my-suite --uc uc01_tags --tc tc01_test ./agent1 ./agent2
+
+  # Flat directory with standalone scripts
+  tsuite scaffold --suite ./my-suite --uc uc01_examples --tc tc01_simple --agent ./examples/simple --filter "*.py"
+
+  # Preview without creating files
   tsuite scaffold --suite ./my-suite --uc uc01_tags --tc tc01_test --dry-run ./agent1`,
-		Args: cobra.MinimumNArgs(1),
+		Args: cobra.MinimumNArgs(0), // Allow 0 args when using --filter
 		RunE: runScaffold,
 	}
-	var scaffoldSuite, scaffoldUC, scaffoldTC, scaffoldName, scaffoldArtifactLevel string
+	var scaffoldSuite, scaffoldUC, scaffoldTC, scaffoldName, scaffoldArtifactLevel, scaffoldFilter string
 	var scaffoldDryRun, scaffoldForce, scaffoldSkipCopy, scaffoldNoInteractive, scaffoldSymlink bool
 	scaffoldCmd.Flags().StringVar(&scaffoldSuite, "suite", "", "Path to test suite (required)")
 	scaffoldCmd.Flags().StringVar(&scaffoldUC, "uc", "", "Use case name (e.g., uc01_tags)")
@@ -407,6 +413,7 @@ Examples:
 	scaffoldCmd.Flags().BoolVar(&scaffoldSkipCopy, "skip-artifact-copy", false, "Skip copying artifacts")
 	scaffoldCmd.Flags().BoolVar(&scaffoldSymlink, "symlink", false, "Create symlinks to agents instead of copying")
 	scaffoldCmd.Flags().BoolVar(&scaffoldNoInteractive, "no-interactive", false, "Skip prompts, use defaults")
+	scaffoldCmd.Flags().StringVar(&scaffoldFilter, "filter", "", "Glob for standalone scripts in flat directories (e.g., '*.py')")
 	scaffoldCmd.MarkFlagRequired("suite")
 	rootCmd.AddCommand(scaffoldCmd)
 
@@ -1226,6 +1233,7 @@ func runScaffold(cmd *cobra.Command, args []string) error {
 	skipCopy, _ := cmd.Flags().GetBool("skip-artifact-copy")
 	useSymlinks, _ := cmd.Flags().GetBool("symlink")
 	noInteractive, _ := cmd.Flags().GetBool("no-interactive")
+	filter, _ := cmd.Flags().GetString("filter")
 
 	// Resolve suite path
 	absPath, err := filepath.Abs(suitePath)
@@ -1238,38 +1246,64 @@ func runScaffold(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Validate agent directories - filter out empty strings
-	var agentPaths []string
-	for _, arg := range args {
-		if strings.TrimSpace(arg) != "" {
-			agentPaths = append(agentPaths, arg)
-		}
-	}
-	if len(agentPaths) == 0 {
-		return fmt.Errorf("at least one agent directory is required")
-	}
-	if err := scaffold.ValidateNoParentDirs(agentPaths); err != nil {
-		return err
-	}
-
 	var agents []scaffold.AgentInfo
-	for _, agentPath := range agentPaths {
-		agent, err := scaffold.ValidateAgentDir(agentPath)
+	var flatScriptDir string // For --filter mode: the directory containing flat scripts
+
+	if filter != "" {
+		// Filter mode: scan directory for matching scripts
+		if len(args) != 1 {
+			return fmt.Errorf("--filter requires exactly one directory argument")
+		}
+
+		flatScriptDir = args[0]
+		scripts, err := scaffold.DiscoverScriptsByFilter(flatScriptDir, filter)
 		if err != nil {
 			return err
 		}
-		agents = append(agents, *agent)
+		if len(scripts) == 0 {
+			return fmt.Errorf("no files matching '%s' found in %s", filter, flatScriptDir)
+		}
+		agents = scripts
+	} else {
+		// Standard mode: validate agent directories
+		var agentPaths []string
+		for _, arg := range args {
+			if strings.TrimSpace(arg) != "" {
+				agentPaths = append(agentPaths, arg)
+			}
+		}
+		if len(agentPaths) == 0 {
+			return fmt.Errorf("at least one agent directory is required")
+		}
+		if err := scaffold.ValidateNoParentDirs(agentPaths); err != nil {
+			return err
+		}
+
+		for _, agentPath := range agentPaths {
+			agent, err := scaffold.ValidateAgentDir(agentPath)
+			if err != nil {
+				return err
+			}
+			agents = append(agents, *agent)
+		}
 	}
 
-	// Show detected agents
+	// Show detected agents/scripts
 	fmt.Printf("\nSuite: %s\n", absPath)
-	fmt.Println("Detected agents:")
-	for _, agent := range agents {
-		typeLabel := "Python"
-		if agent.AgentType == "typescript" {
-			typeLabel = "TypeScript"
+	if filter != "" {
+		fmt.Printf("Discovered scripts in %s (filter: %s):\n", flatScriptDir, filter)
+		for _, agent := range agents {
+			fmt.Printf("  - %s\n", agent.EntryPoint)
 		}
-		fmt.Printf("  - %s (%s)\n", agent.Name, typeLabel)
+	} else {
+		fmt.Println("Detected agents:")
+		for _, agent := range agents {
+			typeLabel := "Python"
+			if agent.AgentType == "typescript" {
+				typeLabel = "TypeScript"
+			}
+			fmt.Printf("  - %s (%s)\n", agent.Name, typeLabel)
+		}
 	}
 	fmt.Println()
 
@@ -1312,6 +1346,8 @@ func runScaffold(cmd *cobra.Command, args []string) error {
 		Force:            force,
 		SkipArtifactCopy: skipCopy,
 		UseSymlinks:      useSymlinks,
+		FlatScriptDir:    flatScriptDir,
+		Filter:           filter,
 	}
 
 	return scaffold.Run(config)
