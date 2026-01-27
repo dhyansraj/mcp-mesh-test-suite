@@ -22,7 +22,52 @@ tsuite scaffold --suite ./my-suite --uc uc01_tags --tc tc01_test --dry-run ./age
 # Generate test.yaml for agents already in artifacts (skip copy)
 tsuite scaffold --suite ./my-suite --uc uc01_tags --tc tc01_test \
   --skip-artifact-copy ./my-suite/suites/uc01_tags/tc01_test/artifacts/agent1
+
+# Create symlinks instead of copying (useful for development)
+tsuite scaffold --suite ./my-suite --uc uc01_tags --tc tc01_test \
+  --symlink ./agent1
+
+# Flat directory with standalone scripts (no main.py or package.json)
+tsuite scaffold --suite ./my-suite --uc uc_examples --tc tc01_simple \
+  --filter "*.py" ./examples/simple
 ```
+
+## Symlink Mode
+
+Use `--symlink` to create symlinks to agent directories instead of copying.
+This is useful during development when you want changes to the original
+agent code to be immediately reflected in tests.
+
+```bash
+tsuite scaffold --suite ./tests --uc uc01 --tc tc01 --symlink ./my-agent
+```
+
+**Note:** Symlinks are resolved when mounting in Docker containers.
+
+## Flat Script Directories
+
+Use `--filter` for directories containing standalone scripts instead of
+structured agent directories (with `main.py` or `package.json`).
+
+```bash
+# Directory structure:
+# examples/simple/
+#   hello_world.py
+#   calculator.py
+#   weather_agent.py
+
+tsuite scaffold --suite ./tests --uc uc_examples --tc tc01_simple \
+  --filter "*.py" ./examples/simple
+```
+
+This will:
+1. Discover all `.py` files in the directory
+2. Copy only matching files (not README.md, etc.)
+3. Generate `meshctl start simple/hello_world.py -d` for each script
+4. Add a single wait step after all starts
+
+**Symlink + Filter:** When using both `--symlink` and `--filter`, the entire
+directory is symlinked (can't selectively symlink files).
 
 ## Options
 
@@ -37,6 +82,8 @@ tsuite scaffold --suite ./my-suite --uc uc01_tags --tc tc01_test \
 | `--force` | Overwrite existing test case |
 | `--no-interactive` | Skip prompts, use defaults |
 | `--skip-artifact-copy` | Skip copying artifacts, just generate test.yaml |
+| `--symlink` | Create symlinks to agents instead of copying |
+| `--filter GLOB` | Glob for standalone scripts in flat directories (e.g., `*.py`) |
 
 ## Agent Detection
 
