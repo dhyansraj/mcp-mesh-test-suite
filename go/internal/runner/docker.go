@@ -208,34 +208,16 @@ func (e *DockerExecutor) ExecuteTest(ctx context.Context, testID string, testCon
 	}
 
 	// Auto-mount TC-local artifacts directory if it exists
-	// Resolve symlinks to ensure Docker mounts the actual target directory
+	// Mount each item inside artifacts separately, resolving symlinks
 	artifactsPath := filepath.Join(e.suitePath, "suites", testID, "artifacts")
-	if resolved, err := filepath.EvalSymlinks(artifactsPath); err == nil {
-		if info, err := os.Stat(resolved); err == nil && info.IsDir() {
-			mounts = append(mounts, mount.Mount{
-				Type:     mount.TypeBind,
-				Source:   resolved,
-				Target:   "/artifacts",
-				ReadOnly: true,
-			})
-		}
-	}
+	mounts = append(mounts, mountArtifactsDir(artifactsPath, "/artifacts")...)
 
 	// Auto-mount UC-level artifacts directory if it exists
-	// Resolve symlinks to ensure Docker mounts the actual target directory
+	// Mount each item inside artifacts separately, resolving symlinks
 	parts := strings.Split(testID, "/")
 	if len(parts) >= 1 {
 		ucArtifactsPath := filepath.Join(e.suitePath, "suites", parts[0], "artifacts")
-		if resolved, err := filepath.EvalSymlinks(ucArtifactsPath); err == nil {
-			if info, err := os.Stat(resolved); err == nil && info.IsDir() {
-				mounts = append(mounts, mount.Mount{
-					Type:     mount.TypeBind,
-					Source:   resolved,
-					Target:   "/uc-artifacts",
-					ReadOnly: true,
-				})
-			}
-		}
+		mounts = append(mounts, mountArtifactsDir(ucArtifactsPath, "/uc-artifacts")...)
 	}
 
 	// Create and mount logs directory for unified logging
@@ -438,4 +420,49 @@ func CheckDockerAvailable() (bool, string) {
 	}
 
 	return true, fmt.Sprintf("Docker %s (API %s)", version.Version, ping.APIVersion)
+}
+
+// mountArtifactsDir mounts each item inside an artifacts directory separately.
+// This ensures symlinks inside the artifacts directory are resolved to their
+// actual targets, which is necessary for Docker bind mounts.
+func mountArtifactsDir(artifactsPath string, containerBasePath string) []mount.Mount {
+	var mounts []mount.Mount
+
+	// Check if artifacts directory exists
+	info, err := os.Stat(artifactsPath)
+	if err != nil || !info.IsDir() {
+		return mounts
+	}
+
+	// Read directory entries
+	entries, err := os.ReadDir(artifactsPath)
+	if err != nil {
+		return mounts
+	}
+
+	// Mount each item separately, resolving symlinks
+	for _, entry := range entries {
+		itemPath := filepath.Join(artifactsPath, entry.Name())
+
+		// Resolve symlinks to get the actual path
+		resolved, err := filepath.EvalSymlinks(itemPath)
+		if err != nil {
+			continue
+		}
+
+		// Verify the resolved path exists and is a directory
+		resolvedInfo, err := os.Stat(resolved)
+		if err != nil || !resolvedInfo.IsDir() {
+			continue
+		}
+
+		mounts = append(mounts, mount.Mount{
+			Type:     mount.TypeBind,
+			Source:   resolved,
+			Target:   filepath.Join(containerBasePath, entry.Name()),
+			ReadOnly: true,
+		})
+	}
+
+	return mounts
 }
