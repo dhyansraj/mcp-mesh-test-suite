@@ -3,13 +3,11 @@ package runner
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
@@ -353,23 +351,17 @@ func (e *DockerExecutor) ExecuteTest(ctx context.Context, testID string, testCon
 	}, nil
 }
 
-// ensureImage pulls an image if it doesn't exist locally
+// ensureImage checks if an image exists locally.
+// All images must be pre-built by running src-tests or lib-tests first.
+// We never pull from Docker Hub - images are always local.
 func (e *DockerExecutor) ensureImage(ctx context.Context, imageName string) error {
 	_, _, err := e.client.ImageInspectWithRaw(ctx, imageName)
 	if err == nil {
 		return nil // Image exists
 	}
 
-	// Pull the image
-	reader, err := e.client.ImagePull(ctx, imageName, types.ImagePullOptions{})
-	if err != nil {
-		return err
-	}
-	defer reader.Close()
-
-	// Consume the output
-	_, _ = io.Copy(io.Discard, reader)
-	return nil
+	// Image not found - provide helpful error message
+	return fmt.Errorf("image %q not found locally. Run src-tests or lib-tests first to build it", imageName)
 }
 
 // buildTestCommand creates the command to run inside the container
