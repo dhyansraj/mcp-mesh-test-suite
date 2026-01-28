@@ -12,6 +12,7 @@ import (
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	dockercontext "github.com/docker/go-sdk/context"
 )
 
 // ContainerConfig holds configuration for a test container
@@ -57,7 +58,20 @@ type DockerExecutor struct {
 
 // NewDockerExecutor creates a new Docker executor
 func NewDockerExecutor(serverURL, suitePath, baseWorkdir string, config *ContainerConfig, runID string) (*DockerExecutor, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	// Get Docker host from context configuration using official Docker SDK
+	// This handles Docker Desktop, rootless Docker, DOCKER_HOST/DOCKER_CONTEXT env vars, etc.
+	dockerHost, err := dockercontext.CurrentDockerHost()
+	if err != nil {
+		// Fall back to default (FromEnv behavior)
+		dockerHost = ""
+	}
+
+	var cli *client.Client
+	if dockerHost != "" {
+		cli, err = client.NewClientWithOpts(client.WithHost(dockerHost), client.WithAPIVersionNegotiation())
+	} else {
+		cli, err = client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Docker client: %w", err)
 	}
@@ -360,8 +374,13 @@ func (e *DockerExecutor) ensureImage(ctx context.Context, imageName string) erro
 		return nil // Image exists
 	}
 
-	// Image not found - provide helpful error message
-	return fmt.Errorf("image %q not found locally. Run src-tests or lib-tests first to build it", imageName)
+	// Check if it's a "not found" error vs connection/other error
+	if client.IsErrNotFound(err) {
+		return fmt.Errorf("image %q not found locally. Run src-tests or lib-tests first to build it", imageName)
+	}
+
+	// For other errors (connection refused, timeout, etc.), include the original error
+	return fmt.Errorf("failed to check image %q: %w", imageName, err)
 }
 
 // buildTestCommand creates the command to run inside the container
@@ -392,7 +411,20 @@ func (e *DockerExecutor) Close() error {
 
 // CheckDockerAvailable checks if Docker is available and running
 func CheckDockerAvailable() (bool, string) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	// Get Docker host from context configuration using official Docker SDK
+	// This handles Docker Desktop, rootless Docker, DOCKER_HOST/DOCKER_CONTEXT env vars, etc.
+	dockerHost, err := dockercontext.CurrentDockerHost()
+	if err != nil {
+		// Fall back to default (FromEnv behavior)
+		dockerHost = ""
+	}
+
+	var cli *client.Client
+	if dockerHost != "" {
+		cli, err = client.NewClientWithOpts(client.WithHost(dockerHost), client.WithAPIVersionNegotiation())
+	} else {
+		cli, err = client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	}
 	if err != nil {
 		return false, err.Error()
 	}
