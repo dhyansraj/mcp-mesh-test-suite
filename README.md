@@ -1,11 +1,11 @@
-# mcp-mesh-tsuite
+# tsuite
 
 YAML-driven integration test framework with container isolation and real-time monitoring.
 
 ## Installation
 
 ```bash
-pip install mcp-mesh-tsuite
+npm install -g @mcpmesh/tsuite
 ```
 
 ## Quick Start
@@ -163,7 +163,7 @@ post_run:
     workdir: /workspace
 ```
 
-## Documentation Topics
+## Documentation
 
 Run `tsuite man <topic>` for detailed documentation:
 
@@ -178,6 +178,21 @@ Run `tsuite man <topic>` for detailed documentation:
 | variables | Variable interpolation syntax |
 | docker | Docker mode and container isolation |
 | api | API server and dashboard |
+
+See [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for comprehensive documentation.
+
+## Development
+
+```bash
+# Build from source
+make build
+
+# Build with dashboard embedded
+make build-with-dashboard
+
+# Run tests
+make test
+```
 
 ## License
 

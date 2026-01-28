@@ -1,3 +1,0 @@
-include README.md
-recursive-include tsuite/dashboard *
-recursive-include tsuite/man/content *.md

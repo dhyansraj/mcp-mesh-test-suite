@@ -1,19 +1,10 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-venv/
-.venv/
-ENV/
-*.egg-info/
-.eggs/
-dist/
-/build/
+# Go build outputs
+/bin/
 
 # Node
 node_modules/
+dashboard/out/
+dashboard/.next/
 
 # IDE
 .idea/
@@ -36,15 +27,11 @@ reports/
 .env.local
 *.db*
 
-# External repos
-mcp-mesh/
+# External repos (symlinks or clones for testing)
+/mcp-mesh
+
+# Planning docs (local only)
+*.org
 
 # Claude Code
 .claude/
-
-# Build outputs
-src-tests/out/
-/mcp-mesh
-PYPI_RELEASE_PLAN.org
-SCAFFOLD_PLAN.org
-*.org
