@@ -788,12 +788,8 @@ func runTestsSequentialWithDocker(ctx context.Context, cancelFunc context.Cancel
 
 		fmt.Printf("\n[RUN] %s\n", testID)
 
-		// Mark test as running via API
-		if apiClient != nil && runID != "" {
-			apiClient.UpdateTestStatus(runID, testID, &client.UpdateTestStatusRequest{
-				Status: "running",
-			})
-		}
+		// Note: Runner inside container reports "running" status to API
+		// Don't duplicate here to avoid race conditions with counter updates
 
 		// Run in Docker container (Go runner reports steps to API)
 		// Use combined context with timeout
@@ -895,12 +891,8 @@ func runTestsParallelWithDocker(ctx context.Context, cancelFunc context.CancelFu
 				default:
 				}
 
-				// Mark test as running via API
-				if apiClient != nil && runID != "" {
-					apiClient.UpdateTestStatus(runID, testID, &client.UpdateTestStatusRequest{
-						Status: "running",
-					})
-				}
+				// Note: Runner inside container reports "running" status to API
+				// Don't duplicate here to avoid race conditions with counter updates
 
 				// Run in Docker container (Go runner reports steps to API)
 				// Use combined context with timeout

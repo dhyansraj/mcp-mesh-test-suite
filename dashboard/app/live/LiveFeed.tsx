@@ -414,11 +414,12 @@ interface TestDetailDialogProps {
   onOpenChange: (open: boolean) => void;
   testDetail: TestDetail | null;
   loading: boolean;
+  error?: string | null;
   suiteId?: number | null;
   onRerunTest?: (testId: string) => void;
 }
 
-function TestDetailDialog({ open, onOpenChange, testDetail, loading, suiteId, onRerunTest }: TestDetailDialogProps) {
+function TestDetailDialog({ open, onOpenChange, testDetail, loading, error, suiteId, onRerunTest }: TestDetailDialogProps) {
   const [expandedAssertions, setExpandedAssertions] = useState<Set<number>>(new Set());
   const [rerunning, setRerunning] = useState(false);
 
@@ -446,7 +447,7 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading, suiteId, on
     });
   };
 
-  if (!testDetail && !loading) return null;
+  if (!testDetail && !loading && !error) return null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -455,7 +456,8 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading, suiteId, on
           <div className="flex items-center justify-between">
             <DialogTitle className="flex items-center gap-2">
               {testDetail && getStatusIcon(testDetail.status)}
-              <span className="truncate">{testDetail?.name || testDetail?.test_id}</span>
+              {error && <XCircle className="h-4 w-4 text-destructive" />}
+              <span className="truncate">{testDetail?.name || testDetail?.test_id || "Test Details"}</span>
             </DialogTitle>
             {suiteId && testDetail && onRerunTest && (
               <Button
@@ -479,6 +481,12 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading, suiteId, on
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          </div>
+        ) : error ? (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <XCircle className="h-12 w-12 text-destructive mb-4" />
+            <p className="text-lg font-medium text-destructive mb-2">Failed to load test details</p>
+            <p className="text-sm text-muted-foreground">{error}</p>
           </div>
         ) : testDetail ? (
           <ScrollArea className="h-[calc(85vh-120px)]">
@@ -691,6 +699,7 @@ export function LiveFeed() {
   const [selectedTest, setSelectedTest] = useState<TestResult | null>(null);
   const [testDetail, setTestDetail] = useState<TestDetail | null>(null);
   const [testDetailLoading, setTestDetailLoading] = useState(false);
+  const [testDetailError, setTestDetailError] = useState<string | null>(null);
   // Cancel state
   const [cancelling, setCancelling] = useState(false);
 
@@ -757,16 +766,18 @@ export function LiveFeed() {
     }
   }, [events, displayedRunId]);
 
-  // Track elapsed time for running tests (force re-render every 100ms)
+  // Track elapsed time for running tests and run duration (force re-render every 100ms)
   const [, setTick] = useState(0);
   useEffect(() => {
-    if (!displayedRunId || !testTree) return;
+    if (!displayedRunId) return;
 
-    const runningTests = testTree.use_cases
+    // Check if we need to update: run is in progress OR there are running tests
+    const runInProgress = run?.status === "running" || run?.status === "pending";
+    const runningTests = testTree?.use_cases
       .flatMap((uc) => uc.tests)
-      .filter((t) => t.status === "running");
+      .filter((t) => t.status === "running") || [];
 
-    if (runningTests.length === 0) {
+    if (!runInProgress && runningTests.length === 0) {
       return;
     }
 
@@ -776,7 +787,7 @@ export function LiveFeed() {
     }, 100);
 
     return () => clearInterval(interval);
-  }, [displayedRunId, testTree]);
+  }, [displayedRunId, testTree, run?.status]);
 
   const toggleExpanded = useCallback((id: string) => {
     setExpandedIds((prev) => {
@@ -796,6 +807,7 @@ export function LiveFeed() {
 
     setSelectedTest(test);
     setTestDetail(null);
+    setTestDetailError(null);
     setTestDetailLoading(true);
 
     try {
@@ -803,6 +815,7 @@ export function LiveFeed() {
       setTestDetail(detail);
     } catch (err) {
       console.error("Failed to fetch test detail:", err);
+      setTestDetailError(err instanceof Error ? err.message : "Failed to load test details");
     } finally {
       setTestDetailLoading(false);
     }
@@ -865,6 +878,18 @@ export function LiveFeed() {
       : Date.now();
     return Date.now() - startTime;
   }, []);
+
+  // Calculate elapsed time for the entire run
+  const runElapsed = useMemo(() => {
+    if (!run?.started_at) return 0;
+    const startTime = new Date(run.started_at).getTime();
+    if (run.finished_at) {
+      // Run completed - use final duration
+      return new Date(run.finished_at).getTime() - startTime;
+    }
+    // Run in progress - calculate from now
+    return Date.now() - startTime;
+  }, [run?.started_at, run?.finished_at]);
 
   return (
     <div className="space-y-6">
@@ -972,6 +997,11 @@ export function LiveFeed() {
                       Started: {new Date(run.started_at).toLocaleTimeString()}
                     </span>
                   )}
+                  {run.started_at && (
+                    <span className="text-muted-foreground font-mono">
+                      Elapsed: {formatDuration(runElapsed)}
+                    </span>
+                  )}
                   {/* Cancel button - show for running/pending runs */}
                   {(run.status === "running" || run.status === "pending") && (
                     <Button
@@ -1028,10 +1058,12 @@ export function LiveFeed() {
           if (!open) {
             setSelectedTest(null);
             setTestDetail(null);
+            setTestDetailError(null);
           }
         }}
         testDetail={testDetail}
         loading={testDetailLoading}
+        error={testDetailError}
         suiteId={run?.suite_id}
         onRerunTest={handleRerunTest}
       />
