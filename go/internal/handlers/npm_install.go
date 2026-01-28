@@ -53,18 +53,30 @@ func (h *NpmInstallHandler) Execute(step map[string]any, ctx *interpolate.Contex
 		}
 	}
 
-	// Strip file: dependencies by default (set strip_file_deps: false to disable)
-	stripFileDeps := true
+	// Replace file: dependencies by default (set replace_file_deps: false to disable)
+	replaceFileDeps := true
+	if v, ok := step["replace_file_deps"].(bool); ok {
+		replaceFileDeps = v
+	}
+	// Legacy support for strip_file_deps
 	if v, ok := step["strip_file_deps"].(bool); ok {
-		stripFileDeps = v
+		replaceFileDeps = v
 	}
 
-	if stripFileDeps {
-		if err := stripFileDepependencies(packageJSON); err != nil {
+	if replaceFileDeps {
+		// Get version from config if available, otherwise use "*"
+		version := "*"
+		if packages, ok := ctx.Config["packages"].(map[string]any); ok {
+			if v, ok := packages["sdk_typescript_version"].(string); ok && v != "" {
+				version = v
+			}
+		}
+
+		if err := replaceFileDepependencies(packageJSON, version); err != nil {
 			return StepResult{
 				Success:  false,
 				ExitCode: 1,
-				Error:    fmt.Sprintf("failed to strip file: dependencies: %v", err),
+				Error:    fmt.Sprintf("failed to replace file: dependencies: %v", err),
 			}
 		}
 	}
@@ -88,25 +100,25 @@ func (h *NpmInstallHandler) Execute(step map[string]any, ctx *interpolate.Contex
 
 	if mode == "local" {
 		// Local mode: npm install with local packages
-		// First, install local packages, then run npm install
+		// First run npm install, then override with local packages
 		cmd := exec.CommandContext(cmdCtx, "bash", "-c", `
 			cd "$1"
 
-			# Check if local packages exist
-			if [ -d /packages ]; then
-				echo "Using local packages from /packages"
+			# Run standard npm install first
+			npm install --legacy-peer-deps
 
-				# Install @mcpmesh packages from local tarballs
+			# Then override with local packages if they exist
+			if [ -d /packages ]; then
+				echo "Overriding with local packages from /packages"
+
+				# Install @mcpmesh packages from local tarballs (overrides npm versions)
 				for pkg in /packages/*.tgz; do
 					if [ -f "$pkg" ]; then
 						echo "Installing local package: $pkg"
-						npm install "$pkg" --save --legacy-peer-deps 2>/dev/null || true
+						npm install "$pkg" --save --legacy-peer-deps
 					fi
 				done
 			fi
-
-			# Run standard npm install
-			npm install --legacy-peer-deps
 		`, "bash", path)
 
 		cmd.Stdout = &stdout
@@ -167,11 +179,11 @@ func (h *NpmInstallHandler) Execute(step map[string]any, ctx *interpolate.Contex
 	}
 }
 
-// stripFileDepependencies removes file: dependencies from package.json
+// replaceFileDepependencies replaces file: dependencies in package.json with a version
 // This is useful when examples reference local packages via file: paths
-// that don't exist in the container. Local .tgz packages from /packages
-// will provide these dependencies instead.
-func stripFileDepependencies(packageJSONPath string) error {
+// that don't exist in the container. The version is replaced so npm install
+// can resolve the package, and local .tgz packages can override afterward.
+func replaceFileDepependencies(packageJSONPath string, version string) error {
 	// Read package.json
 	data, err := os.ReadFile(packageJSONPath)
 	if err != nil {
@@ -186,41 +198,41 @@ func stripFileDepependencies(packageJSONPath string) error {
 
 	modified := false
 
-	// Strip file: deps from dependencies
+	// Replace file: deps in dependencies
 	if deps, ok := pkg["dependencies"].(map[string]any); ok {
-		for name, version := range deps {
-			if v, ok := version.(string); ok && strings.HasPrefix(v, "file:") {
-				delete(deps, name)
+		for name, ver := range deps {
+			if v, ok := ver.(string); ok && strings.HasPrefix(v, "file:") {
+				deps[name] = version
 				modified = true
 			}
 		}
 	}
 
-	// Strip file: deps from devDependencies
+	// Replace file: deps in devDependencies
 	if deps, ok := pkg["devDependencies"].(map[string]any); ok {
-		for name, version := range deps {
-			if v, ok := version.(string); ok && strings.HasPrefix(v, "file:") {
-				delete(deps, name)
+		for name, ver := range deps {
+			if v, ok := ver.(string); ok && strings.HasPrefix(v, "file:") {
+				deps[name] = version
 				modified = true
 			}
 		}
 	}
 
-	// Strip file: deps from optionalDependencies
+	// Replace file: deps in optionalDependencies
 	if deps, ok := pkg["optionalDependencies"].(map[string]any); ok {
-		for name, version := range deps {
-			if v, ok := version.(string); ok && strings.HasPrefix(v, "file:") {
-				delete(deps, name)
+		for name, ver := range deps {
+			if v, ok := ver.(string); ok && strings.HasPrefix(v, "file:") {
+				deps[name] = version
 				modified = true
 			}
 		}
 	}
 
-	// Strip file: deps from peerDependencies
+	// Replace file: deps in peerDependencies
 	if deps, ok := pkg["peerDependencies"].(map[string]any); ok {
-		for name, version := range deps {
-			if v, ok := version.(string); ok && strings.HasPrefix(v, "file:") {
-				delete(deps, name)
+		for name, ver := range deps {
+			if v, ok := ver.(string); ok && strings.HasPrefix(v, "file:") {
+				deps[name] = version
 				modified = true
 			}
 		}

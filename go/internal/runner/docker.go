@@ -374,6 +374,17 @@ func (e *DockerExecutor) ensureImage(ctx context.Context, imageName string) erro
 		return nil // Image exists
 	}
 
+	// Docker Desktop sometimes has a stale image index after building images.
+	// The first inspect call can fail even though the image exists.
+	// Retry once after a brief pause to allow the index to refresh.
+	if client.IsErrNotFound(err) {
+		time.Sleep(500 * time.Millisecond)
+		_, _, err = e.client.ImageInspectWithRaw(ctx, imageName)
+		if err == nil {
+			return nil // Image found on retry
+		}
+	}
+
 	// Check if it's a "not found" error vs connection/other error
 	if client.IsErrNotFound(err) {
 		return fmt.Errorf("image %q not found locally. Run src-tests or lib-tests first to build it", imageName)

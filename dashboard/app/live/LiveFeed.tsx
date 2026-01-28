@@ -32,8 +32,6 @@ import {
   CheckCircle,
   XCircle,
   Clock,
-  Wifi,
-  WifiOff,
   ChevronRight,
   ChevronDown,
   Loader2,
@@ -690,7 +688,7 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading, error, suit
 
 export function LiveFeed() {
   const router = useRouter();
-  const { events, connected, currentRunId } = useLiveEvents({ maxEvents: 500 });
+  const { events, currentRunId } = useLiveEvents({ maxEvents: 500 });
   const [run, setRun] = useState<RunExtended | null>(null);
   const [testTree, setTestTree] = useState<RunTestTreeResponse | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -912,91 +910,22 @@ export function LiveFeed() {
 
   return (
     <div className="space-y-6">
-      {/* Connection Status */}
-      <Card className="border-border bg-card rounded-md">
-        <CardContent className="flex items-center justify-between p-4">
-          <div className="flex items-center gap-3">
-            {connected ? (
-              <>
-                <div className="flex h-10 w-10 items-center justify-center rounded bg-success/20">
-                  <Wifi className="h-5 w-5 text-success" />
-                </div>
-                <div>
-                  <p className="font-medium text-foreground">Connected</p>
-                  <p className="text-sm text-muted-foreground">
-                    Receiving live events
-                  </p>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="flex h-10 w-10 items-center justify-center rounded bg-destructive/20">
-                  <WifiOff className="h-5 w-5 text-destructive" />
-                </div>
-                <div>
-                  <p className="font-medium text-foreground">Disconnected</p>
-                  <p className="text-sm text-muted-foreground">
-                    Attempting to reconnect...
-                  </p>
-                </div>
-              </>
-            )}
-          </div>
-
-          {displayedRunId && (
-            <div className="flex items-center gap-2 rounded bg-primary/10 px-4 py-2">
-              {currentRunId === displayedRunId && run?.status === "running" && !run?.cancel_requested ? (
-                <span className="relative flex h-3 w-3">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75"></span>
-                  <span className="relative inline-flex h-3 w-3 rounded-full bg-primary"></span>
-                </span>
-              ) : (
-                <span className="flex h-3 w-3 rounded-full bg-muted-foreground"></span>
-              )}
-              <span className="font-mono text-sm font-medium text-primary">
-                Run: {displayedRunId.slice(0, 8)}...
-              </span>
-              {run?.status === "cancelled" && (
-                <span className="text-xs text-warning">(cancelled)</span>
-              )}
-              {run?.cancel_requested && run?.status === "running" && (
-                <span className="text-xs text-warning">(cancelling...)</span>
-              )}
-              {currentRunId !== displayedRunId && run?.status === "completed" && (
-                <span className="text-xs text-muted-foreground">(completed)</span>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
       {displayedRunId && run ? (
         <>
-          {/* Stats Cards */}
-          <StatsCards
-            {...stats}
-            onFilterClick={setStatusFilter}
-            activeFilter={statusFilter || null}
-          />
-
-          {/* Progress Bar */}
-          <ProgressBarSection
-            completed={stats.passed + stats.failed}
-            total={run.total_tests}
-            passed={stats.passed}
-            failed={stats.failed}
-          />
-
-          {/* Currently Running - show as long as there are running tests */}
-          {(run.status === "running" || run.status === "pending") && runningTests.length > 0 && (
-            <CurrentlyRunning tests={runningTests} getElapsed={getTestElapsed} />
-          )}
-
-          {/* Run Info */}
+          {/* Run Info - at the top */}
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center justify-between text-sm">
                 <div className="flex items-center gap-4">
+                  {/* Live indicator */}
+                  {run.status === "running" && !run.cancel_requested ? (
+                    <span className="relative flex h-3 w-3">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75"></span>
+                      <span className="relative inline-flex h-3 w-3 rounded-full bg-primary"></span>
+                    </span>
+                  ) : (
+                    <span className="flex h-3 w-3 rounded-full bg-muted-foreground"></span>
+                  )}
                   <span className="text-muted-foreground">
                     Run: <span className="font-mono">{displayedRunId.slice(0, 12)}</span>
                   </span>
@@ -1059,6 +988,26 @@ export function LiveFeed() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Stats Cards */}
+          <StatsCards
+            {...stats}
+            onFilterClick={setStatusFilter}
+            activeFilter={statusFilter || null}
+          />
+
+          {/* Progress Bar */}
+          <ProgressBarSection
+            completed={stats.passed + stats.failed}
+            total={run.total_tests}
+            passed={stats.passed}
+            failed={stats.failed}
+          />
+
+          {/* Currently Running - show as long as there are running tests */}
+          {(run.status === "running" || run.status === "pending") && runningTests.length > 0 && (
+            <CurrentlyRunning tests={runningTests} getElapsed={getTestElapsed} />
+          )}
 
           {/* Test Tree */}
           {testTree && (
