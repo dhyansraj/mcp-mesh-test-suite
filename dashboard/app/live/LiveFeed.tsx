@@ -18,6 +18,7 @@ import {
   getRunTestsTree,
   getTestDetail,
   cancelRun,
+  rerunFromRun,
   runTests,
   RunExtended,
   RunTestTreeResponse,
@@ -44,6 +45,7 @@ import {
   FileText,
   StopCircle,
   Play,
+  RotateCcw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import SlotCounter from "react-slot-counter";
@@ -700,8 +702,9 @@ export function LiveFeed() {
   const [testDetail, setTestDetail] = useState<TestDetail | null>(null);
   const [testDetailLoading, setTestDetailLoading] = useState(false);
   const [testDetailError, setTestDetailError] = useState<string | null>(null);
-  // Cancel state
+  // Cancel and rerun state
   const [cancelling, setCancelling] = useState(false);
+  const [rerunning, setRerunning] = useState(false);
 
   // Update displayed run ID when a new run starts (but don't clear on completion)
   useEffect(() => {
@@ -838,6 +841,21 @@ export function LiveFeed() {
     }
   }, [displayedRunId]);
 
+  // Handle rerun - reruns the same tests from this run
+  const handleRerun = useCallback(async () => {
+    if (!run) return;
+
+    setRerunning(true);
+    try {
+      await rerunFromRun(run);
+      // New run will be picked up by SSE events automatically
+    } catch (err) {
+      console.error("Failed to rerun:", err);
+    } finally {
+      setRerunning(false);
+    }
+  }, [run]);
+
   // Handle rerun test
   const handleRerunTest = useCallback(async (testId: string) => {
     if (!run?.suite_id) return;
@@ -880,7 +898,8 @@ export function LiveFeed() {
   }, []);
 
   // Calculate elapsed time for the entire run
-  const runElapsed = useMemo(() => {
+  // Note: No useMemo - we want this to recalculate on every tick (100ms interval)
+  const runElapsed = (() => {
     if (!run?.started_at) return 0;
     const startTime = new Date(run.started_at).getTime();
     if (run.finished_at) {
@@ -889,7 +908,7 @@ export function LiveFeed() {
     }
     // Run in progress - calculate from now
     return Date.now() - startTime;
-  }, [run?.started_at, run?.finished_at]);
+  })();
 
   return (
     <div className="space-y-6">
@@ -1017,6 +1036,23 @@ export function LiveFeed() {
                         <StopCircle className="h-4 w-4" />
                       )}
                       {run.cancel_requested ? "Cancelling..." : "Cancel"}
+                    </Button>
+                  )}
+                  {/* Rerun button - show for completed/cancelled/failed runs */}
+                  {run.suite_id && (run.status === "completed" || run.status === "cancelled" || run.status === "failed") && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleRerun}
+                      disabled={rerunning}
+                      className="gap-2"
+                    >
+                      {rerunning ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <RotateCcw className="h-4 w-4" />
+                      )}
+                      Rerun
                     </Button>
                   )}
                 </div>

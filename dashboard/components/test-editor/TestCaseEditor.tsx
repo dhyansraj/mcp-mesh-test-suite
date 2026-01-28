@@ -71,7 +71,7 @@ export function TestCaseEditor({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<"saved" | "auto-saved" | null>(null);
   const [yamlData, setYamlData] = useState<TestCaseYaml | null>(null);
   const [structure, setStructure] = useState<TestCaseStructure | null>(null);
   const [originalStructure, setOriginalStructure] = useState<TestCaseStructure | null>(null);
@@ -88,7 +88,7 @@ export function TestCaseEditor({
     setLoading(true);
     setError(null);
     setChangedFields(new Set());
-    setSaveSuccess(false);
+    setSaveMessage(null);
     try {
       const data = await getTestCaseYaml(suiteId, testId);
       setYamlData(data);
@@ -107,7 +107,7 @@ export function TestCaseEditor({
 
     setSaving(true);
     setError(null);
-    setSaveSuccess(false);
+    setSaveMessage(null);
     try {
       // Only send the fields that have actually changed
       const updates: Partial<TestCaseStructure> = {};
@@ -119,8 +119,8 @@ export function TestCaseEditor({
       setChangedFields(new Set());
       // Update original to match current after successful save
       setOriginalStructure(JSON.parse(JSON.stringify(structure)));
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 3000);
+      setSaveMessage("saved");
+      setTimeout(() => setSaveMessage(null), 3000);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");
     } finally {
@@ -160,11 +160,15 @@ export function TestCaseEditor({
     if (!structure) return;
     try {
       // Call API to update step (preserves YAML comments)
+      // Note: Steps auto-save immediately, no Save button needed
       await updateTestStep(suiteId, testId, phase, index, updates);
       // Update local state for display
       const steps = [...(structure[phase] || [])];
       steps[index] = { ...steps[index], ...updates };
       setStructure({ ...structure, [phase]: steps });
+      // Show auto-saved feedback
+      setSaveMessage("auto-saved");
+      setTimeout(() => setSaveMessage(null), 2000);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update step");
     }
@@ -174,11 +178,14 @@ export function TestCaseEditor({
     if (!structure) return;
     const newStep: TestStep = { name: "New step", handler: "shell", command: "" };
     try {
-      // Call API to add step
+      // Call API to add step (auto-saves immediately)
       await addTestStep(suiteId, testId, phase, newStep);
       // Update local state for display
       const steps = [...(structure[phase] || []), newStep];
       setStructure({ ...structure, [phase]: steps });
+      // Show auto-saved feedback
+      setSaveMessage("auto-saved");
+      setTimeout(() => setSaveMessage(null), 2000);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to add step");
     }
@@ -187,12 +194,15 @@ export function TestCaseEditor({
   const handleRemoveStep = async (phase: "pre_run" | "test" | "post_run", index: number) => {
     if (!structure) return;
     try {
-      // Call API to delete step
+      // Call API to delete step (auto-saves immediately)
       await deleteTestStep(suiteId, testId, phase, index);
       // Update local state for display
       const steps = [...(structure[phase] || [])];
       steps.splice(index, 1);
       setStructure({ ...structure, [phase]: steps });
+      // Show auto-saved feedback
+      setSaveMessage("auto-saved");
+      setTimeout(() => setSaveMessage(null), 2000);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete step");
     }
@@ -252,10 +262,10 @@ export function TestCaseEditor({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {saveSuccess && (
+          {saveMessage && (
             <Badge className="bg-success/20 text-success">
               <CheckCircle className="h-3 w-3 mr-1" />
-              Saved
+              {saveMessage === "auto-saved" ? "Auto Saved" : "Saved"}
             </Badge>
           )}
           {error && <Badge variant="destructive">{error}</Badge>}
