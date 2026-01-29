@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -111,6 +113,12 @@ func NewDockerExecutor(serverURL, suitePath, baseWorkdir string, config *Contain
 		cli.Close()
 		return nil, fmt.Errorf("failed to find runner binary for docker: %w", err)
 	}
+
+	// Prune stopped containers on startup to prevent accumulation
+	// This cleans up orphaned containers from crashed runs
+	pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer pruneCancel()
+	_, _ = cli.ContainersPrune(pruneCtx, filters.Args{})
 
 	return &DockerExecutor{
 		client:      cli,
@@ -376,9 +384,11 @@ func (e *DockerExecutor) ensureImage(ctx context.Context, imageName string) erro
 
 	// Docker Desktop sometimes has a stale image index after building images.
 	// The first inspect call can fail even though the image exists.
-	// Retry once after a brief pause to allow the index to refresh.
+	// Force index refresh by calling DiskUsage (equivalent to `docker system df`),
+	// then retry the inspect.
 	if client.IsErrNotFound(err) {
-		time.Sleep(500 * time.Millisecond)
+		// DiskUsage forces Docker to refresh its internal index
+		_, _ = e.client.DiskUsage(ctx, types.DiskUsageOptions{})
 		_, _, err = e.client.ImageInspectWithRaw(ctx, imageName)
 		if err == nil {
 			return nil // Image found on retry
