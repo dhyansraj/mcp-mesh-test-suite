@@ -104,12 +104,19 @@ func (h *NpmInstallHandler) Execute(step map[string]any, ctx *interpolate.Contex
 		cmd := exec.CommandContext(cmdCtx, "bash", "-c", `
 			cd "$1"
 
+			# Remove existing node_modules to avoid platform mismatch
+			# (e.g., darwin binaries copied into linux container)
+			rm -rf node_modules 2>/dev/null || true
+
 			# Run standard npm install first
 			npm install --legacy-peer-deps
 
 			# Then override with local packages if they exist
 			if [ -d /packages ]; then
 				echo "Overriding with local packages from /packages"
+
+				# Remove package-lock.json to avoid npm "extraneous" bug with local tarballs
+				rm -f package-lock.json 2>/dev/null || true
 
 				# Install @mcpmesh packages from local tarballs (overrides npm versions)
 				for pkg in /packages/*.tgz; do
@@ -145,8 +152,12 @@ func (h *NpmInstallHandler) Execute(step map[string]any, ctx *interpolate.Contex
 		}
 	} else {
 		// Published mode: just run npm install
-		cmd := exec.CommandContext(cmdCtx, "npm", "install", "--legacy-peer-deps")
-		cmd.Dir = path
+		// First remove node_modules to avoid platform mismatch
+		cmd := exec.CommandContext(cmdCtx, "bash", "-c", `
+			cd "$1"
+			rm -rf node_modules 2>/dev/null || true
+			npm install --legacy-peer-deps
+		`, "bash", path)
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
 
