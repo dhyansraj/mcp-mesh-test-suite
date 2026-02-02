@@ -39,6 +39,7 @@ func NewRegistry() *Registry {
 	r.Register(&HTTPHandler{})
 	r.Register(&NpmInstallHandler{})
 	r.Register(&PipInstallHandler{})
+	r.Register(&MavenInstallHandler{})
 
 	return r
 }
