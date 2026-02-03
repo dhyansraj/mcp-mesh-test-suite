@@ -390,12 +390,8 @@ func (s *Server) rerunTests(c *gin.Context) {
 	if len(testIDs) == 1 {
 		scopeType = "tc"
 		scopeValue = testIDs[0]
-	} else if len(useCases) == 1 {
-		scopeType = "uc"
-		for uc := range useCases {
-			scopeValue = uc
-		}
 	} else {
+		// Always use tc-file for multiple tests to preserve exact test selection
 		scopeType = "multi"
 	}
 
