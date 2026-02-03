@@ -31,6 +31,7 @@ type CreateRunRequest struct {
 	SuiteID              int64      `json:"suite_id"`
 	SuiteName            string     `json:"suite_name"`
 	DisplayName          string     `json:"display_name"`
+	Filters              string     `json:"filters,omitempty"`
 	CLIVersion           string     `json:"cli_version"`
 	SDKPythonVersion     string     `json:"sdk_python_version"`
 	SDKTypescriptVersion string     `json:"sdk_typescript_version"`

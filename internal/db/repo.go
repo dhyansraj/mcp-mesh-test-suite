@@ -165,6 +165,7 @@ func (r *Repository) GetAllRuns(suiteID *int64, limit int) ([]models.Run, error)
 		       r.passed, r.failed, r.skipped, r.duration_ms, r.filters, r.mode,
 		       r.cancel_requested,
 		       CASE
+		           WHEN r.display_name IS NOT NULL THEN r.display_name
 		           WHEN (SELECT COUNT(*) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
 		               THEN (SELECT tr.test_id FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
 		           WHEN (SELECT COUNT(DISTINCT tr.use_case) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
@@ -233,6 +234,7 @@ func (r *Repository) GetRunByID(runID string) (*models.Run, error) {
 		       r.passed, r.failed, r.skipped, r.duration_ms, r.filters, r.mode,
 		       r.cancel_requested,
 		       CASE
+		           WHEN r.display_name IS NOT NULL THEN r.display_name
 		           WHEN (SELECT COUNT(*) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
 		               THEN (SELECT tr.test_id FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
 		           WHEN (SELECT COUNT(DISTINCT tr.use_case) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
@@ -288,6 +290,7 @@ func (r *Repository) GetRunningRun() (*models.Run, error) {
 		       r.passed, r.failed, r.skipped, r.duration_ms, r.filters, r.mode,
 		       r.cancel_requested,
 		       CASE
+		           WHEN r.display_name IS NOT NULL THEN r.display_name
 		           WHEN (SELECT COUNT(*) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
 		               THEN (SELECT tr.test_id FROM test_results tr WHERE tr.run_id = r.run_id LIMIT 1)
 		           WHEN (SELECT COUNT(DISTINCT tr.use_case) FROM test_results tr WHERE tr.run_id = r.run_id) = 1
@@ -588,8 +591,8 @@ func (r *Repository) CreateRun(run *models.Run) error {
 			run_id, suite_id, suite_name, started_at, status,
 			cli_version, sdk_python_version, sdk_typescript_version, docker_image,
 			total_tests, pending_count, running_count, passed, failed, skipped,
-			mode, cancel_requested
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			display_name, filters, mode, cancel_requested
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		run.RunID,
 		nullInt64(run.SuiteID),
@@ -606,6 +609,8 @@ func (r *Repository) CreateRun(run *models.Run) error {
 		run.Passed,
 		run.Failed,
 		run.Skipped,
+		nullString(run.DisplayName),
+		run.Filters,
 		run.Mode,
 		run.CancelRequested,
 	)

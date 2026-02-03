@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -39,6 +40,7 @@ var (
 	dryRun     bool
 	apiURL     string
 	runnerPath string
+	tcFile     string
 )
 
 // findRunnerBinary finds the tsuite-runner binary
@@ -312,6 +314,7 @@ Features: embedded dashboard UI, Docker/standalone modes for isolation, parallel
 	runCmd.Flags().BoolVar(&dryRun, "dry-run", false, "List tests without running")
 	runCmd.Flags().StringVar(&apiURL, "api-url", "http://localhost:9999", "API server URL")
 	runCmd.Flags().StringVar(&runnerPath, "runner-path", "", "Path to runner binary (default: auto-detect)")
+	runCmd.Flags().StringVar(&tcFile, "tc-file", "", "File containing test IDs to run (one per line)")
 
 	rootCmd.AddCommand(runCmd)
 
@@ -655,17 +658,42 @@ func runTests(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Build display name
-		displayName := suiteConfig.Suite.Name
-		if len(tests) == 1 {
+		// Build display name based on filters
+		var displayName string
+		if len(tagFilter) > 0 {
+			// Tag-based run
+			displayName = "tags: " + strings.Join(tagFilter, ", ")
+		} else if tcFile != "" {
+			// Multi-select from file
+			displayName = fmt.Sprintf("%d selected tests", len(tests))
+		} else if len(tests) == 1 {
 			// Single test - include test name in display
-			displayName = suiteConfig.Suite.Name + " / " + tests[0]
+			displayName = tests[0]
+		}
+		// If no specific filter, displayName stays empty and SQL CASE will compute it
+
+		// Build filters JSON for the run record
+		var filtersJSON string
+		if len(tagFilter) > 0 || tcFile != "" {
+			filterData := map[string]any{}
+			if len(tagFilter) > 0 {
+				filterData["tags"] = tagFilter
+			}
+			if tcFile != "" {
+				ids := make([]string, len(tests))
+				copy(ids, tests)
+				filterData["test_ids"] = ids
+			}
+			if data, err := json.Marshal(filterData); err == nil {
+				filtersJSON = string(data)
+			}
 		}
 
 		createReq := &client.CreateRunRequest{
 			SuiteID:     suiteID,
 			SuiteName:   suiteConfig.Suite.Name,
 			DisplayName: displayName,
+			Filters:     filtersJSON,
 			TotalTests:  len(tests),
 			Mode:        mode,
 			Tests:       testInfos,
@@ -993,6 +1021,29 @@ func listTests(cmd *cobra.Command, args []string) error {
 }
 
 func filterTests(tests []string) []string {
+	// If tc-file is specified, filter by exact test ID match
+	if tcFile != "" {
+		content, err := os.ReadFile(tcFile)
+		if err != nil {
+			fmt.Printf("Warning: Failed to read tc-file: %v\n", err)
+			return tests
+		}
+		allowedIDs := make(map[string]bool)
+		for _, line := range strings.Split(strings.TrimSpace(string(content)), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				allowedIDs[line] = true
+			}
+		}
+		var filtered []string
+		for _, testID := range tests {
+			if allowedIDs[testID] {
+				filtered = append(filtered, testID)
+			}
+		}
+		return filtered
+	}
+
 	var filtered []string
 
 	for _, testID := range tests {

@@ -233,6 +233,7 @@ func (s *Server) createRun(c *gin.Context) {
 		SuiteID              int64    `json:"suite_id"`
 		SuiteName            string   `json:"suite_name"`
 		DisplayName          string   `json:"display_name"`
+		Filters              string   `json:"filters"`
 		CLIVersion           string   `json:"cli_version"`
 		SDKPythonVersion     string   `json:"sdk_python_version"`
 		SDKTypescriptVersion string   `json:"sdk_typescript_version"`
@@ -262,6 +263,7 @@ func (s *Server) createRun(c *gin.Context) {
 		SuiteID:              sql.NullInt64{Int64: req.SuiteID, Valid: req.SuiteID > 0},
 		SuiteName:            sql.NullString{String: req.SuiteName, Valid: req.SuiteName != ""},
 		DisplayName:          sql.NullString{String: req.DisplayName, Valid: req.DisplayName != ""},
+		Filters:              sql.NullString{String: req.Filters, Valid: req.Filters != ""},
 		StartedAt:            time.Now(),
 		Status:               models.RunStatusRunning,
 		CLIVersion:           sql.NullString{String: req.CLIVersion, Valid: req.CLIVersion != ""},
@@ -394,7 +396,7 @@ func (s *Server) rerunTests(c *gin.Context) {
 			scopeValue = uc
 		}
 	} else {
-		scopeType = "all"
+		scopeType = "multi"
 	}
 
 	// Find tsuite binary (same directory as running server)
@@ -420,6 +422,30 @@ func (s *Server) rerunTests(c *gin.Context) {
 		cmd = append(cmd, "--tc", scopeValue)
 	case "uc":
 		cmd = append(cmd, "--uc", scopeValue)
+	case "multi":
+		// Write test IDs to temp file
+		tcFile, err := os.CreateTemp("", "tsuite_rerun_*.txt")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create temp file: " + err.Error()})
+			return
+		}
+		for _, testID := range testIDs {
+			tcFile.WriteString(testID + "\n")
+		}
+		tcFile.Close()
+		cmd = append(cmd, "--tc-file", tcFile.Name())
+
+		// Pass original tags if they existed (for display_name consistency)
+		if run.Filters.Valid && run.Filters.String != "" {
+			var filters struct {
+				Tags []string `json:"tags"`
+			}
+			if err := json.Unmarshal([]byte(run.Filters.String), &filters); err == nil {
+				for _, tag := range filters.Tags {
+					cmd = append(cmd, "--tags", tag)
+				}
+			}
+		}
 	}
 
 	// Create log file for output
@@ -457,6 +483,8 @@ func (s *Server) rerunTests(c *gin.Context) {
 		description = "Rerunning test case: " + scopeValue
 	case "uc":
 		description = "Rerunning use case: " + scopeValue
+	case "multi":
+		description = fmt.Sprintf("Rerunning %d tests", len(testIDs))
 	default:
 		description = "Rerunning all tests in: " + suite.SuiteName
 	}

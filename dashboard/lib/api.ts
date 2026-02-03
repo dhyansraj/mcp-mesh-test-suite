@@ -286,7 +286,7 @@ export interface RunResponse {
 
 export async function runTests(
   suiteId: number,
-  options?: { uc?: string; tc?: string; tags?: string[] }
+  options?: { uc?: string; tc?: string; tags?: string[]; test_ids?: string[] }
 ): Promise<RunResponse> {
   const res = await fetch(`${API_BASE}/api/suites/${suiteId}/run`, {
     method: "POST",

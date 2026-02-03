@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -45,6 +46,7 @@ func (s *Server) runSuite(c *gin.Context) {
 		TC       string   `json:"tc"`
 		Tags     []string `json:"tags"`
 		SkipTags []string `json:"skip_tags"`
+		TestIDs  []string `json:"test_ids"`
 	}
 	c.ShouldBindJSON(&req) // Optional body
 
@@ -77,6 +79,20 @@ func (s *Server) runSuite(c *gin.Context) {
 	}
 	// Note: skip_tags not implemented in Go CLI yet
 
+	// Handle test_ids - write to temp file and pass --tc-file flag
+	if len(req.TestIDs) > 0 {
+		tcFile, err := os.CreateTemp("", "tsuite_tests_*.txt")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create temp file: " + err.Error()})
+			return
+		}
+		for _, testID := range req.TestIDs {
+			tcFile.WriteString(testID + "\n")
+		}
+		tcFile.Close()
+		args = append(args, "--tc-file", tcFile.Name())
+	}
+
 	// Create log file
 	logFile, err := os.CreateTemp("", "tsuite_run_*.log")
 	if err != nil {
@@ -102,7 +118,9 @@ func (s *Server) runSuite(c *gin.Context) {
 
 	// Build description
 	var description string
-	if req.TC != "" {
+	if len(req.TestIDs) > 0 {
+		description = fmt.Sprintf("Running %d selected tests", len(req.TestIDs))
+	} else if req.TC != "" {
 		description = "Running test case: " + req.TC
 	} else if req.UC != "" {
 		description = "Running use case: " + req.UC

@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS runs (
     skipped INTEGER DEFAULT 0,
     duration_ms INTEGER,
     filters TEXT,
+    display_name TEXT,
     mode TEXT DEFAULT 'docker' CHECK(mode IN ('standalone', 'docker')),
     cancel_requested INTEGER DEFAULT 0
 );
