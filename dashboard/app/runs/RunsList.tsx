@@ -23,6 +23,7 @@ import {
   RotateCcw,
   Loader2,
   StopCircle,
+  Copy,
 } from "lucide-react";
 
 interface RunsListProps {
@@ -36,6 +37,15 @@ export function RunsList({ initialRuns }: RunsListProps) {
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [rerunningId, setRerunningId] = useState<string | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const handleCopyId = (e: React.MouseEvent, runId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    navigator.clipboard.writeText(runId);
+    setCopiedId(runId);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
 
   const handleRerun = async (e: React.MouseEvent, run: Run) => {
     e.preventDefault(); // Prevent Link navigation
@@ -111,7 +121,7 @@ export function RunsList({ initialRuns }: RunsListProps) {
       </div>
 
       {/* Runs List */}
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2">
         {filteredRuns.length === 0 ? (
           <Card className="border-border bg-card">
             <CardContent className="flex items-center justify-center py-12">
@@ -122,7 +132,7 @@ export function RunsList({ initialRuns }: RunsListProps) {
           filteredRuns.map((run) => (
             <Link key={run.run_id} href={`/runs?id=${run.run_id}`}>
               <Card className="border-border bg-card rounded-md transition-colors hover:bg-muted/30">
-                <CardContent className="flex items-center justify-between px-4 py-2.5">
+                <CardContent className="flex items-center justify-between px-4 py-2">
                   <div className="flex items-center gap-3">
                     {/* Status indicator */}
                     <div
@@ -150,7 +160,7 @@ export function RunsList({ initialRuns }: RunsListProps) {
                     {/* Run info */}
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-foreground">
+                        <span className="text-sm font-medium text-foreground max-w-[400px] truncate block" title={run.display_name ? `${run.suite_name} / ${run.display_name}` : run.suite_name || `Run ${run.run_id.slice(0, 8)}`}>
                           {run.display_name
                             ? `${run.suite_name} / ${run.display_name}`
                             : run.suite_name || `Run ${run.run_id.slice(0, 8)}`}
@@ -169,7 +179,23 @@ export function RunsList({ initialRuns }: RunsListProps) {
                         </Badge>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        <span className="font-mono">{run.run_id.slice(0, 8)}</span>
+                        <span className="relative group/id">
+                          <span className="font-mono">{run.run_id.slice(0, 8)}&hellip;</span>
+                          <span className="absolute left-0 top-full mt-1 z-50 hidden group-hover/id:flex items-center gap-1 bg-popover border border-border rounded-md px-2 py-1 shadow-lg whitespace-nowrap">
+                            <span className="font-mono text-xs">{run.run_id}</span>
+                            <button
+                              onClick={(e) => handleCopyId(e, run.run_id)}
+                              className="ml-1 p-0.5 rounded hover:bg-muted transition-colors"
+                              title="Copy run ID"
+                            >
+                              {copiedId === run.run_id ? (
+                                <CheckCircle className="h-3 w-3 text-success" />
+                              ) : (
+                                <Copy className="h-3 w-3 text-muted-foreground" />
+                              )}
+                            </button>
+                          </span>
+                        </span>
                         {" • "}
                         {formatRelativeTime(run.started_at)}
                         {run.cli_version && ` • v${run.cli_version}`}

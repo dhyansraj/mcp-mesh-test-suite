@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -1028,10 +1029,16 @@ export function LiveFeed() {
           <CardContent className="flex flex-col items-center justify-center py-16 text-center">
             <Clock className="h-16 w-16 text-muted-foreground/30 mb-4" />
             <h3 className="text-lg font-medium mb-2">No Active Run</h3>
-            <p className="text-sm text-muted-foreground max-w-md">
+            <p className="text-sm text-muted-foreground max-w-md mb-6">
               Start a test run from the Tests page or CLI to see live progress here.
               The dashboard will automatically update when a new run begins.
             </p>
+            <Link href="/tests">
+              <Button variant="outline" className="gap-2">
+                <Play className="h-4 w-4" />
+                Go to Tests
+              </Button>
+            </Link>
           </CardContent>
         </Card>
       )}

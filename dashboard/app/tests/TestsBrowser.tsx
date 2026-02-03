@@ -18,12 +18,32 @@ import {
   CheckSquare,
   MinusSquare,
   Filter,
+  Search,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { Suite, SuiteTest, getSuite, runTests } from "@/lib/api";
+
+// Consistent tag color palette - 6 harmonious colors
+const TAG_COLORS = [
+  "bg-blue-500/15 text-blue-400 border-blue-500/20",
+  "bg-emerald-500/15 text-emerald-400 border-emerald-500/20",
+  "bg-violet-500/15 text-violet-400 border-violet-500/20",
+  "bg-amber-500/15 text-amber-400 border-amber-500/20",
+  "bg-rose-500/15 text-rose-400 border-rose-500/20",
+  "bg-cyan-500/15 text-cyan-400 border-cyan-500/20",
+];
+
+function getTagColor(tag: string): string {
+  let hash = 0;
+  for (let i = 0; i < tag.length; i++) {
+    hash = ((hash << 5) - hash + tag.charCodeAt(i)) | 0;
+  }
+  return TAG_COLORS[Math.abs(hash) % TAG_COLORS.length];
+}
 
 interface TestsBrowserProps {
   suites: Suite[];
@@ -90,6 +110,7 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
 
   // Filter panel visibility state
   const [showFilterPanel, setShowFilterPanel] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
 
   // Helper to check if filters are active
   const hasActiveFilters = selectedTags.size > 0;
@@ -207,10 +228,25 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
     return Array.from(tags).sort();
   }, [suiteTests]);
 
+  const tagCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    suiteTests.forEach((tests) => {
+      tests.forEach((test) => {
+        test.tags.forEach((tag) => {
+          counts.set(tag, (counts.get(tag) || 0) + 1);
+        });
+      });
+    });
+    return counts;
+  }, [suiteTests]);
+
   // Check if a test passes the tag filter
   const testPassesFilter = (test: SuiteTest): boolean => {
-    if (selectedTags.size === 0) return true;
-    return Array.from(selectedTags).every((tag) => test.tags.includes(tag));
+    const passesTag = selectedTags.size === 0 || Array.from(selectedTags).every((tag) => test.tags.includes(tag));
+    const passesSearch = !searchQuery ||
+      (test.name || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+      test.test_id.toLowerCase().includes(searchQuery.toLowerCase());
+    return passesTag && passesSearch;
   };
 
   // Toggle tag selection
@@ -226,42 +262,48 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
     });
   };
 
-  // Auto-select matching tests when tags change
+  // Auto-select matching tests when tags or search change
   useEffect(() => {
-    if (selectedTags.size > 0) {
-      // Auto-select all tests that pass the filter
+    if (selectedTags.size > 0 || searchQuery) {
       const matchingIds: string[] = [];
       suiteTests.forEach((tests) => {
         tests.forEach((test) => {
-          if (Array.from(selectedTags).every((tag) => test.tags.includes(tag))) {
+          if (testPassesFilter(test)) {
             matchingIds.push(test.test_id);
           }
         });
       });
       setSelectedTests(new Set(matchingIds));
     } else {
-      // Clear selections when no tags selected
       setSelectedTests(new Set());
     }
-  }, [selectedTags, suiteTests]);
+  }, [selectedTags, searchQuery, suiteTests]);
 
   // Get all tests that match the current filter (flat list)
   const getFilteredTestsList = useMemo(() => {
-    if (selectedTags.size === 0) return [];
+    if (selectedTags.size === 0 && !searchQuery) return [];
 
     const matchingTests: Array<{ test: SuiteTest; suiteId: number; suiteName: string }> = [];
 
     suites.forEach((suite) => {
       const tests = suiteTests.get(suite.id) || [];
       tests.forEach((test) => {
-        if (Array.from(selectedTags).every((tag) => test.tags.includes(tag))) {
+        if (testPassesFilter(test)) {
           matchingTests.push({ test, suiteId: suite.id, suiteName: suite.suite_name });
         }
       });
     });
 
     return matchingTests;
-  }, [selectedTags, suiteTests, suites]);
+  }, [selectedTags, searchQuery, suiteTests, suites]);
+
+  const allFilteredSelected = useMemo(() => {
+    const allFilteredIds: string[] = [];
+    suiteTests.forEach((tests) => {
+      tests.filter(testPassesFilter).forEach((t) => allFilteredIds.push(t.test_id));
+    });
+    return allFilteredIds.length > 0 && allFilteredIds.every((id) => selectedTests.has(id));
+  }, [suiteTests, selectedTests, selectedTags, searchQuery]);
 
   // Clear all selected tags
   const clearTags = () => {
@@ -431,6 +473,27 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
           </div>
         </CardHeader>
 
+        {/* Search Bar */}
+        <div className="px-6 pb-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search tests by name..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 pr-9 h-9 bg-muted/30 border-border"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        </div>
+
         {/* Filter Panel - collapsible */}
         {showFilterPanel && (
           <div className="px-6 pb-4 space-y-3 border-b">
@@ -443,14 +506,14 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
                     key={tag}
                     variant={selectedTags.has(tag) ? "default" : "outline"}
                     className={cn(
-                      "cursor-pointer transition-colors",
+                      "cursor-pointer transition-colors relative transition-transform duration-150 hover:scale-[1.35] hover:z-10",
                       selectedTags.has(tag)
                         ? "bg-primary hover:bg-primary/80"
                         : "hover:bg-muted"
                     )}
                     onClick={() => toggleTag(tag)}
                   >
-                    {tag}
+                    {tag} <span className="ml-1 opacity-60">({tagCounts.get(tag) || 0})</span>
                   </Badge>
                 ))}
                 {selectedTags.size > 0 && (
@@ -469,29 +532,21 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
 
             {/* Selection Bar */}
             {suiteTests.size > 0 && (
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 text-xs"
-                    onClick={selectAllFiltered}
-                  >
-                    <CheckSquare className="h-3 w-3 mr-1" />
-                    Select All
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 text-xs"
-                    onClick={clearSelection}
-                  >
-                    <Square className="h-3 w-3 mr-1" />
-                    Select None
-                  </Button>
-                </div>
+              <div className="flex items-center gap-4 pt-3 mt-1 border-t border-border/50">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs border-primary/40 text-primary hover:bg-primary/10"
+                  onClick={allFilteredSelected ? clearSelection : selectAllFiltered}
+                >
+                  {allFilteredSelected ? (
+                    <><Square className="h-3 w-3 mr-1" />Deselect All</>
+                  ) : (
+                    <><CheckSquare className="h-3 w-3 mr-1" />Select All</>
+                  )}
+                </Button>
                 <div className="flex-1 text-sm text-muted-foreground">
-                  {`${selectedTests.size} selected`}
+                  {`${selectedTests.size} tests selected`}
                 </div>
                 <Button
                   variant="default"
@@ -513,8 +568,8 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
         )}
 
         <CardContent>
-          {selectedTags.size > 0 ? (
-            // Flat list view when tags are selected
+          {(selectedTags.size > 0 || searchQuery) ? (
+            // Flat list view when tags or search are active
             <div className="space-y-1">
               {getFilteredTestsList.length === 0 ? (
                 <div className="p-4 text-sm text-muted-foreground text-center">
@@ -551,10 +606,10 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
                         {test.tags.map((tag, tagIndex) => (
                           <Badge
                             key={`${test.test_id}-${tag}-${tagIndex}`}
-                            variant="secondary"
+                            variant="outline"
                             className={cn(
                               "text-[10px] px-1.5 py-0",
-                              selectedTags.has(tag) && "bg-primary/20 text-primary"
+                              selectedTags.has(tag) ? "bg-primary/20 text-primary border-primary/30" : getTagColor(tag)
                             )}
                           >
                             {tag}
@@ -816,10 +871,10 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
                                                         .map((tag, tagIndex) => (
                                                           <Badge
                                                             key={`${test.test_id}-${tag}-${tagIndex}`}
-                                                            variant="secondary"
+                                                            variant="outline"
                                                             className={cn(
                                                               "text-[10px] px-1.5 py-0",
-                                                              selectedTags.has(tag) && "bg-primary/20 text-primary"
+                                                              selectedTags.has(tag) ? "bg-primary/20 text-primary border-primary/30" : getTagColor(tag)
                                                             )}
                                                           >
                                                             {tag}

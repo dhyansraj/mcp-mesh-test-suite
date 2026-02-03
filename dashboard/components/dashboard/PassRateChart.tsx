@@ -29,9 +29,11 @@ export function PassRateChart({ runs }: PassRateChartProps) {
         passed: run.passed,
         failed: run.failed,
         date: run.started_at
-          ? new Date(run.started_at).toLocaleDateString("en-US", {
+          ? new Date(run.started_at).toLocaleString("en-US", {
               month: "short",
               day: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
             })
           : `Run ${index + 1}`,
       };
@@ -61,9 +63,13 @@ export function PassRateChart({ runs }: PassRateChartProps) {
               <XAxis
                 dataKey="date"
                 stroke="#94a3b8"
-                fontSize={12}
+                fontSize={11}
                 tickLine={false}
                 axisLine={false}
+                interval="preserveStartEnd"
+                angle={-20}
+                textAnchor="end"
+                height={45}
               />
               <YAxis
                 stroke="#94a3b8"

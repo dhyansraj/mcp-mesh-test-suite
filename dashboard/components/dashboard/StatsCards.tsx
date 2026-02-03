@@ -24,6 +24,7 @@ export function StatsCards({
       icon: Activity,
       color: "text-primary",
       bgColor: "bg-primary/10",
+      accentColor: "bg-primary",
     },
     {
       name: "Pass Rate",
@@ -31,6 +32,7 @@ export function StatsCards({
       icon: CheckCircle,
       color: "text-success",
       bgColor: "bg-success/10",
+      accentColor: "bg-success",
     },
     {
       name: "Avg Duration",
@@ -38,6 +40,7 @@ export function StatsCards({
       icon: Clock,
       color: "text-accent",
       bgColor: "bg-accent/10",
+      accentColor: "bg-accent",
     },
     {
       name: "Total Tests",
@@ -45,28 +48,32 @@ export function StatsCards({
       icon: FlaskConical,
       color: "text-secondary",
       bgColor: "bg-secondary/10",
+      accentColor: "bg-secondary",
     },
   ];
 
   return (
     <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
       {stats.map((stat) => (
-        <Card key={stat.name} className="border-border bg-card rounded-md">
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">
-                  {stat.name}
-                </p>
-                <p className="mt-2 text-3xl font-bold text-foreground">
-                  {stat.value}
-                </p>
+        <Card key={stat.name} className="border-border bg-card rounded-md overflow-hidden">
+          <div className="flex">
+            <div className={`w-1 ${stat.accentColor}`} />
+            <CardContent className="p-6 flex-1">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">
+                    {stat.name}
+                  </p>
+                  <p className="mt-2 text-3xl font-bold text-foreground">
+                    {stat.value}
+                  </p>
+                </div>
+                <div className={`rounded p-3 ${stat.bgColor}`}>
+                  <stat.icon className={`h-6 w-6 ${stat.color}`} />
+                </div>
               </div>
-              <div className={`rounded p-3 ${stat.bgColor}`}>
-                <stat.icon className={`h-6 w-6 ${stat.color}`} />
-              </div>
-            </div>
-          </CardContent>
+            </CardContent>
+          </div>
         </Card>
       ))}
     </div>
