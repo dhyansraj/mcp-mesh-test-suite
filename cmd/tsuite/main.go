@@ -345,7 +345,7 @@ Features: embedded dashboard UI, Docker/standalone modes for isolation, parallel
 	// Check command
 	checkCmd := &cobra.Command{
 		Use:   "check",
-		Short: "Check Docker and K8s availability",
+		Short: "Check Docker availability",
 		Run: func(cmd *cobra.Command, args []string) {
 			// Check Docker
 			ok, msg := runner.CheckDockerAvailable()
@@ -355,15 +355,7 @@ Features: embedded dashboard UI, Docker/standalone modes for isolation, parallel
 				fmt.Printf("Docker: not available (%s)\n", msg)
 			}
 
-			// Check K8s
-			k8sOk, k8sMsg := runner.CheckK8sAvailable()
-			if k8sOk {
-				fmt.Printf("K8s: %s\n", k8sMsg)
-			} else {
-				fmt.Printf("K8s: not available (%s)\n", k8sMsg)
-			}
-
-			if !ok && !k8sOk {
+			if !ok {
 				os.Exit(1)
 			}
 		},
@@ -635,19 +627,13 @@ func runTests(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Check Docker/K8s availability based on mode
+	// Check Docker availability based on mode
 	if mode == "docker" {
 		ok, msg := runner.CheckDockerAvailable()
 		if !ok {
 			return fmt.Errorf("Docker not available: %s", msg)
 		}
 		fmt.Printf("Docker: %s\n", msg)
-	} else if mode == "k8s" {
-		ok, msg := runner.CheckK8sAvailable()
-		if !ok {
-			return fmt.Errorf("K8s not available: %s", msg)
-		}
-		fmt.Printf("K8s: %s\n", msg)
 	}
 
 	// Create temp workdir for test execution
@@ -806,13 +792,6 @@ func runTests(cmd *cobra.Command, args []string) error {
 			passed, failed, skipped, failedTests, cancelled = runTestsParallelWithDocker(ctx, cancelFunc, absPath, activeTests, parallel, apiClient, runID, baseWorkdir, dockerImage, apiURL)
 		} else {
 			passed, failed, skipped, failedTests, cancelled = runTestsSequentialWithDocker(ctx, cancelFunc, absPath, activeTests, apiClient, runID, baseWorkdir, dockerImage, apiURL)
-		}
-	} else if mode == "k8s" {
-		// K8s mode: use K8sExecutor which creates pods with NFS volume
-		if parallel > 1 && len(activeTests) > 1 {
-			passed, failed, skipped, failedTests, cancelled = runTestsParallelWithK8s(ctx, cancelFunc, suiteConfig, absPath, activeTests, parallel, apiClient, runID)
-		} else {
-			passed, failed, skipped, failedTests, cancelled = runTestsSequentialWithK8s(ctx, cancelFunc, suiteConfig, absPath, activeTests, apiClient, runID)
 		}
 	} else {
 		// Standalone mode: use external runner binary
@@ -1056,197 +1035,6 @@ func runTestsParallelWithDocker(ctx context.Context, cancelFunc context.CancelFu
 					Duration: duration,
 				}
 				// Note: Go runner inside container reports final status with steps to API
-			}
-		}(i)
-	}
-
-	// Send tests to workers
-	for _, t := range tests {
-		testCh <- t
-	}
-	close(testCh)
-
-	// Wait for all workers
-	go func() {
-		wg.Wait()
-		close(resultCh)
-	}()
-
-	// Collect results
-	results := executor.CollectResults(resultCh)
-	return results.Passed, results.Failed, results.Skipped, results.FailedTests, results.Cancelled
-}
-
-func runTestsSequentialWithK8s(ctx context.Context, cancelFunc context.CancelFunc, suiteConfig *config.SuiteConfig, suitePath string, tests []string, apiClient *client.Client, runID string) (passed, failed, skipped int, failedTests []string, cancelled bool) {
-	// Create k8s executor
-	k8sExec, err := runner.NewK8sExecutor(suiteConfig, suitePath, runID)
-	if err != nil {
-		fmt.Printf("Failed to create K8s executor: %v\n", err)
-		return 0, len(tests), 0, tests, false
-	}
-	defer k8sExec.Close()
-
-	// Start cancel checker goroutine
-	if apiClient != nil {
-		executor.StartCancelChecker(ctx, cancelFunc, apiClient, runID)
-	}
-
-	for _, testID := range tests {
-		// Check if cancelled before starting test
-		select {
-		case <-ctx.Done():
-			fmt.Printf("[SKIP] %s (cancelled)\n", testID)
-			skipped++
-			cancelled = true
-			continue
-		default:
-		}
-
-		fmt.Printf("\n[RUN] %s\n", testID)
-
-		// Run in K8s pod (Go runner reports steps to API)
-		testCtx, testCancel := context.WithTimeout(ctx, 10*time.Minute)
-		result, err := k8sExec.ExecuteTest(testCtx, testID, nil)
-		testCancel()
-
-		// Check if cancelled during test
-		if ctx.Err() == context.Canceled {
-			fmt.Printf("[SKIP] %s (cancelled)\n", testID)
-			skipped++
-			cancelled = true
-			continue
-		}
-
-		var testPassed bool
-		var testError string
-		var duration time.Duration
-
-		if err != nil {
-			testPassed = false
-			testError = err.Error()
-			duration = 0
-			// Report failure to API since runner never started
-			if apiClient != nil && runID != "" {
-				apiClient.UpdateTestStatus(runID, testID, &client.UpdateTestStatusRequest{
-					Status:       "failed",
-					ErrorMessage: testError,
-				})
-			}
-		} else {
-			testPassed = result.ExitCode == 0 && result.Error == nil
-			if result.Error != nil {
-				testError = result.Error.Error()
-			} else if result.ExitCode != 0 {
-				testError = fmt.Sprintf("exit code %d", result.ExitCode)
-				if result.Stderr != "" {
-					lines := strings.Split(strings.TrimSpace(result.Stderr), "\n")
-					if len(lines) > 3 {
-						lines = lines[len(lines)-3:]
-					}
-					testError = strings.Join(lines, "; ")
-				}
-			}
-			duration = result.Duration
-		}
-
-		if testPassed {
-			fmt.Printf("[PASS] %s (%.1fs)\n", testID, duration.Seconds())
-			passed++
-		} else {
-			fmt.Printf("[FAIL] %s - %s (%.1fs)\n", testID, testError, duration.Seconds())
-			failed++
-			failedTests = append(failedTests, testID)
-		}
-	}
-	return
-}
-
-func runTestsParallelWithK8s(ctx context.Context, cancelFunc context.CancelFunc, suiteConfig *config.SuiteConfig, suitePath string, tests []string, workers int, apiClient *client.Client, runID string) (passed, failed, skipped int, failedTests []string, cancelled bool) {
-	testCh := make(chan string, len(tests))
-	resultCh := make(chan executor.TestResult, len(tests))
-
-	// Start cancel checker goroutine
-	if apiClient != nil {
-		executor.StartCancelChecker(ctx, cancelFunc, apiClient, runID)
-	}
-
-	// Start workers
-	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
-
-			// Each worker gets its own k8s executor
-			k8sExec, err := runner.NewK8sExecutor(suiteConfig, suitePath, runID)
-			if err != nil {
-				fmt.Printf("Worker %d: Failed to create K8s executor: %v\n", workerID, err)
-				// Mark all remaining tests as failed
-				for testID := range testCh {
-					resultCh <- executor.TestResult{TestID: testID, Passed: false, Error: err.Error()}
-				}
-				return
-			}
-			defer k8sExec.Close()
-
-			for testID := range testCh {
-				// Check if cancelled before starting test
-				select {
-				case <-ctx.Done():
-					resultCh <- executor.TestResult{TestID: testID, Cancelled: true}
-					continue
-				default:
-				}
-
-				// Run in K8s pod (Go runner reports steps to API)
-				testCtx, testCancel := context.WithTimeout(ctx, 10*time.Minute)
-				result, err := k8sExec.ExecuteTest(testCtx, testID, nil)
-				testCancel()
-
-				// Check if cancelled during test
-				if ctx.Err() == context.Canceled {
-					resultCh <- executor.TestResult{TestID: testID, Cancelled: true}
-					continue
-				}
-
-				var testPassed bool
-				var testError string
-				var duration time.Duration
-
-				if err != nil {
-					testPassed = false
-					testError = err.Error()
-					duration = 0
-					// Report failure to API since runner never started
-					if apiClient != nil && runID != "" {
-						apiClient.UpdateTestStatus(runID, testID, &client.UpdateTestStatusRequest{
-							Status:       "failed",
-							ErrorMessage: testError,
-						})
-					}
-				} else {
-					testPassed = result.ExitCode == 0 && result.Error == nil
-					if result.Error != nil {
-						testError = result.Error.Error()
-					} else if result.ExitCode != 0 {
-						testError = fmt.Sprintf("exit code %d", result.ExitCode)
-						if result.Stderr != "" {
-							lines := strings.Split(strings.TrimSpace(result.Stderr), "\n")
-							if len(lines) > 3 {
-								lines = lines[len(lines)-3:]
-							}
-							testError = strings.Join(lines, "; ")
-						}
-					}
-					duration = result.Duration
-				}
-
-				resultCh <- executor.TestResult{
-					TestID:   testID,
-					Passed:   testPassed,
-					Error:    testError,
-					Duration: duration,
-				}
 			}
 		}(i)
 	}
