@@ -17,6 +17,14 @@ import {
   Edit,
   X,
   Settings,
+  Ban,
+  Loader2,
+  Save,
+  CheckCircle,
+  Key,
+  Eye,
+  EyeOff,
+  Pencil,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -41,6 +49,14 @@ import {
   syncSuite,
   browseFolders,
   formatRelativeTime,
+  updateUCConfig,
+  getUCConfig,
+  UCConfigResponse,
+  Secret,
+  getSecrets,
+  createSecret,
+  updateSecret,
+  deleteSecret,
 } from "@/lib/api";
 import { TestCaseTree, TestCaseEditor } from "@/components/test-editor";
 import { SuiteConfigEditor } from "@/components/suite-editor";
@@ -74,8 +90,37 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
     testName: string;
   } | null>(null);
 
+  // UC editor state
+  const [selectedUCName, setSelectedUCName] = useState<string | null>(null);
+
   // Config editor state
   const [configSuiteId, setConfigSuiteId] = useState<number | null>(null);
+
+  // Secrets state
+  const [secrets, setSecrets] = useState<Secret[]>([]);
+  const [isAddSecretOpen, setIsAddSecretOpen] = useState(false);
+  const [editingSecret, setEditingSecret] = useState<Secret | null>(null);
+  const [newSecretKey, setNewSecretKey] = useState("");
+  const [newSecretValue, setNewSecretValue] = useState("");
+  const [showValue, setShowValue] = useState(false);
+  const [secretError, setSecretError] = useState<string | null>(null);
+  const [isAddingSecret, setIsAddingSecret] = useState(false);
+  const [isSavingSecret, setIsSavingSecret] = useState(false);
+  const [deletingSecretKey, setDeletingSecretKey] = useState<string | null>(null);
+
+  // Load secrets on mount
+  useEffect(() => {
+    loadSecrets();
+  }, []);
+
+  const loadSecrets = async () => {
+    try {
+      const data = await getSecrets();
+      setSecrets(data);
+    } catch (err) {
+      console.error("Failed to load secrets:", err);
+    }
+  };
 
   // Load directory listing when dialog opens or path changes
   useEffect(() => {
@@ -165,6 +210,85 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
       setFolderPath("");
       setAddError(null);
       setBrowseError(null);
+    }
+  };
+
+  // Secret handlers
+  const handleAddSecret = async () => {
+    if (!newSecretKey.trim() || !newSecretValue.trim()) return;
+
+    setIsAddingSecret(true);
+    setSecretError(null);
+
+    try {
+      const newSecret = await createSecret(newSecretKey.trim(), newSecretValue.trim());
+      setSecrets([...secrets, newSecret]);
+      setNewSecretKey("");
+      setNewSecretValue("");
+      setShowValue(false);
+      setIsAddSecretOpen(false);
+    } catch (err) {
+      setSecretError(err instanceof Error ? err.message : "Failed to add secret");
+    } finally {
+      setIsAddingSecret(false);
+    }
+  };
+
+  const handleUpdateSecret = async () => {
+    if (!editingSecret || !newSecretValue.trim()) return;
+
+    setIsSavingSecret(true);
+    setSecretError(null);
+
+    try {
+      await updateSecret(editingSecret.key, newSecretValue.trim());
+      setSecrets(secrets.map(s =>
+        s.key === editingSecret.key
+          ? { ...s, value: newSecretValue.trim(), updated_at: new Date().toISOString() }
+          : s
+      ));
+      setEditingSecret(null);
+      setNewSecretValue("");
+      setShowValue(false);
+    } catch (err) {
+      setSecretError(err instanceof Error ? err.message : "Failed to update secret");
+    } finally {
+      setIsSavingSecret(false);
+    }
+  };
+
+  const handleDeleteSecret = async (key: string) => {
+    if (!window.confirm(`Are you sure you want to delete the secret "${key}"?`)) {
+      return;
+    }
+
+    setDeletingSecretKey(key);
+    try {
+      await deleteSecret(key);
+      setSecrets(secrets.filter(s => s.key !== key));
+    } catch (err) {
+      console.error("Failed to delete secret:", err);
+    } finally {
+      setDeletingSecretKey(null);
+    }
+  };
+
+  const handleAddSecretDialogChange = (open: boolean) => {
+    setIsAddSecretOpen(open);
+    if (!open) {
+      setNewSecretKey("");
+      setNewSecretValue("");
+      setShowValue(false);
+      setSecretError(null);
+    }
+  };
+
+  const handleEditSecretDialogChange = (open: boolean) => {
+    if (!open) {
+      setEditingSecret(null);
+      setNewSecretValue("");
+      setShowValue(false);
+      setSecretError(null);
     }
   };
 
@@ -473,6 +597,7 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
               onClick={() => {
                 setEditingSuiteId(null);
                 setSelectedTest(null);
+                setSelectedUCName(null);
               }}
             >
               <X className="h-4 w-4" />
@@ -485,14 +610,20 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
                 <div className="p-2 border-b bg-muted/30">
                   <span className="text-sm font-medium">Test Cases</span>
                 </div>
-                <ScrollArea className="flex-1 h-0">
-                  <div className="p-2">
+                <ScrollArea className="flex-1 h-0 [&>div>div]:!block">
+                  <div className="p-2 overflow-hidden">
                     <TestCaseTree
                       suiteId={editingSuiteId}
                       selectedTestId={selectedTest?.testId}
-                      onSelectTest={(testId, testName) =>
-                        setSelectedTest({ testId, testName })
-                      }
+                      selectedUCName={selectedUCName || undefined}
+                      onSelectTest={(testId, testName) => {
+                        setSelectedTest({ testId, testName });
+                        setSelectedUCName(null);
+                      }}
+                      onSelectUC={(ucName) => {
+                        setSelectedUCName(ucName);
+                        setSelectedTest(null);
+                      }}
                     />
                   </div>
                 </ScrollArea>
@@ -500,7 +631,12 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
 
               {/* Editor panel */}
               <div className="flex-1 border rounded-md overflow-hidden">
-                {selectedTest ? (
+                {selectedUCName ? (
+                  <UCSettingsEditor
+                    suiteId={editingSuiteId}
+                    ucName={selectedUCName}
+                  />
+                ) : selectedTest ? (
                   <TestCaseEditor
                     suiteId={editingSuiteId}
                     testId={selectedTest.testId}
@@ -517,6 +653,223 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
           </CardContent>
         </Card>
       )}
+
+      {/* Global Secrets Section */}
+      <Card className="rounded-md">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+          <div>
+            <CardTitle className="text-lg font-medium">Global Secrets</CardTitle>
+            <p className="text-sm text-muted-foreground mt-1">
+              API keys and sensitive configuration
+            </p>
+          </div>
+          <Dialog open={isAddSecretOpen} onOpenChange={handleAddSecretDialogChange}>
+            <DialogTrigger asChild>
+              <Button size="sm" className="gap-2">
+                <Plus className="h-4 w-4" />
+                Add Secret
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Add Secret</DialogTitle>
+                <DialogDescription>
+                  Add a new secret that will be available to all test suites
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="grid gap-4 py-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="secret-key">Key</Label>
+                  <Input
+                    id="secret-key"
+                    placeholder="OPENAI_API_KEY"
+                    value={newSecretKey}
+                    onChange={(e) => setNewSecretKey(e.target.value)}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="secret-value">Value</Label>
+                  <div className="relative">
+                    <Input
+                      id="secret-value"
+                      type={showValue ? "text" : "password"}
+                      placeholder="Enter secret value"
+                      value={newSecretValue}
+                      onChange={(e) => setNewSecretValue(e.target.value)}
+                      className="pr-10"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+                      onClick={() => setShowValue(!showValue)}
+                    >
+                      {showValue ? (
+                        <EyeOff className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <Eye className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              {secretError && (
+                <p className="text-sm text-destructive">{secretError}</p>
+              )}
+
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => handleAddSecretDialogChange(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleAddSecret}
+                  disabled={isAddingSecret || !newSecretKey.trim() || !newSecretValue.trim()}
+                >
+                  {isAddingSecret ? "Adding..." : "Add"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </CardHeader>
+        <CardContent>
+          {secrets.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <Key className="h-12 w-12 text-muted-foreground/50" />
+              <h3 className="mt-4 text-lg font-medium">No secrets configured</h3>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Add secrets to make API keys available to your tests
+              </p>
+            </div>
+          ) : (
+            <div className="border rounded-md">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b bg-muted/30">
+                    <th className="text-left text-sm font-medium px-4 py-3">Key</th>
+                    <th className="text-left text-sm font-medium px-4 py-3">Value</th>
+                    <th className="text-right text-sm font-medium px-4 py-3">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {secrets.map((secret) => (
+                    <tr key={secret.id} className="border-b last:border-b-0">
+                      <td className="px-4 py-3">
+                        <code className="text-sm bg-muted px-2 py-1 rounded">
+                          {secret.key}
+                        </code>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-muted-foreground">
+                          {"•".repeat(12)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => {
+                              setEditingSecret(secret);
+                              setNewSecretValue("");
+                              setShowValue(false);
+                              setSecretError(null);
+                            }}
+                            title="Edit secret"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDeleteSecret(secret.key)}
+                            disabled={deletingSecretKey === secret.key}
+                            className="text-destructive hover:text-destructive"
+                            title="Delete secret"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Edit Secret Dialog */}
+      <Dialog open={!!editingSecret} onOpenChange={handleEditSecretDialogChange}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Secret</DialogTitle>
+            <DialogDescription>
+              Update the value for this secret
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label>Key</Label>
+              <code className="text-sm bg-muted px-3 py-2 rounded">
+                {editingSecret?.key}
+              </code>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="edit-secret-value">New Value</Label>
+              <div className="relative">
+                <Input
+                  id="edit-secret-value"
+                  type={showValue ? "text" : "password"}
+                  placeholder="Enter new secret value"
+                  value={newSecretValue}
+                  onChange={(e) => setNewSecretValue(e.target.value)}
+                  className="pr-10"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+                  onClick={() => setShowValue(!showValue)}
+                >
+                  {showValue ? (
+                    <EyeOff className="h-4 w-4 text-muted-foreground" />
+                  ) : (
+                    <Eye className="h-4 w-4 text-muted-foreground" />
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {secretError && (
+            <p className="text-sm text-destructive">{secretError}</p>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => handleEditSecretDialogChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleUpdateSecret}
+              disabled={isSavingSecret || !newSecretValue.trim()}
+            >
+              {isSavingSecret ? "Saving..." : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Info Section */}
       <Card className="rounded-md">
@@ -560,6 +913,127 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
           </div>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// ============================================================================
+// UC Settings Editor Component
+// ============================================================================
+
+function UCSettingsEditor({ suiteId, ucName }: { suiteId: number; ucName: string }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [disabled, setDisabled] = useState(false);
+  const [originalDisabled, setOriginalDisabled] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadConfig();
+  }, [suiteId, ucName]);
+
+  const loadConfig = async () => {
+    setLoading(true);
+    setError(null);
+    setSaveSuccess(false);
+    try {
+      const data = await getUCConfig(suiteId, ucName);
+      setDisabled(data.structure?.disabled || false);
+      setOriginalDisabled(data.structure?.disabled || false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load UC config");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    setSaveSuccess(false);
+    try {
+      await updateUCConfig(suiteId, ucName, { disabled });
+      setOriginalDisabled(disabled);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const hasChanges = disabled !== originalDisabled;
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b px-4 py-3">
+        <div className="flex items-center gap-3">
+          <FolderOpen className="h-5 w-5 text-amber-500" />
+          <div>
+            <h3 className="font-medium">{ucName.replace(/_/g, " ")}</h3>
+            <p className="text-xs text-muted-foreground">uc.yaml</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {saveSuccess && (
+            <Badge className="bg-success/20 text-success">
+              <CheckCircle className="h-3 w-3 mr-1" />
+              Saved
+            </Badge>
+          )}
+          {error && <Badge variant="destructive">{error}</Badge>}
+          <Button
+            size="sm"
+            onClick={handleSave}
+            disabled={saving || !hasChanges}
+          >
+            {saving ? (
+              <Loader2 className="h-4 w-4 animate-spin mr-1" />
+            ) : (
+              <Save className="h-4 w-4 mr-1" />
+            )}
+            Save
+          </Button>
+        </div>
+      </div>
+
+      {/* Content */}
+      <ScrollArea className="flex-1">
+        <div className="p-4 space-y-4">
+          <Card className="rounded-md">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label>Disabled</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Skip all tests in this use case during runs
+                  </p>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={disabled}
+                    onChange={(e) => setDisabled(e.target.checked)}
+                    className="h-4 w-4 rounded border-input"
+                  />
+                  <span className="text-sm">{disabled ? "Yes" : "No"}</span>
+                </label>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </ScrollArea>
     </div>
   );
 }

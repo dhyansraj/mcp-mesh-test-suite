@@ -346,6 +346,20 @@ export function TestCaseEditor({
                 </div>
               </div>
 
+              {/* Disabled */}
+              <div className="grid gap-2">
+                <Label>Disabled</Label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={structure.disabled || false}
+                    onChange={(e) => updateField("disabled", e.target.checked)}
+                    className="h-4 w-4 rounded border-input"
+                  />
+                  <span className="text-sm text-muted-foreground">Skip this test during runs</span>
+                </label>
+              </div>
+
               {/* Tags */}
               <div className="grid gap-2">
                 <Label>Tags</Label>

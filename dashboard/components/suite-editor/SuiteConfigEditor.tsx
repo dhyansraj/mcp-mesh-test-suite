@@ -82,11 +82,15 @@ export function SuiteConfigEditor({
       // When mode is "local", mark version fields for deletion
       const saveStructure = { ...structure };
       if (saveStructure.packages?.mode === "local") {
+        const deletions: Record<string, string> = {};
+        Object.keys(saveStructure.packages).forEach((key) => {
+          if (key.endsWith("_version")) {
+            deletions[key] = "__DELETE__";
+          }
+        });
         saveStructure.packages = {
           ...saveStructure.packages,
-          cli_version: "__DELETE__" as string,
-          sdk_python_version: "__DELETE__" as string,
-          sdk_typescript_version: "__DELETE__" as string,
+          ...deletions,
         };
       }
 
@@ -224,6 +228,21 @@ export function SuiteConfigEditor({
                 </SelectContent>
               </Select>
             </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <Label>Disabled</Label>
+                <p className="text-xs text-muted-foreground">Disable the entire suite</p>
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={structure.suite?.disabled || false}
+                  onChange={(e) => updateNestedField("suite", "disabled", e.target.checked)}
+                  className="h-4 w-4 rounded border-input"
+                />
+                <span className="text-sm">{structure.suite?.disabled ? "Yes" : "No"}</span>
+              </label>
+            </div>
           </CardContent>
         </Card>
 
@@ -260,39 +279,33 @@ export function SuiteConfigEditor({
               </p>
             </div>
 
-            {/* Version fields - only show when not in local mode */}
-            {structure.packages?.mode !== "local" && (
+            {/* Version fields - dynamically rendered from config, hidden in local mode */}
+            {structure.packages?.mode !== "local" && structure.packages && (
               <>
-                <div className="grid gap-2">
-                  <Label htmlFor="cli-version">CLI Version</Label>
-                  <Input
-                    id="cli-version"
-                    value={structure.packages?.cli_version || ""}
-                    onChange={(e) => updateNestedField("packages", "cli_version", e.target.value)}
-                    placeholder="0.8.0-beta.9"
-                    className="font-mono"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="sdk-python-version">SDK Python Version</Label>
-                  <Input
-                    id="sdk-python-version"
-                    value={structure.packages?.sdk_python_version || ""}
-                    onChange={(e) => updateNestedField("packages", "sdk_python_version", e.target.value)}
-                    placeholder="0.8.0b9"
-                    className="font-mono"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="sdk-typescript-version">SDK TypeScript Version</Label>
-                  <Input
-                    id="sdk-typescript-version"
-                    value={structure.packages?.sdk_typescript_version || ""}
-                    onChange={(e) => updateNestedField("packages", "sdk_typescript_version", e.target.value)}
-                    placeholder="0.8.0-beta.9"
-                    className="font-mono"
-                  />
-                </div>
+                {Object.keys(structure.packages)
+                  .filter((key) => key.endsWith("_version"))
+                  .sort()
+                  .map((key) => {
+                    // Convert key like "sdk_java_version" to label "SDK Java Version"
+                    const ACRONYMS = new Set(["cli", "sdk", "api", "pip", "npm"]);
+                    const label = key
+                      .replace(/_version$/, "")
+                      .split("_")
+                      .map((word) => ACRONYMS.has(word) ? word.toUpperCase() : word.charAt(0).toUpperCase() + word.slice(1))
+                      .join(" ")
+                      + " Version";
+                    return (
+                      <div key={key} className="grid gap-2">
+                        <Label htmlFor={key}>{label}</Label>
+                        <Input
+                          id={key}
+                          value={(structure.packages?.[key] as string) || ""}
+                          onChange={(e) => updateNestedField("packages", key, e.target.value)}
+                          className="font-mono"
+                        />
+                      </div>
+                    );
+                  })}
               </>
             )}
           </CardContent>

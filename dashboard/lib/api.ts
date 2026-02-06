@@ -113,6 +113,7 @@ export interface SuiteTest {
   test_id: string;
   name: string | null;
   tags: string[];
+  disabled: boolean;
 }
 
 export interface SuitesResponse {
@@ -472,6 +473,7 @@ export interface TestCaseYaml {
 export interface TestCaseStructure {
   name?: string;
   description?: string;
+  disabled?: boolean;
   tags?: string[];
   timeout?: number;
   pre_run?: TestStep[];
@@ -633,16 +635,16 @@ export interface SuiteConfigStructure {
   suite?: {
     name?: string;
     mode?: "docker" | "standalone";
+    disabled?: boolean;
   };
   packages?: {
     mode?: "auto" | "local" | "published";
-    cli_version?: string;
-    sdk_python_version?: string;
-    sdk_typescript_version?: string;
     local?: {
       wheels_dir?: string;
       packages_dir?: string;
     };
+    // Dynamic version fields (cli_version, sdk_python_version, sdk_java_version, etc.)
+    [key: string]: string | undefined | "auto" | "local" | "published" | { wheels_dir?: string; packages_dir?: string };
   };
   docker?: {
     base_image?: string;
@@ -694,4 +696,103 @@ export async function updateSuiteConfig(
     throw new Error(error.error || "Failed to update config");
   }
   return res.json();
+}
+
+// ============================================================================
+// Use Case Config API Functions
+// ============================================================================
+
+export interface UCConfigResponse {
+  uc_name: string;
+  path: string;
+  raw_yaml: string;
+  structure: { disabled?: boolean };
+}
+
+export async function getUCConfig(
+  suiteId: number,
+  ucName: string
+): Promise<UCConfigResponse> {
+  const res = await fetch(
+    `${API_BASE}/api/suites/${suiteId}/uc-config/${ucName}`,
+    { cache: "no-store" }
+  );
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "Failed to fetch UC config");
+  }
+  return res.json();
+}
+
+export async function updateUCConfig(
+  suiteId: number,
+  ucName: string,
+  updates: Record<string, unknown>
+): Promise<{ success: boolean; uc_name: string; raw_yaml: string }> {
+  const res = await fetch(
+    `${API_BASE}/api/suites/${suiteId}/uc-config/${ucName}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ updates }),
+    }
+  );
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "Failed to update UC config");
+  }
+  return res.json();
+}
+
+// ============================================================================
+// Secrets API Functions
+// ============================================================================
+
+export interface Secret {
+  id: number;
+  key: string;
+  value: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function getSecrets(): Promise<Secret[]> {
+  const res = await fetch(`${API_BASE}/api/secrets`, { cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to fetch secrets");
+  return res.json();
+}
+
+export async function createSecret(key: string, value: string): Promise<Secret> {
+  const res = await fetch(`${API_BASE}/api/secrets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, value }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to create secret");
+  }
+  return res.json();
+}
+
+export async function updateSecret(key: string, value: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/secrets/${encodeURIComponent(key)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ value }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to update secret");
+  }
+}
+
+export async function deleteSecret(key: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/secrets/${encodeURIComponent(key)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to delete secret");
+  }
 }

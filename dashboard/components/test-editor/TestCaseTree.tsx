@@ -8,14 +8,19 @@ import {
   FolderOpen,
   FileText,
   Loader2,
+  Ban,
+  Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { getSuite, SuiteWithTests, SuiteTest } from "@/lib/api";
 
 interface TestCaseTreeProps {
   suiteId: number;
   onSelectTest: (testId: string, testName: string) => void;
+  onSelectUC?: (ucName: string) => void;
   selectedTestId?: string;
+  selectedUCName?: string;
 }
 
 interface UseCaseGroup {
@@ -45,7 +50,9 @@ function groupTestsByUseCase(tests: SuiteTest[]): UseCaseGroup[] {
 export function TestCaseTree({
   suiteId,
   onSelectTest,
+  onSelectUC,
   selectedTestId,
+  selectedUCName,
 }: TestCaseTreeProps) {
   const [suite, setSuite] = useState<SuiteWithTests | null>(null);
   const [loading, setLoading] = useState(true);
@@ -109,34 +116,61 @@ export function TestCaseTree({
   const useCases = groupTestsByUseCase(suite.tests);
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-1 overflow-hidden">
       {useCases.map((uc) => {
         const isExpanded = expandedUcs.has(uc.use_case);
+        const allDisabled = uc.tests.length > 0 && uc.tests.every((t) => t.disabled);
+        const isUCSelected = selectedUCName === uc.use_case;
 
         return (
-          <div key={uc.use_case}>
+          <div key={uc.use_case} className="min-w-0">
             {/* Use Case Header */}
-            <button
+            <div
+              role="button"
+              tabIndex={0}
               onClick={() => toggleUc(uc.use_case)}
-              className="flex items-center gap-2 w-full p-2 text-left hover:bg-muted/50 rounded-md transition-colors"
+              className={cn(
+                "flex items-center gap-2 w-full p-2 text-left rounded-md transition-colors cursor-pointer",
+                isUCSelected
+                  ? "bg-primary/10 text-primary"
+                  : "hover:bg-muted/50"
+              )}
             >
               {isExpanded ? (
-                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
               ) : (
-                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
               )}
               {isExpanded ? (
-                <FolderOpen className="h-4 w-4 text-amber-500" />
+                <FolderOpen className="h-4 w-4 text-amber-500 shrink-0" />
               ) : (
-                <Folder className="h-4 w-4 text-amber-500" />
+                <Folder className="h-4 w-4 text-amber-500 shrink-0" />
               )}
-              <span className="font-medium text-sm flex-1">
+              <span className="font-medium text-sm flex-1 truncate min-w-0">
                 {uc.use_case.replace(/_/g, " ")}
               </span>
+              {allDisabled && (
+                <Badge variant="outline" className="text-[10px] border-yellow-500/50 text-yellow-500 px-1.5 py-0">
+                  <Ban className="h-3 w-3 mr-0.5" />
+                  disabled
+                </Badge>
+              )}
+              {onSelectUC && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectUC(uc.use_case);
+                  }}
+                  className="p-1 rounded hover:bg-muted/80 transition-colors"
+                  title="UC settings"
+                >
+                  <Settings className="h-3.5 w-3.5 text-muted-foreground" />
+                </button>
+              )}
               <span className="text-xs text-muted-foreground">
                 {uc.tests.length}
               </span>
-            </button>
+            </div>
 
             {/* Test Cases */}
             {isExpanded && (
@@ -154,7 +188,8 @@ export function TestCaseTree({
                         "flex items-center gap-2 w-full p-2 text-left rounded-md transition-colors",
                         isSelected
                           ? "bg-primary/10 text-primary"
-                          : "hover:bg-muted/50"
+                          : "hover:bg-muted/50",
+                        test.disabled && "opacity-50"
                       )}
                     >
                       <FileText
@@ -166,6 +201,12 @@ export function TestCaseTree({
                       <span className="text-sm truncate flex-1">
                         {test.name || test.test_case}
                       </span>
+                      {test.disabled && (
+                        <Badge variant="outline" className="text-[10px] border-yellow-500/50 text-yellow-500 px-1.5 py-0">
+                          <Ban className="h-3 w-3 mr-0.5" />
+                          disabled
+                        </Badge>
+                      )}
                     </button>
                   );
                 })}

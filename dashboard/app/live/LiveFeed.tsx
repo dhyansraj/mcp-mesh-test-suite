@@ -151,10 +151,12 @@ interface ProgressBarProps {
   total: number;
   passed: number;
   failed: number;
+  disabled: number;
 }
 
-function ProgressBarSection({ completed, total, passed, failed }: ProgressBarProps) {
-  const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+function ProgressBarSection({ completed, total, passed, failed, disabled }: ProgressBarProps) {
+  const activeTotal = total - disabled;
+  const percentage = activeTotal > 0 ? Math.round((completed / activeTotal) * 100) : 0;
 
   return (
     <Card>
@@ -167,6 +169,12 @@ function ProgressBarSection({ completed, total, passed, failed }: ProgressBarPro
         </div>
         <div className="h-3 rounded-full bg-muted overflow-hidden">
           <div className="h-full flex transition-all duration-500">
+            {disabled > 0 && (
+              <div
+                className="bg-yellow-500 transition-all duration-500"
+                style={{ width: `${(disabled / total) * 100}%` }}
+              />
+            )}
             <div
               className="bg-success transition-all duration-500"
               style={{ width: `${total > 0 ? (passed / total) * 100 : 0}%` }}
@@ -178,6 +186,9 @@ function ProgressBarSection({ completed, total, passed, failed }: ProgressBarPro
           </div>
         </div>
         <div className="flex justify-between text-xs mt-2 text-muted-foreground">
+          {disabled > 0 && (
+            <span className="text-yellow-500">{disabled} disabled</span>
+          )}
           <span className="text-success">{passed} passed</span>
           <span className="text-destructive">{failed} failed</span>
         </div>
@@ -880,6 +891,14 @@ export function LiveFeed() {
     };
   }, [run]);
 
+  const disabledCount = useMemo(() => {
+    if (!testTree) return 0;
+    return testTree.use_cases
+      .flatMap((uc) => uc.tests)
+      .filter((t) => t.status === "skipped" && t.error_message === "disabled")
+      .length;
+  }, [testTree]);
+
   // Find all currently running tests
   const runningTests = useMemo(() => {
     if (!testTree) return [];
@@ -936,6 +955,11 @@ export function LiveFeed() {
                       : run.status}
                   </Badge>
                   <Badge variant="outline">{run.mode}</Badge>
+                  {run.mode === "docker" && run.docker_image && (
+                    <span className="font-mono text-xs text-muted-foreground">
+                      {run.docker_image}
+                    </span>
+                  )}
                   <span className="text-muted-foreground">
                     {run.total_tests} tests
                   </span>
@@ -1003,6 +1027,7 @@ export function LiveFeed() {
             total={run.total_tests}
             passed={stats.passed}
             failed={stats.failed}
+            disabled={disabledCount}
           />
 
           {/* Currently Running - show as long as there are running tests */}

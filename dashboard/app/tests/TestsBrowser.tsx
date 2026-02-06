@@ -52,6 +52,7 @@ interface TestsBrowserProps {
 interface UseCaseGroup {
   useCase: string;
   testCases: TestCaseGroup[];
+  disabled: boolean;
 }
 
 interface TestCaseGroup {
@@ -73,13 +74,18 @@ function groupTestsByHierarchy(tests: SuiteTest[]): UseCaseGroup[] {
     testCaseMap.get(test.test_case)!.push(test);
   }
 
-  return Array.from(useCaseMap.entries()).map(([useCase, testCaseMap]) => ({
-    useCase,
-    testCases: Array.from(testCaseMap.entries()).map(([testCase, tests]) => ({
+  return Array.from(useCaseMap.entries()).map(([useCase, testCaseMap]) => {
+    const testCases = Array.from(testCaseMap.entries()).map(([testCase, tests]) => ({
       testCase,
       tests,
-    })),
-  }));
+    }));
+    const allDisabled = testCases.every(tc => tc.tests.every(t => t.disabled));
+    return {
+      useCase,
+      testCases,
+      disabled: allDisabled && testCases.length > 0,
+    };
+  });
 }
 
 export function TestsBrowser({ suites }: TestsBrowserProps) {
@@ -222,7 +228,9 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
     const tags = new Set<string>();
     suiteTests.forEach((tests) => {
       tests.forEach((test) => {
-        test.tags.forEach((tag) => tags.add(tag));
+        if (!test.disabled) {
+          test.tags.forEach((tag) => tags.add(tag));
+        }
       });
     });
     return Array.from(tags).sort();
@@ -232,9 +240,11 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
     const counts = new Map<string, number>();
     suiteTests.forEach((tests) => {
       tests.forEach((test) => {
-        test.tags.forEach((tag) => {
-          counts.set(tag, (counts.get(tag) || 0) + 1);
-        });
+        if (!test.disabled) {
+          test.tags.forEach((tag) => {
+            counts.set(tag, (counts.get(tag) || 0) + 1);
+          });
+        }
       });
     });
     return counts;
@@ -268,7 +278,7 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
       const matchingIds: string[] = [];
       suiteTests.forEach((tests) => {
         tests.forEach((test) => {
-          if (testPassesFilter(test)) {
+          if (testPassesFilter(test) && !test.disabled) {
             matchingIds.push(test.test_id);
           }
         });
@@ -288,7 +298,7 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
     suites.forEach((suite) => {
       const tests = suiteTests.get(suite.id) || [];
       tests.forEach((test) => {
-        if (testPassesFilter(test)) {
+        if (testPassesFilter(test) && !test.disabled) {
           matchingTests.push({ test, suiteId: suite.id, suiteName: suite.suite_name });
         }
       });
@@ -300,7 +310,7 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
   const allFilteredSelected = useMemo(() => {
     const allFilteredIds: string[] = [];
     suiteTests.forEach((tests) => {
-      tests.filter(testPassesFilter).forEach((t) => allFilteredIds.push(t.test_id));
+      tests.filter(t => testPassesFilter(t) && !t.disabled).forEach((t) => allFilteredIds.push(t.test_id));
     });
     return allFilteredIds.length > 0 && allFilteredIds.every((id) => selectedTests.has(id));
   }, [suiteTests, selectedTests, selectedTags, searchQuery]);
@@ -312,6 +322,14 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
 
   // Toggle test selection
   const toggleTestSelection = (testId: string) => {
+    // Find if this test is disabled
+    let isDisabled = false;
+    suiteTests.forEach((tests) => {
+      const test = tests.find(t => t.test_id === testId);
+      if (test?.disabled) isDisabled = true;
+    });
+    if (isDisabled) return;
+
     setSelectedTests((prev) => {
       const next = new Set(prev);
       if (next.has(testId)) {
@@ -325,7 +343,7 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
 
   // Select/deselect all tests in a test case
   const toggleTcSelection = (tests: SuiteTest[]) => {
-    const testIds = tests.filter(testPassesFilter).map((t) => t.test_id);
+    const testIds = tests.filter(t => testPassesFilter(t) && !t.disabled).map((t) => t.test_id);
     setSelectedTests((prev) => {
       const next = new Set(prev);
       const allSelected = testIds.every((id) => prev.has(id));
@@ -341,7 +359,7 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
   // Select/deselect all tests in a use case
   const toggleUcSelection = (testCases: TestCaseGroup[]) => {
     const testIds = testCases.flatMap((tc) =>
-      tc.tests.filter(testPassesFilter).map((t) => t.test_id)
+      tc.tests.filter(t => testPassesFilter(t) && !t.disabled).map((t) => t.test_id)
     );
     setSelectedTests((prev) => {
       const next = new Set(prev);
@@ -357,7 +375,7 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
 
   // Get checkbox state for a test case
   const getTcCheckboxState = (tests: SuiteTest[]): "none" | "some" | "all" => {
-    const filteredTests = tests.filter(testPassesFilter);
+    const filteredTests = tests.filter(t => testPassesFilter(t) && !t.disabled);
     if (filteredTests.length === 0) return "none";
     const selectedCount = filteredTests.filter((t) => selectedTests.has(t.test_id)).length;
     if (selectedCount === 0) return "none";
@@ -367,7 +385,7 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
 
   // Get checkbox state for a use case
   const getUcCheckboxState = (testCases: TestCaseGroup[]): "none" | "some" | "all" => {
-    const allTests = testCases.flatMap((tc) => tc.tests.filter(testPassesFilter));
+    const allTests = testCases.flatMap((tc) => tc.tests.filter(t => testPassesFilter(t) && !t.disabled));
     if (allTests.length === 0) return "none";
     const selectedCount = allTests.filter((t) => selectedTests.has(t.test_id)).length;
     if (selectedCount === 0) return "none";
@@ -379,7 +397,7 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
   const selectAllFiltered = () => {
     const allFilteredIds: string[] = [];
     suiteTests.forEach((tests) => {
-      tests.filter(testPassesFilter).forEach((t) => allFilteredIds.push(t.test_id));
+      tests.filter(t => testPassesFilter(t) && !t.disabled).forEach((t) => allFilteredIds.push(t.test_id));
     });
     setSelectedTests(new Set(allFilteredIds));
   };
@@ -683,6 +701,11 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
                       </Badge>
                       <span className="text-xs text-muted-foreground">
                         {suite.test_count} tests
+                        {tests.filter(t => t.disabled).length > 0 && (
+                          <span className="text-yellow-500 ml-1">
+                            ({tests.filter(t => t.disabled).length} disabled)
+                          </span>
+                        )}
                       </span>
                       <Button
                         variant="ghost"
@@ -724,11 +747,14 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
                                 <div key={ucKey}>
                                   {/* Use Case Header */}
                                   <div
-                                    className="flex items-center gap-2 px-3 py-2 pl-8 hover:bg-muted/50 transition-colors cursor-pointer"
+                                    className={cn(
+                                      "flex items-center gap-2 px-3 py-2 pl-8 hover:bg-muted/50 transition-colors cursor-pointer",
+                                      ucGroup.disabled && "opacity-50"
+                                    )}
                                     onClick={() => toggleUseCase(ucKey)}
                                   >
                                     <div
-                                      className="cursor-pointer"
+                                      className={cn("cursor-pointer", ucGroup.disabled && "pointer-events-none opacity-30")}
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         toggleUcSelection(ucGroup.testCases);
@@ -756,6 +782,11 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
                                       <span className="text-sm font-medium">
                                         {ucGroup.useCase}
                                       </span>
+                                      {ucGroup.disabled && (
+                                        <Badge variant="outline" className="text-yellow-500 border-yellow-500/30 text-[10px] px-1.5 py-0">
+                                          disabled
+                                        </Badge>
+                                      )}
                                     </div>
                                     <span className="text-xs text-muted-foreground">
                                       {ucGroup.testCases.reduce(
@@ -763,6 +794,15 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
                                         0
                                       )}{" "}
                                       tests
+                                      {(() => {
+                                        const disabledCount = ucGroup.testCases.reduce(
+                                          (sum, tc) => sum + tc.tests.filter(t => t.disabled).length,
+                                          0
+                                        );
+                                        return disabledCount > 0 ? (
+                                          <span className="text-yellow-500 ml-1">({disabledCount} disabled)</span>
+                                        ) : null;
+                                      })()}
                                     </span>
                                     <Button
                                       variant="ghost"
@@ -771,7 +811,7 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
                                       onClick={(e) =>
                                         handleRunUc(e, suite.id, ucGroup.useCase)
                                       }
-                                      disabled={isUcRunning}
+                                      disabled={isUcRunning || ucGroup.disabled}
                                       title={`Run all tests in ${ucGroup.useCase}`}
                                     >
                                       {isUcRunning ? (
@@ -798,7 +838,7 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
                                             {/* Test Case Header */}
                                             <div className="flex items-center gap-2 px-3 py-1.5 hover:bg-muted/30 transition-colors">
                                               <div
-                                                className="cursor-pointer"
+                                                className={cn("cursor-pointer", tcGroup.tests.every(t => t.disabled) && "pointer-events-none opacity-30")}
                                                 onClick={(e) => {
                                                   e.stopPropagation();
                                                   toggleTcSelection(tcGroup.tests);
@@ -823,7 +863,7 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
                                                 onClick={(e) =>
                                                   handleRunTc(e, suite.id, tcId)
                                                 }
-                                                disabled={isTcRunning}
+                                                disabled={isTcRunning || tcGroup.tests.every(t => t.disabled)}
                                                 title={`Run ${tcId}`}
                                               >
                                                 {isTcRunning ? (
@@ -844,13 +884,15 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
                                                   key={test.test_id}
                                                   className={cn(
                                                     "flex items-center gap-2 px-3 py-1.5 pl-10 hover:bg-muted/30 transition-colors",
-                                                    !passesFilter && "opacity-40"
+                                                    !passesFilter && "opacity-40",
+                                                    test.disabled && "opacity-50"
                                                   )}
                                                 >
                                                   <div
                                                     className={cn(
                                                       "cursor-pointer",
-                                                      !passesFilter && "pointer-events-none"
+                                                      !passesFilter && "pointer-events-none",
+                                                      test.disabled && "pointer-events-none opacity-30"
                                                     )}
                                                     onClick={() => toggleTestSelection(test.test_id)}
                                                   >
@@ -864,6 +906,11 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
                                                   <span className="text-sm flex-1 truncate">
                                                     {test.name || test.test_id}
                                                   </span>
+                                                  {test.disabled && (
+                                                    <Badge variant="outline" className="text-yellow-500 border-yellow-500/30 text-[10px] px-1.5 py-0">
+                                                      disabled
+                                                    </Badge>
+                                                  )}
                                                   {test.tags.length > 0 && (
                                                     <div className="flex items-center gap-1">
                                                       {test.tags
