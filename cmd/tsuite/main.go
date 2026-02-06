@@ -345,13 +345,25 @@ Features: embedded dashboard UI, Docker/standalone modes for isolation, parallel
 	// Check command
 	checkCmd := &cobra.Command{
 		Use:   "check",
-		Short: "Check Docker availability",
+		Short: "Check Docker and K8s availability",
 		Run: func(cmd *cobra.Command, args []string) {
+			// Check Docker
 			ok, msg := runner.CheckDockerAvailable()
 			if ok {
-				fmt.Printf("✓ Docker is available: %s\n", msg)
+				fmt.Printf("Docker: %s\n", msg)
 			} else {
-				fmt.Printf("✗ Docker is not available: %s\n", msg)
+				fmt.Printf("Docker: not available (%s)\n", msg)
+			}
+
+			// Check K8s
+			k8sOk, k8sMsg := runner.CheckK8sAvailable()
+			if k8sOk {
+				fmt.Printf("K8s: %s\n", k8sMsg)
+			} else {
+				fmt.Printf("K8s: not available (%s)\n", k8sMsg)
+			}
+
+			if !ok && !k8sOk {
 				os.Exit(1)
 			}
 		},
@@ -559,6 +571,11 @@ func runTests(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load suite config: %w", err)
 	}
 
+	// Check if suite is disabled
+	if suiteConfig.Suite.Disabled {
+		return fmt.Errorf("suite %q is disabled", suiteConfig.Suite.Name)
+	}
+
 	// Determine mode from config (default to standalone)
 	mode := suiteConfig.Suite.Mode
 	if mode == "" {
@@ -572,8 +589,8 @@ func runTests(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Suite: %s (mode: %s, parallel: %d)\n", suiteConfig.Suite.Name, mode, parallel)
 
-	// List all tests
-	allTests, err := runner.ListTests(absPath)
+	// List all tests with disabled info
+	allTests, disabledSet, err := runner.ListTestsWithDisabled(absPath)
 	if err != nil {
 		return fmt.Errorf("failed to list tests: %w", err)
 	}
@@ -581,29 +598,56 @@ func runTests(cmd *cobra.Command, args []string) error {
 	// Filter tests
 	tests := filterTests(allTests)
 
-	if len(tests) == 0 {
+	// Separate disabled tests from active
+	var activeTests []string
+	var disabledTests []string
+	for _, t := range tests {
+		if disabledSet[t] {
+			disabledTests = append(disabledTests, t)
+		} else {
+			activeTests = append(activeTests, t)
+		}
+	}
+
+	if len(activeTests) == 0 && len(disabledTests) == 0 {
 		fmt.Println("No tests found matching the filters")
 		return nil
 	}
 
-	fmt.Printf("Found %d test(s)\n", len(tests))
+	if len(disabledTests) > 0 {
+		fmt.Printf("Found %d of %d test(s) (%d disabled)\n", len(activeTests), len(tests), len(disabledTests))
+	} else {
+		fmt.Printf("Found %d test(s)\n", len(activeTests))
+	}
 
 	// Dry run - just list tests
 	if dryRun {
 		fmt.Println("\nTests to run:")
-		for _, t := range tests {
+		for _, t := range activeTests {
 			fmt.Printf("  - %s\n", t)
+		}
+		if len(disabledTests) > 0 {
+			fmt.Println("\nDisabled tests:")
+			for _, t := range disabledTests {
+				fmt.Printf("  - %s (disabled)\n", t)
+			}
 		}
 		return nil
 	}
 
-	// Check Docker availability if docker mode
+	// Check Docker/K8s availability based on mode
 	if mode == "docker" {
 		ok, msg := runner.CheckDockerAvailable()
 		if !ok {
 			return fmt.Errorf("Docker not available: %s", msg)
 		}
 		fmt.Printf("Docker: %s\n", msg)
+	} else if mode == "k8s" {
+		ok, msg := runner.CheckK8sAvailable()
+		if !ok {
+			return fmt.Errorf("K8s not available: %s", msg)
+		}
+		fmt.Printf("K8s: %s\n", msg)
 	}
 
 	// Create temp workdir for test execution
@@ -647,7 +691,7 @@ func runTests(cmd *cobra.Command, args []string) error {
 			suiteID = syncResp.ID
 		}
 
-		// Build test info for API
+		// Build test info for API (include ALL tests: active + disabled)
 		testInfos := make([]client.TestInfo, len(tests))
 		for i, testID := range tests {
 			parts := strings.Split(testID, "/")
@@ -699,12 +743,39 @@ func runTests(cmd *cobra.Command, args []string) error {
 			Tests:       testInfos,
 		}
 
+		if mode == "docker" && suiteConfig.Docker.BaseImage != "" {
+			createReq.DockerImage = suiteConfig.Docker.BaseImage
+		}
+
+		// Extract version fields from suite config
+		if pkgs, ok := suiteConfig.Raw["packages"].(map[string]any); ok {
+			if v, ok := pkgs["cli_version"].(string); ok {
+				createReq.CLIVersion = v
+			}
+			if v, ok := pkgs["sdk_python_version"].(string); ok {
+				createReq.SDKPythonVersion = v
+			}
+			if v, ok := pkgs["sdk_typescript_version"].(string); ok {
+				createReq.SDKTypescriptVersion = v
+			}
+		}
+
 		resp, err := apiClient.CreateRun(createReq)
 		if err != nil {
 			fmt.Printf("Warning: Failed to create run: %v\n", err)
 		} else {
 			runID = resp.RunID
 			fmt.Printf("Run ID: %s\n", runID[:12])
+		}
+
+		// Report disabled tests as skipped
+		if runID != "" {
+			for _, testID := range disabledTests {
+				apiClient.UpdateTestStatus(runID, testID, &client.UpdateTestStatusRequest{
+					Status:       "skipped",
+					ErrorMessage: "disabled",
+				})
+			}
 		}
 	}
 
@@ -731,10 +802,17 @@ func runTests(cmd *cobra.Command, args []string) error {
 
 	if mode == "docker" {
 		// Docker mode: use DockerExecutor which mounts Go runner into container
-		if parallel > 1 && len(tests) > 1 {
-			passed, failed, skipped, failedTests, cancelled = runTestsParallelWithDocker(ctx, cancelFunc, absPath, tests, parallel, apiClient, runID, baseWorkdir, dockerImage, apiURL)
+		if parallel > 1 && len(activeTests) > 1 {
+			passed, failed, skipped, failedTests, cancelled = runTestsParallelWithDocker(ctx, cancelFunc, absPath, activeTests, parallel, apiClient, runID, baseWorkdir, dockerImage, apiURL)
 		} else {
-			passed, failed, skipped, failedTests, cancelled = runTestsSequentialWithDocker(ctx, cancelFunc, absPath, tests, apiClient, runID, baseWorkdir, dockerImage, apiURL)
+			passed, failed, skipped, failedTests, cancelled = runTestsSequentialWithDocker(ctx, cancelFunc, absPath, activeTests, apiClient, runID, baseWorkdir, dockerImage, apiURL)
+		}
+	} else if mode == "k8s" {
+		// K8s mode: use K8sExecutor which creates pods with NFS volume
+		if parallel > 1 && len(activeTests) > 1 {
+			passed, failed, skipped, failedTests, cancelled = runTestsParallelWithK8s(ctx, cancelFunc, suiteConfig, absPath, activeTests, parallel, apiClient, runID)
+		} else {
+			passed, failed, skipped, failedTests, cancelled = runTestsSequentialWithK8s(ctx, cancelFunc, suiteConfig, absPath, activeTests, apiClient, runID)
 		}
 	} else {
 		// Standalone mode: use external runner binary
@@ -742,10 +820,10 @@ func runTests(cmd *cobra.Command, args []string) error {
 		if runnerBinaryPath == "" {
 			return fmt.Errorf("runner binary not found. Build it with: make build-runner")
 		}
-		if parallel > 1 && len(tests) > 1 {
-			passed, failed, skipped, failedTests, cancelled = runTestsWithRunnerParallel(ctx, cancelFunc, runnerBinaryPath, absPath, tests, parallel, apiURL, runID, baseWorkdir, testTimeout)
+		if parallel > 1 && len(activeTests) > 1 {
+			passed, failed, skipped, failedTests, cancelled = runTestsWithRunnerParallel(ctx, cancelFunc, runnerBinaryPath, absPath, activeTests, parallel, apiURL, runID, baseWorkdir, testTimeout)
 		} else {
-			passed, failed, skipped, failedTests, cancelled = runTestsWithRunnerSequential(ctx, cancelFunc, runnerBinaryPath, absPath, tests, apiURL, runID, baseWorkdir, testTimeout)
+			passed, failed, skipped, failedTests, cancelled = runTestsWithRunnerSequential(ctx, cancelFunc, runnerBinaryPath, absPath, activeTests, apiURL, runID, baseWorkdir, testTimeout)
 		}
 	}
 
@@ -762,11 +840,16 @@ func runTests(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Add disabled count to skipped
+	skipped += len(disabledTests)
+
 	// Print summary
 	duration := time.Since(startTime)
 	fmt.Println("\n" + strings.Repeat("=", 60))
 	if cancelled {
 		fmt.Printf("CANCELLED: %d passed, %d failed, %d skipped (%.1fs)\n", passed, failed, skipped, duration.Seconds())
+	} else if skipped > 0 {
+		fmt.Printf("SUMMARY: %d passed, %d failed, %d skipped (%.1fs)\n", passed, failed, skipped, duration.Seconds())
 	} else {
 		fmt.Printf("SUMMARY: %d passed, %d failed (%.1fs)\n", passed, failed, duration.Seconds())
 	}
@@ -994,13 +1077,204 @@ func runTestsParallelWithDocker(ctx context.Context, cancelFunc context.CancelFu
 	return results.Passed, results.Failed, results.Skipped, results.FailedTests, results.Cancelled
 }
 
+func runTestsSequentialWithK8s(ctx context.Context, cancelFunc context.CancelFunc, suiteConfig *config.SuiteConfig, suitePath string, tests []string, apiClient *client.Client, runID string) (passed, failed, skipped int, failedTests []string, cancelled bool) {
+	// Create k8s executor
+	k8sExec, err := runner.NewK8sExecutor(suiteConfig, suitePath, runID)
+	if err != nil {
+		fmt.Printf("Failed to create K8s executor: %v\n", err)
+		return 0, len(tests), 0, tests, false
+	}
+	defer k8sExec.Close()
+
+	// Start cancel checker goroutine
+	if apiClient != nil {
+		executor.StartCancelChecker(ctx, cancelFunc, apiClient, runID)
+	}
+
+	for _, testID := range tests {
+		// Check if cancelled before starting test
+		select {
+		case <-ctx.Done():
+			fmt.Printf("[SKIP] %s (cancelled)\n", testID)
+			skipped++
+			cancelled = true
+			continue
+		default:
+		}
+
+		fmt.Printf("\n[RUN] %s\n", testID)
+
+		// Run in K8s pod (Go runner reports steps to API)
+		testCtx, testCancel := context.WithTimeout(ctx, 10*time.Minute)
+		result, err := k8sExec.ExecuteTest(testCtx, testID, nil)
+		testCancel()
+
+		// Check if cancelled during test
+		if ctx.Err() == context.Canceled {
+			fmt.Printf("[SKIP] %s (cancelled)\n", testID)
+			skipped++
+			cancelled = true
+			continue
+		}
+
+		var testPassed bool
+		var testError string
+		var duration time.Duration
+
+		if err != nil {
+			testPassed = false
+			testError = err.Error()
+			duration = 0
+			// Report failure to API since runner never started
+			if apiClient != nil && runID != "" {
+				apiClient.UpdateTestStatus(runID, testID, &client.UpdateTestStatusRequest{
+					Status:       "failed",
+					ErrorMessage: testError,
+				})
+			}
+		} else {
+			testPassed = result.ExitCode == 0 && result.Error == nil
+			if result.Error != nil {
+				testError = result.Error.Error()
+			} else if result.ExitCode != 0 {
+				testError = fmt.Sprintf("exit code %d", result.ExitCode)
+				if result.Stderr != "" {
+					lines := strings.Split(strings.TrimSpace(result.Stderr), "\n")
+					if len(lines) > 3 {
+						lines = lines[len(lines)-3:]
+					}
+					testError = strings.Join(lines, "; ")
+				}
+			}
+			duration = result.Duration
+		}
+
+		if testPassed {
+			fmt.Printf("[PASS] %s (%.1fs)\n", testID, duration.Seconds())
+			passed++
+		} else {
+			fmt.Printf("[FAIL] %s - %s (%.1fs)\n", testID, testError, duration.Seconds())
+			failed++
+			failedTests = append(failedTests, testID)
+		}
+	}
+	return
+}
+
+func runTestsParallelWithK8s(ctx context.Context, cancelFunc context.CancelFunc, suiteConfig *config.SuiteConfig, suitePath string, tests []string, workers int, apiClient *client.Client, runID string) (passed, failed, skipped int, failedTests []string, cancelled bool) {
+	testCh := make(chan string, len(tests))
+	resultCh := make(chan executor.TestResult, len(tests))
+
+	// Start cancel checker goroutine
+	if apiClient != nil {
+		executor.StartCancelChecker(ctx, cancelFunc, apiClient, runID)
+	}
+
+	// Start workers
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+
+			// Each worker gets its own k8s executor
+			k8sExec, err := runner.NewK8sExecutor(suiteConfig, suitePath, runID)
+			if err != nil {
+				fmt.Printf("Worker %d: Failed to create K8s executor: %v\n", workerID, err)
+				// Mark all remaining tests as failed
+				for testID := range testCh {
+					resultCh <- executor.TestResult{TestID: testID, Passed: false, Error: err.Error()}
+				}
+				return
+			}
+			defer k8sExec.Close()
+
+			for testID := range testCh {
+				// Check if cancelled before starting test
+				select {
+				case <-ctx.Done():
+					resultCh <- executor.TestResult{TestID: testID, Cancelled: true}
+					continue
+				default:
+				}
+
+				// Run in K8s pod (Go runner reports steps to API)
+				testCtx, testCancel := context.WithTimeout(ctx, 10*time.Minute)
+				result, err := k8sExec.ExecuteTest(testCtx, testID, nil)
+				testCancel()
+
+				// Check if cancelled during test
+				if ctx.Err() == context.Canceled {
+					resultCh <- executor.TestResult{TestID: testID, Cancelled: true}
+					continue
+				}
+
+				var testPassed bool
+				var testError string
+				var duration time.Duration
+
+				if err != nil {
+					testPassed = false
+					testError = err.Error()
+					duration = 0
+					// Report failure to API since runner never started
+					if apiClient != nil && runID != "" {
+						apiClient.UpdateTestStatus(runID, testID, &client.UpdateTestStatusRequest{
+							Status:       "failed",
+							ErrorMessage: testError,
+						})
+					}
+				} else {
+					testPassed = result.ExitCode == 0 && result.Error == nil
+					if result.Error != nil {
+						testError = result.Error.Error()
+					} else if result.ExitCode != 0 {
+						testError = fmt.Sprintf("exit code %d", result.ExitCode)
+						if result.Stderr != "" {
+							lines := strings.Split(strings.TrimSpace(result.Stderr), "\n")
+							if len(lines) > 3 {
+								lines = lines[len(lines)-3:]
+							}
+							testError = strings.Join(lines, "; ")
+						}
+					}
+					duration = result.Duration
+				}
+
+				resultCh <- executor.TestResult{
+					TestID:   testID,
+					Passed:   testPassed,
+					Error:    testError,
+					Duration: duration,
+				}
+			}
+		}(i)
+	}
+
+	// Send tests to workers
+	for _, t := range tests {
+		testCh <- t
+	}
+	close(testCh)
+
+	// Wait for all workers
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	// Collect results
+	results := executor.CollectResults(resultCh)
+	return results.Passed, results.Failed, results.Skipped, results.FailedTests, results.Cancelled
+}
+
 func listTests(cmd *cobra.Command, args []string) error {
 	absPath, err := filepath.Abs(suitePath)
 	if err != nil {
 		return fmt.Errorf("failed to resolve suite path: %w", err)
 	}
 
-	allTests, err := runner.ListTests(absPath)
+	allTests, disabledSet, err := runner.ListTestsWithDisabled(absPath)
 	if err != nil {
 		return fmt.Errorf("failed to list tests: %w", err)
 	}
@@ -1012,9 +1286,24 @@ func listTests(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	fmt.Printf("Found %d test(s):\n", len(tests))
+	disabledCount := 0
 	for _, t := range tests {
-		fmt.Printf("  - %s\n", t)
+		if disabledSet[t] {
+			disabledCount++
+		}
+	}
+
+	if disabledCount > 0 {
+		fmt.Printf("Found %d test(s) (%d disabled):\n", len(tests), disabledCount)
+	} else {
+		fmt.Printf("Found %d test(s):\n", len(tests))
+	}
+	for _, t := range tests {
+		if disabledSet[t] {
+			fmt.Printf("  - %s (disabled)\n", t)
+		} else {
+			fmt.Printf("  - %s\n", t)
+		}
 	}
 
 	return nil

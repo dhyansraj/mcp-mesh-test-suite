@@ -13,6 +13,7 @@ type SuiteConfig struct {
 	Suite      SuiteSettings      `yaml:"suite"`
 	Packages   PackageSettings    `yaml:"packages"`
 	Docker     DockerSettings     `yaml:"docker"`
+	K8s        K8sSettings        `yaml:"k8s"`
 	Execution  ExecutionSettings  `yaml:"execution"`
 	Defaults   DefaultSettings    `yaml:"defaults"`
 	Reports    ReportSettings     `yaml:"reports"`
@@ -24,8 +25,9 @@ type SuiteConfig struct {
 
 // SuiteSettings contains suite metadata
 type SuiteSettings struct {
-	Name string `yaml:"name"`
-	Mode string `yaml:"mode"` // "docker" or "standalone"
+	Name     string `yaml:"name"`
+	Mode     string `yaml:"mode"` // "docker" or "standalone"
+	Disabled bool   `yaml:"disabled"`
 }
 
 // PackageSettings contains package version configuration
@@ -44,6 +46,16 @@ type LocalSettings struct {
 type DockerSettings struct {
 	BaseImage string `yaml:"base_image"`
 	Network   string `yaml:"network"`
+}
+
+// K8sSettings contains Kubernetes configuration
+type K8sSettings struct {
+	Namespace  string `yaml:"namespace"`   // default: "tsuite"
+	NFSServer  string `yaml:"nfs_server"`  // e.g., "10.0.0.50"
+	NFSPath    string `yaml:"nfs_path"`    // e.g., "/path/to/tests"
+	Image      string `yaml:"image"`       // override docker.base_image
+	APIUrl     string `yaml:"api_url"`     // e.g., "http://10.0.0.50:9999"
+	Kubeconfig string `yaml:"kubeconfig"`  // optional, defaults to ~/.kube/config
 }
 
 // ExecutionSettings contains test execution configuration
@@ -69,6 +81,7 @@ type ReportSettings struct {
 // TestConfig represents a test.yaml file
 type TestConfig struct {
 	Name        string              `yaml:"name"`
+	Disabled    bool                `yaml:"disabled"`
 	Description string              `yaml:"description"`
 	Tags        []string            `yaml:"tags"`
 	Timeout     int                 `yaml:"timeout"`
@@ -92,15 +105,17 @@ type Step struct {
 	IgnoreErrors bool           `yaml:"ignore_errors,omitempty"`
 
 	// Handler-specific fields
-	Path       string         `yaml:"path,omitempty"`        // npm-install, pip-install
-	Seconds    int            `yaml:"seconds,omitempty"`     // wait
-	URL        string         `yaml:"url,omitempty"`         // http
-	Method     string         `yaml:"method,omitempty"`      // http
-	Body       string         `yaml:"body,omitempty"`        // http
-	Headers    map[string]string `yaml:"headers,omitempty"`  // http
-	Source     string         `yaml:"source,omitempty"`      // file
-	Dest       string         `yaml:"dest,omitempty"`        // file
-	Content    string         `yaml:"content,omitempty"`     // file
+	Path       string            `yaml:"path,omitempty"`        // npm-install, pip-install
+	Seconds    int               `yaml:"seconds,omitempty"`     // wait
+	URL        string            `yaml:"url,omitempty"`         // http
+	Method     string            `yaml:"method,omitempty"`      // http
+	Body       string            `yaml:"body,omitempty"`        // http
+	Headers    map[string]string `yaml:"headers,omitempty"`     // http
+	Source     string            `yaml:"source,omitempty"`      // file, secrets
+	Dest       string            `yaml:"dest,omitempty"`        // file
+	Content    string            `yaml:"content,omitempty"`     // file
+	Target     string            `yaml:"target,omitempty"`      // secrets
+	Keys       []string          `yaml:"keys,omitempty"`        // secrets
 
 	// Routine fields
 	Routine string         `yaml:"routine,omitempty"`
@@ -177,6 +192,31 @@ func LoadTestConfig(testPath string) (*TestConfig, error) {
 		return nil, fmt.Errorf("parsing test.yaml as map: %w", err)
 	}
 	config.Raw = raw
+
+	return &config, nil
+}
+
+// UseCaseConfig represents a uc.yaml file
+type UseCaseConfig struct {
+	Disabled bool `yaml:"disabled"`
+}
+
+// LoadUseCaseConfig loads uc.yaml from a use case directory
+func LoadUseCaseConfig(ucPath string) (*UseCaseConfig, error) {
+	ucYamlPath := filepath.Join(ucPath, "uc.yaml")
+
+	data, err := os.ReadFile(ucYamlPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &UseCaseConfig{}, nil
+		}
+		return nil, fmt.Errorf("reading uc.yaml: %w", err)
+	}
+
+	var config UseCaseConfig
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("parsing uc.yaml: %w", err)
+	}
 
 	return &config, nil
 }

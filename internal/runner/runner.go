@@ -432,6 +432,12 @@ func stepToMap(step config.Step) map[string]any {
 	if step.Content != "" {
 		m["content"] = step.Content
 	}
+	if step.Target != "" {
+		m["target"] = step.Target
+	}
+	if len(step.Keys) > 0 {
+		m["keys"] = step.Keys
+	}
 
 	return m
 }
@@ -439,6 +445,72 @@ func stepToMap(step config.Step) map[string]any {
 // GetSuiteConfig returns the loaded suite configuration
 func (r *TestRunner) GetSuiteConfig() *config.SuiteConfig {
 	return r.suiteConfig
+}
+
+// ListTestsWithDisabled returns all tests and a set of disabled test IDs
+func ListTestsWithDisabled(suitePath string) ([]string, map[string]bool, error) {
+	suitesDir := filepath.Join(suitePath, "suites")
+
+	if _, err := os.Stat(suitesDir); os.IsNotExist(err) {
+		return []string{}, map[string]bool{}, nil
+	}
+
+	var tests []string
+	disabled := make(map[string]bool)
+
+	ucEntries, err := os.ReadDir(suitesDir)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for _, ucEntry := range ucEntries {
+		if !ucEntry.IsDir() || ucEntry.Name()[0] == '.' {
+			continue
+		}
+
+		ucName := ucEntry.Name()
+		ucPath := filepath.Join(suitesDir, ucName)
+
+		// Check UC disabled from uc.yaml
+		ucDisabled := false
+		ucConfig, err := config.LoadUseCaseConfig(ucPath)
+		if err == nil && ucConfig.Disabled {
+			ucDisabled = true
+		}
+
+		tcEntries, err := os.ReadDir(ucPath)
+		if err != nil {
+			continue
+		}
+
+		for _, tcEntry := range tcEntries {
+			if !tcEntry.IsDir() || tcEntry.Name()[0] == '.' {
+				continue
+			}
+
+			tcName := tcEntry.Name()
+			testYamlPath := filepath.Join(ucPath, tcName, "test.yaml")
+
+			if _, err := os.Stat(testYamlPath); os.IsNotExist(err) {
+				continue
+			}
+
+			testID := ucName + "/" + tcName
+			tests = append(tests, testID)
+
+			// Check TC disabled from test.yaml
+			if ucDisabled {
+				disabled[testID] = true
+			} else {
+				tcConfig, err := config.LoadTestConfig(filepath.Join(ucPath, tcName))
+				if err == nil && tcConfig.Disabled {
+					disabled[testID] = true
+				}
+			}
+		}
+	}
+
+	return tests, disabled, nil
 }
 
 // ListTests returns all tests in the suite
