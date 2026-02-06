@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"time"
 
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/interpolate"
@@ -68,6 +69,28 @@ func (h *MavenInstallHandler) Execute(step map[string]any, ctx *interpolate.Cont
 		}
 	}
 
+	// Align mcp-mesh SDK version from container's local m2 repository
+	alignVersion := true
+	if v, ok := step["align_version"].(bool); ok {
+		alignVersion = v
+	}
+
+	var versionOutput string
+	if alignVersion {
+		m2Repo := "/root/.m2/repository"
+		if v, ok := step["m2_repo"].(string); ok && v != "" {
+			m2Repo = v
+		}
+
+		detectedVersion, err := alignMeshVersion(pomFile, m2Repo)
+		if err != nil {
+			fmt.Printf("Warning: failed to align mcp-mesh version: %v\n", err)
+		} else if detectedVersion != "" {
+			versionOutput = fmt.Sprintf("Aligned mcp-mesh version to %s\n", detectedVersion)
+			fmt.Print(versionOutput)
+		}
+	}
+
 	timeout := 300 * time.Second
 	if t, ok := step["timeout"].(int); ok && t > 0 {
 		timeout = time.Duration(t) * time.Second
@@ -90,7 +113,7 @@ func (h *MavenInstallHandler) Execute(step map[string]any, ctx *interpolate.Cont
 			return StepResult{
 				Success:  false,
 				ExitCode: 124,
-				Stdout:   stdout.String(),
+				Stdout:   versionOutput + stdout.String(),
 				Stderr:   stderr.String(),
 				Error:    "mvn dependency:resolve timed out",
 			}
@@ -98,7 +121,7 @@ func (h *MavenInstallHandler) Execute(step map[string]any, ctx *interpolate.Cont
 		return StepResult{
 			Success:  false,
 			ExitCode: 1,
-			Stdout:   stdout.String(),
+			Stdout:   versionOutput + stdout.String(),
 			Stderr:   stderr.String(),
 			Error:    fmt.Sprintf("mvn dependency:resolve failed: %v", err),
 		}
@@ -107,9 +130,66 @@ func (h *MavenInstallHandler) Execute(step map[string]any, ctx *interpolate.Cont
 	return StepResult{
 		Success:  true,
 		ExitCode: 0,
-		Stdout:   stdout.String(),
+		Stdout:   versionOutput + stdout.String(),
 		Stderr:   stderr.String(),
 	}
+}
+
+// alignMeshVersion detects the mcp-mesh SDK version from the container's local m2 repository
+// and updates the <mcp-mesh.version> property in pom.xml to match.
+// Returns the detected version, or empty string if no version was found.
+func alignMeshVersion(pomFile string, m2Repo string) (string, error) {
+	sdkPath := filepath.Join(m2Repo, "io", "mcp-mesh", "mcp-mesh-spring-boot-starter")
+
+	entries, err := os.ReadDir(sdkPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// m2 path doesn't exist - skip silently
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to read SDK directory %s: %w", sdkPath, err)
+	}
+
+	// Collect version directories
+	var versions []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			versions = append(versions, entry.Name())
+		}
+	}
+
+	if len(versions) == 0 {
+		return "", nil
+	}
+
+	// Sort and pick the newest (last after sort)
+	sort.Strings(versions)
+	detectedVersion := versions[len(versions)-1]
+
+	// Read pom.xml and update <mcp-mesh.version>
+	data, err := os.ReadFile(pomFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to read pom.xml: %w", err)
+	}
+
+	content := string(data)
+
+	versionPattern := regexp.MustCompile(`<mcp-mesh\.version>[^<]*</mcp-mesh\.version>`)
+	if !versionPattern.MatchString(content) {
+		// No <mcp-mesh.version> property found - nothing to align
+		return "", nil
+	}
+
+	replacement := fmt.Sprintf("<mcp-mesh.version>%s</mcp-mesh.version>", detectedVersion)
+	modified := versionPattern.ReplaceAllString(content, replacement)
+
+	if modified != content {
+		if err := os.WriteFile(pomFile, []byte(modified), 0644); err != nil {
+			return "", fmt.Errorf("failed to write pom.xml: %w", err)
+		}
+	}
+
+	return detectedVersion, nil
 }
 
 // removeFileRepositories removes <repository> blocks with file:// URLs from pom.xml

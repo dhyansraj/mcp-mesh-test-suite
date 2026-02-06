@@ -984,3 +984,150 @@ func nullInt64(ni sql.NullInt64) interface{} {
 	}
 	return nil
 }
+
+// ==================== Secrets ====================
+
+// Secret represents a stored secret
+type Secret struct {
+	ID        int64      `json:"id"`
+	Key       string     `json:"key"`
+	Value     string     `json:"value,omitempty"`
+	CreatedAt *time.Time `json:"created_at"`
+	UpdatedAt *time.Time `json:"updated_at"`
+}
+
+// GetAllSecrets returns all secrets (with masked values)
+func (r *Repository) GetAllSecrets() ([]Secret, error) {
+	rows, err := r.db.Query(`
+		SELECT id, key, value, created_at, updated_at
+		FROM secrets
+		ORDER BY key
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var secrets []Secret
+	for rows.Next() {
+		var s Secret
+		var createdAt, updatedAt sql.NullString
+
+		err := rows.Scan(&s.ID, &s.Key, &s.Value, &createdAt, &updatedAt)
+		if err != nil {
+			return nil, err
+		}
+
+		s.CreatedAt = parseTime(createdAt)
+		s.UpdatedAt = parseTime(updatedAt)
+
+		secrets = append(secrets, s)
+	}
+
+	return secrets, rows.Err()
+}
+
+// GetSecret returns a secret by key
+func (r *Repository) GetSecret(key string) (*Secret, error) {
+	var s Secret
+	var createdAt, updatedAt sql.NullString
+
+	err := r.db.QueryRow(`
+		SELECT id, key, value, created_at, updated_at
+		FROM secrets WHERE key = ?
+	`, key).Scan(&s.ID, &s.Key, &s.Value, &createdAt, &updatedAt)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	s.CreatedAt = parseTime(createdAt)
+	s.UpdatedAt = parseTime(updatedAt)
+
+	return &s, nil
+}
+
+// GetSecretValues returns a map of key->value for all secrets
+func (r *Repository) GetSecretValues() (map[string]string, error) {
+	rows, err := r.db.Query(`SELECT key, value FROM secrets ORDER BY key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	secrets := make(map[string]string)
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, err
+		}
+		secrets[key] = value
+	}
+
+	return secrets, rows.Err()
+}
+
+// CreateSecret creates a new secret
+func (r *Repository) CreateSecret(key, value string) (*Secret, error) {
+	result, err := r.db.Exec(`
+		INSERT INTO secrets (key, value) VALUES (?, ?)
+	`, key, value)
+	if err != nil {
+		return nil, err
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	return &Secret{
+		ID:        id,
+		Key:       key,
+		Value:     value,
+		CreatedAt: &now,
+		UpdatedAt: &now,
+	}, nil
+}
+
+// UpdateSecret updates an existing secret
+func (r *Repository) UpdateSecret(key, value string) error {
+	result, err := r.db.Exec(`
+		UPDATE secrets SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?
+	`, value, key)
+	if err != nil {
+		return err
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+
+	return nil
+}
+
+// DeleteSecret deletes a secret by key
+func (r *Repository) DeleteSecret(key string) error {
+	result, err := r.db.Exec(`DELETE FROM secrets WHERE key = ?`, key)
+	if err != nil {
+		return err
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+
+	return nil
+}

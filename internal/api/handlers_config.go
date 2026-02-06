@@ -482,6 +482,127 @@ func (s *Server) addTestStep(c *gin.Context, suiteID int64, testID, phase string
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
+// ==================== Use Case Config ====================
+
+// getUCConfig handles GET /api/suites/:id/uc-config/:uc_name
+func (s *Server) getUCConfig(c *gin.Context) {
+	suite, ok := s.getSuiteByIDParam(c)
+	if !ok {
+		return
+	}
+
+	ucName := c.Param("uc_name")
+	ucPath := filepath.Join(suite.FolderPath, "suites", ucName)
+
+	// Check UC directory exists
+	if _, err := os.Stat(ucPath); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Use case not found: " + ucName})
+		return
+	}
+
+	ucYamlPath := filepath.Join(ucPath, "uc.yaml")
+
+	// Check if uc.yaml exists
+	if _, err := os.Stat(ucYamlPath); os.IsNotExist(err) {
+		// Return defaults
+		c.JSON(http.StatusOK, gin.H{
+			"uc_name":   ucName,
+			"path":      ucYamlPath,
+			"raw_yaml":  "",
+			"structure": map[string]any{"disabled": false},
+		})
+		return
+	}
+
+	rawYAML, err := os.ReadFile(ucYamlPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read uc.yaml: " + err.Error()})
+		return
+	}
+
+	var structure map[string]any
+	if err := yaml.Unmarshal(rawYAML, &structure); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse uc.yaml: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"uc_name":   ucName,
+		"path":      ucYamlPath,
+		"raw_yaml":  string(rawYAML),
+		"structure": structure,
+	})
+}
+
+// updateUCConfig handles PUT /api/suites/:id/uc-config/:uc_name
+func (s *Server) updateUCConfig(c *gin.Context) {
+	suite, ok := s.getSuiteByIDParam(c)
+	if !ok {
+		return
+	}
+
+	ucName := c.Param("uc_name")
+	ucPath := filepath.Join(suite.FolderPath, "suites", ucName)
+
+	// Check UC directory exists
+	if _, err := os.Stat(ucPath); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Use case not found: " + ucName})
+		return
+	}
+
+	var req struct {
+		Updates map[string]any `json:"updates"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+	if req.Updates == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Must provide 'updates'"})
+		return
+	}
+
+	ucYamlPath := filepath.Join(ucPath, "uc.yaml")
+
+	// Check if uc.yaml exists
+	var newYAML []byte
+	if _, err := os.Stat(ucYamlPath); os.IsNotExist(err) {
+		// Create new file from updates
+		newYAML, err = yaml.Marshal(req.Updates)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to marshal config: " + err.Error()})
+			return
+		}
+	} else {
+		// Load existing and merge
+		doc, err := LoadYAMLFile(ucYamlPath)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read uc.yaml: " + err.Error()})
+			return
+		}
+		if err := doc.MergeUpdates(req.Updates); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to merge updates: " + err.Error()})
+			return
+		}
+		newYAML, err = doc.ToBytes()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to marshal config: " + err.Error()})
+			return
+		}
+	}
+
+	if err := os.WriteFile(ucYamlPath, newYAML, 0644); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to write uc.yaml: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":  true,
+		"uc_name":  ucName,
+		"raw_yaml": string(newYAML),
+	})
+}
+
 // deleteTestStep deletes a step
 func (s *Server) deleteTestStep(c *gin.Context, suiteID int64, testID, phase string, index int) {
 	if !validatePhase(c, phase) {

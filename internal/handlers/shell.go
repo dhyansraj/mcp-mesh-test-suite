@@ -78,9 +78,7 @@ func (h *ShellHandler) Execute(step map[string]any, ctx *interpolate.Context) St
 
 	exitCode := 0
 	if err != nil {
-		if exitError, ok := err.(*exec.ExitError); ok {
-			exitCode = exitError.ExitCode()
-		} else if cmdCtx.Err() == context.DeadlineExceeded {
+		if cmdCtx.Err() == context.DeadlineExceeded {
 			return StepResult{
 				Success:  false,
 				ExitCode: 124,
@@ -88,6 +86,8 @@ func (h *ShellHandler) Execute(step map[string]any, ctx *interpolate.Context) St
 				Stderr:   stderr.String(),
 				Error:    fmt.Sprintf("command timed out after %v", timeout),
 			}
+		} else if exitError, ok := err.(*exec.ExitError); ok {
+			exitCode = exitError.ExitCode()
 		} else {
 			return StepResult{
 				Success:  false,

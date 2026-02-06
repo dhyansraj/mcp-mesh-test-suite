@@ -16,6 +16,7 @@ type TestInfo struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
+	Disabled    bool     `json:"disabled"`
 }
 
 // UseCaseInfo represents a use case with its tests
@@ -23,6 +24,7 @@ type UseCaseInfo struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	TestCount int    `json:"test_count"`
+	Disabled  bool   `json:"disabled"`
 }
 
 // DiscoverTests finds all tests in a suite folder
@@ -49,6 +51,16 @@ func DiscoverTests(suitePath string) ([]TestInfo, []UseCaseInfo, error) {
 
 		ucName := ucEntry.Name()
 		ucPath := filepath.Join(suitesDir, ucName)
+
+		// Check UC disabled status from uc.yaml
+		ucDisabled := false
+		ucYamlPath := filepath.Join(ucPath, "uc.yaml")
+		if ucData, err := os.ReadFile(ucYamlPath); err == nil {
+			var ucConfig map[string]any
+			if err := yaml.Unmarshal(ucData, &ucConfig); err == nil {
+				ucDisabled = getBoolOr(ucConfig, "disabled", false)
+			}
+		}
 
 		// List test case directories
 		tcEntries, err := os.ReadDir(ucPath)
@@ -84,14 +96,16 @@ func DiscoverTests(suitePath string) ([]TestInfo, []UseCaseInfo, error) {
 				Name:        getStringOr(testConfig, "name", tcName),
 				Description: getStringOr(testConfig, "description", ""),
 				Tags:        getStringSlice(testConfig, "tags"),
+				Disabled:    ucDisabled || getBoolOr(testConfig, "disabled", false),
 			}
 			tests = append(tests, test)
 
 			// Track use case
 			if _, ok := useCaseMap[ucName]; !ok {
 				useCaseMap[ucName] = &UseCaseInfo{
-					ID:   ucName,
-					Name: ucName,
+					ID:       ucName,
+					Name:     ucName,
+					Disabled: ucDisabled,
 				}
 			}
 			useCaseMap[ucName].TestCount++
@@ -133,6 +147,15 @@ func getStringOr(m map[string]any, key, defaultVal string) string {
 	if v, ok := m[key]; ok {
 		if s, ok := v.(string); ok {
 			return s
+		}
+	}
+	return defaultVal
+}
+
+func getBoolOr(m map[string]any, key string, defaultVal bool) bool {
+	if v, ok := m[key]; ok {
+		if b, ok := v.(bool); ok {
+			return b
 		}
 	}
 	return defaultVal

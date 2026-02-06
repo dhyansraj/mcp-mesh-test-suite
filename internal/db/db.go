@@ -128,6 +128,15 @@ CREATE TABLE IF NOT EXISTS captured_values (
     UNIQUE(test_result_id, key)
 );
 
+-- Global secrets store
+CREATE TABLE IF NOT EXISTS secrets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT UNIQUE NOT NULL,
+    value TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_test_results_run ON test_results(run_id);
 CREATE INDEX IF NOT EXISTS idx_test_results_status ON test_results(status);

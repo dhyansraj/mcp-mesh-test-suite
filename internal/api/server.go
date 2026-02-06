@@ -81,6 +81,10 @@ func (s *Server) setupRoutes() {
 		// Suite tests listing
 		api.GET("/suites/:id/tests", s.getSuiteTests)
 
+		// Use Case Config
+		api.GET("/suites/:id/uc-config/:uc_name", s.getUCConfig)
+		api.PUT("/suites/:id/uc-config/:uc_name", s.updateUCConfig)
+
 		// Test Case YAML Editor (Gin-friendly routes)
 		api.GET("/suites/:id/test-yaml/*test_id", s.getTestYAMLHandler)
 		api.PUT("/suites/:id/test-yaml/*test_id", s.updateTestYAMLHandler)
@@ -116,6 +120,13 @@ func (s *Server) setupRoutes() {
 
 		// File Browser
 		api.GET("/browse", s.browseFolders)
+
+		// Secrets management
+		api.GET("/secrets", s.listSecrets)
+		api.POST("/secrets", s.createSecret)
+		api.PUT("/secrets/:key", s.updateSecret)
+		api.DELETE("/secrets/:key", s.deleteSecret)
+		api.GET("/secrets/values", s.getSecretValues)
 	}
 
 	// Dashboard static files (must be after API routes)
