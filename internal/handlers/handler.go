@@ -41,6 +41,7 @@ func NewRegistry() *Registry {
 	r.Register(&PipInstallHandler{})
 	r.Register(&MavenInstallHandler{})
 	r.Register(&GradleInstallHandler{})
+	r.Register(&SecretsHandler{})
 
 	return r
 }
