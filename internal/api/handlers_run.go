@@ -230,6 +230,7 @@ func (s *Server) getRunTestsTree(c *gin.Context) {
 // createRun handles POST /api/runs
 func (s *Server) createRun(c *gin.Context) {
 	var req struct {
+		RunID                string   `json:"run_id"`
 		SuiteID              int64    `json:"suite_id"`
 		SuiteName            string   `json:"suite_name"`
 		DisplayName          string   `json:"display_name"`
@@ -254,8 +255,11 @@ func (s *Server) createRun(c *gin.Context) {
 		return
 	}
 
-	// Generate run ID
-	runID := generateUUID()
+	// Generate run ID (or use provided one)
+	runID := req.RunID
+	if runID == "" {
+		runID = generateUUID()
+	}
 
 	// Create run
 	run := &models.Run{
@@ -403,6 +407,9 @@ func (s *Server) rerunTests(c *gin.Context) {
 	}
 	execPath, _ = filepath.EvalSymlinks(execPath)
 
+	// Generate run ID for the subprocess
+	runID := generateUUID()
+
 	// Build CLI command
 	apiURL := fmt.Sprintf("http://%s", c.Request.Host)
 	cmd := []string{
@@ -410,6 +417,8 @@ func (s *Server) rerunTests(c *gin.Context) {
 		"run",
 		"--suite-path", suite.FolderPath,
 		"--api-url", apiURL,
+		"--execute",
+		"--run-id", runID,
 	}
 
 	// Add scope flag
@@ -487,6 +496,7 @@ func (s *Server) rerunTests(c *gin.Context) {
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"started":         true,
+		"run_id":          runID,
 		"pid":             process.Process.Pid,
 		"description":     description,
 		"mode":            suite.Mode,

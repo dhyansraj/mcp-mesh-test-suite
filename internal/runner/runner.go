@@ -134,6 +134,7 @@ func (r *TestRunner) RunTest(testID string) (*TestResult, error) {
 
 	// Build execution context
 	ctx := interpolate.NewContext()
+
 	ctx.Config = r.suiteConfig.ToMap()
 	ctx.SuitePath = r.suitePath
 	ctx.Workdir = workdir
@@ -143,6 +144,18 @@ func (r *TestRunner) RunTest(testID string) (*TestResult, error) {
 	ctx.Extra["test_id"] = testID
 	ctx.Extra["uc_name"] = ucName
 	ctx.Extra["tc_name"] = tcName
+
+	// Set run_path for local output directories
+	// Tests use ${run_path}/${config.output.bin} instead of ${suite_path}/${config.output.bin}
+	// This keeps build artifacts on local disk, not on NFS
+	if r.runID != "" {
+		homeDir, _ := os.UserHomeDir()
+		if homeDir != "" {
+			runPath := filepath.Join(homeDir, ".tsuite", "runs", r.runID)
+			os.MkdirAll(runPath, 0755)
+			ctx.Extra["run_path"] = runPath
+		}
+	}
 
 	result := &TestResult{
 		TestID:   testID,

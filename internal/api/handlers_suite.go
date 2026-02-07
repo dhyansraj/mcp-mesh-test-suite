@@ -142,8 +142,8 @@ func (s *Server) createSuite(c *gin.Context) {
 
 	// Override mode if provided in request
 	if req.Mode != "" {
-		if req.Mode != "docker" && req.Mode != "standalone" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid mode: " + req.Mode + ". Must be 'docker' or 'standalone'"})
+		if req.Mode != "docker" && req.Mode != "standalone" && req.Mode != "k8s" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid mode: " + req.Mode + ". Must be 'docker', 'standalone', or 'k8s'"})
 			return
 		}
 		mode = req.Mode

@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -19,10 +20,10 @@ import (
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/client"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/config"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/db"
-	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/executor"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/man"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/runner"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/scaffold"
+	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/worker"
 )
 
 var (
@@ -32,15 +33,17 @@ var (
 
 // Run command flags
 var (
-	suitePath  string
-	parallel   int
-	ucFilter   []string
-	tcFilter   []string
-	tagFilter  []string
-	dryRun     bool
-	apiURL     string
-	runnerPath string
-	tcFile     string
+	suitePath   string
+	parallel    int
+	ucFilter    []string
+	tcFilter    []string
+	tagFilter   []string
+	dryRun      bool
+	apiURL      string
+	runnerPath  string
+	tcFile      string
+	executeMode bool
+	runIDFlag   string
 )
 
 // findRunnerBinary finds the tsuite-runner binary
@@ -92,186 +95,15 @@ func findRunnerBinary() string {
 	return ""
 }
 
-// runTestWithRunner executes a single test using the external runner binary.
-// The runner reports results directly to the API, so we just need to wait for completion.
-// Returns: passed, error string, duration, cancelled
-func runTestWithRunner(ctx context.Context, runnerBinary, suitePath, testID, apiURL, runID, baseWorkdir string, timeout time.Duration) (bool, string, time.Duration, bool) {
-	startTime := time.Now()
-
-	// Check if already cancelled
-	select {
-	case <-ctx.Done():
-		return false, "cancelled", 0, true
-	default:
-	}
-
-	// Build command arguments
-	args := []string{
-		"--suite-path", suitePath,
-		"--test-id", testID,
-	}
-	if apiURL != "" {
-		args = append(args, "--api-url", apiURL)
-	}
-	if runID != "" {
-		args = append(args, "--run-id", runID)
-
-		// Set log directory for unified logging (standalone mode)
-		// Structure: ~/.tsuite/runs/{run_id}/{uc}/{tc}/
-		parts := strings.SplitN(testID, "/", 2)
-		if len(parts) == 2 {
-			logDir := filepath.Join(os.Getenv("HOME"), ".tsuite", "runs", runID, parts[0], parts[1])
-			os.MkdirAll(logDir, 0755)
-			args = append(args, "--log-dir", logDir)
-		}
-	}
-	if baseWorkdir != "" {
-		testWorkdir := filepath.Join(baseWorkdir, strings.ReplaceAll(testID, "/", "_"))
-		os.MkdirAll(testWorkdir, 0755)
-		args = append(args, "--workdir", testWorkdir)
-	}
-
-	// Create command with combined timeout and cancellation context
-	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, timeout)
-	defer timeoutCancel()
-
-	cmd := exec.CommandContext(timeoutCtx, runnerBinary, args...)
-	cmd.Env = os.Environ()
-	// Set process group so we can kill the whole tree
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	// Capture output
-	output, err := cmd.CombinedOutput()
-	duration := time.Since(startTime)
-
-	// Check if cancelled (parent context)
-	if ctx.Err() == context.Canceled {
-		return false, "cancelled", duration, true
-	}
-
-	if timeoutCtx.Err() == context.DeadlineExceeded {
-		return false, "test timed out", duration, false
-	}
-
+// detectHostIP returns the host's outbound IP address
+func detectHostIP() string {
+	conn, err := net.DialTimeout("udp", "8.8.8.8:80", time.Second)
 	if err != nil {
-		if _, ok := err.(*exec.ExitError); ok {
-			// Runner exited with non-zero status (test failed)
-			// Extract error from output
-			errMsg := "test failed"
-			lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-			for _, line := range lines {
-				if strings.HasPrefix(line, "FAILED:") {
-					errMsg = strings.TrimPrefix(line, "FAILED: ")
-					break
-				}
-				if strings.HasPrefix(line, "Error:") {
-					errMsg = strings.TrimPrefix(line, "Error: ")
-					break
-				}
-			}
-			if errMsg == "test failed" && len(lines) > 0 {
-				// Use last line as error
-				errMsg = lines[len(lines)-1]
-			}
-			return false, errMsg, duration, false
-		}
-		return false, fmt.Sprintf("runner error: %v", err), duration, false
+		return ""
 	}
-
-	return true, "", duration, false
-}
-
-// runTestsWithRunnerSequential runs tests sequentially using the external runner binary
-// Returns: passed, failed, skipped, failedTests, cancelled
-func runTestsWithRunnerSequential(ctx context.Context, cancelFunc context.CancelFunc, runnerBinary, suitePath string, tests []string, apiURL, runID, baseWorkdir string, timeout time.Duration) (passed, failed, skipped int, failedTests []string, cancelled bool) {
-	apiClient := client.NewClient(apiURL)
-
-	// Start cancel checker goroutine
-	executor.StartCancelChecker(ctx, cancelFunc, apiClient, runID)
-
-	for _, testID := range tests {
-		// Check if cancelled before starting test
-		select {
-		case <-ctx.Done():
-			fmt.Printf("[SKIP] %s (cancelled)\n", testID)
-			skipped++
-			cancelled = true
-			continue
-		default:
-		}
-
-		fmt.Printf("\n[RUN] %s\n", testID)
-
-		testPassed, testError, duration, wasCancelled := runTestWithRunner(ctx, runnerBinary, suitePath, testID, apiURL, runID, baseWorkdir, timeout)
-
-		if wasCancelled {
-			fmt.Printf("[SKIP] %s (cancelled)\n", testID)
-			skipped++
-			cancelled = true
-		} else if testPassed {
-			fmt.Printf("[PASS] %s (%.1fs)\n", testID, duration.Seconds())
-			passed++
-		} else {
-			fmt.Printf("[FAIL] %s - %s (%.1fs)\n", testID, testError, duration.Seconds())
-			failed++
-			failedTests = append(failedTests, testID)
-		}
-	}
-	return
-}
-
-// runTestsWithRunnerParallel runs tests in parallel using the external runner binary
-// Returns: passed, failed, skipped, failedTests, cancelled
-func runTestsWithRunnerParallel(ctx context.Context, cancelFunc context.CancelFunc, runnerBinary, suitePath string, tests []string, workers int, apiURL, runID, baseWorkdir string, timeout time.Duration) (passed, failed, skipped int, failedTests []string, cancelled bool) {
-	testCh := make(chan string, len(tests))
-	resultCh := make(chan executor.TestResult, len(tests))
-	apiClient := client.NewClient(apiURL)
-
-	// Start cancel checker goroutine
-	executor.StartCancelChecker(ctx, cancelFunc, apiClient, runID)
-
-	// Start workers
-	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for testID := range testCh {
-				// Check if cancelled before starting test
-				select {
-				case <-ctx.Done():
-					resultCh <- executor.TestResult{TestID: testID, Cancelled: true}
-					continue
-				default:
-				}
-
-				testPassed, testError, duration, wasCancelled := runTestWithRunner(ctx, runnerBinary, suitePath, testID, apiURL, runID, baseWorkdir, timeout)
-				resultCh <- executor.TestResult{
-					TestID:    testID,
-					Passed:    testPassed,
-					Error:     testError,
-					Duration:  duration,
-					Cancelled: wasCancelled,
-				}
-			}
-		}()
-	}
-
-	// Send tests to workers
-	for _, t := range tests {
-		testCh <- t
-	}
-	close(testCh)
-
-	// Wait for all workers
-	go func() {
-		wg.Wait()
-		close(resultCh)
-	}()
-
-	// Collect results
-	results := executor.CollectResults(resultCh)
-	return results.Passed, results.Failed, results.Skipped, results.FailedTests, results.Cancelled
+	defer conn.Close()
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP.String()
 }
 
 func main() {
@@ -315,6 +147,10 @@ Features: embedded dashboard UI, Docker/standalone modes for isolation, parallel
 	runCmd.Flags().StringVar(&apiURL, "api-url", "http://localhost:9999", "API server URL")
 	runCmd.Flags().StringVar(&runnerPath, "runner-path", "", "Path to runner binary (default: auto-detect)")
 	runCmd.Flags().StringVar(&tcFile, "tc-file", "", "File containing test IDs to run (one per line)")
+	runCmd.Flags().BoolVar(&executeMode, "execute", false, "Direct execution mode (used by API server)")
+	runCmd.Flags().StringVar(&runIDFlag, "run-id", "", "Pre-assigned run ID (used by API server)")
+	runCmd.Flags().MarkHidden("execute")
+	runCmd.Flags().MarkHidden("run-id")
 
 	rootCmd.AddCommand(runCmd)
 
@@ -345,7 +181,7 @@ Features: embedded dashboard UI, Docker/standalone modes for isolation, parallel
 	// Check command
 	checkCmd := &cobra.Command{
 		Use:   "check",
-		Short: "Check Docker availability",
+		Short: "Check Docker, K8s, and SSH availability",
 		Run: func(cmd *cobra.Command, args []string) {
 			// Check Docker
 			ok, msg := runner.CheckDockerAvailable()
@@ -355,11 +191,37 @@ Features: embedded dashboard UI, Docker/standalone modes for isolation, parallel
 				fmt.Printf("Docker: not available (%s)\n", msg)
 			}
 
-			if !ok {
-				os.Exit(1)
+			// Check K8s
+			k8sOk, k8sMsg := runner.CheckK8sAvailable()
+			if k8sOk {
+				fmt.Printf("K8s: %s\n", k8sMsg)
+			} else {
+				fmt.Printf("K8s: not available (%s)\n", k8sMsg)
+			}
+
+			// Check SSH if suite-path provided
+			checkSuitePath, _ := cmd.Flags().GetString("suite-path")
+			if checkSuitePath != "" {
+				absPath, err := filepath.Abs(checkSuitePath)
+				if err == nil {
+					absPath, _ = filepath.EvalSymlinks(absPath)
+				}
+				if err == nil {
+					suiteConfig, err := config.LoadSuiteConfig(absPath)
+					if err == nil && suiteConfig.Standalone.Type == "remote" && suiteConfig.SSH.Host != "" {
+						sshCmd := exec.Command("ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", suiteConfig.SSH.Host, "uname -srm")
+						output, err := sshCmd.CombinedOutput()
+						if err != nil {
+							fmt.Printf("SSH (%s): not available (%v)\n", suiteConfig.SSH.Host, err)
+						} else {
+							fmt.Printf("SSH (%s): Available (%s)\n", suiteConfig.SSH.Host, strings.TrimSpace(string(output)))
+						}
+					}
+				}
 			}
 		},
 	}
+	checkCmd.Flags().StringP("suite-path", "s", "", "Path to test suite (for SSH check)")
 	rootCmd.AddCommand(checkCmd)
 
 	// Stop command
@@ -546,6 +408,13 @@ func startDetached(port int) error {
 }
 
 func runTests(cmd *cobra.Command, args []string) error {
+	if executeMode {
+		return executeTests(cmd, args)
+	}
+	return delegateToAPI(cmd, args)
+}
+
+func executeTests(cmd *cobra.Command, args []string) error {
 	// Resolve suite path (including symlinks for consistent matching with database)
 	absPath, err := filepath.Abs(suitePath)
 	if err != nil {
@@ -636,6 +505,14 @@ func runTests(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Docker: %s\n", msg)
 	}
 
+	if mode == "k8s" {
+		ok, msg := runner.CheckK8sAvailable()
+		if !ok {
+			return fmt.Errorf("Kubernetes not available: %s", msg)
+		}
+		fmt.Printf("K8s: %s\n", msg)
+	}
+
 	// Create temp workdir for test execution
 	var baseWorkdir string
 	tmpDir, err := os.MkdirTemp("", "tsuite_")
@@ -660,10 +537,11 @@ func runTests(cmd *cobra.Command, args []string) error {
 		fmt.Printf("API Server: %s\n", apiURL)
 	}
 
-	// Create run via API
 	var runID string
 	var suiteID int64
+
 	if apiClient != nil {
+		// Direct execution - create run via API
 		// Sync suite to get suite_id
 		syncResp, err := apiClient.UpsertSuite(&client.SyncSuiteRequest{
 			FolderPath: absPath,
@@ -720,6 +598,7 @@ func runTests(cmd *cobra.Command, args []string) error {
 		}
 
 		createReq := &client.CreateRunRequest{
+			RunID:       runIDFlag,
 			SuiteID:     suiteID,
 			SuiteName:   suiteConfig.Suite.Name,
 			DisplayName: displayName,
@@ -786,25 +665,71 @@ func runTests(cmd *cobra.Command, args []string) error {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	defer cancelFunc()
 
-	if mode == "docker" {
-		// Docker mode: use DockerExecutor which mounts Go runner into container
-		if parallel > 1 && len(activeTests) > 1 {
-			passed, failed, skipped, failedTests, cancelled = runTestsParallelWithDocker(ctx, cancelFunc, absPath, activeTests, parallel, apiClient, runID, baseWorkdir, dockerImage, apiURL)
-		} else {
-			passed, failed, skipped, failedTests, cancelled = runTestsSequentialWithDocker(ctx, cancelFunc, absPath, activeTests, apiClient, runID, baseWorkdir, dockerImage, apiURL)
+	var handler worker.WorkerHandler
+	switch mode {
+	case "docker":
+		handler = worker.NewDockerHandler(apiURL, absPath, baseWorkdir, dockerImage, runID)
+	case "k8s":
+		if suiteConfig.K8s.NFSServer == "" || suiteConfig.K8s.NFSPath == "" {
+			return fmt.Errorf("k8s.nfs_server and k8s.nfs_path are required in config.yaml")
 		}
-	} else {
-		// Standalone mode: use external runner binary
-		runnerBinaryPath := findRunnerBinary()
-		if runnerBinaryPath == "" {
-			return fmt.Errorf("runner binary not found. Build it with: make build-runner")
-		}
-		if parallel > 1 && len(activeTests) > 1 {
-			passed, failed, skipped, failedTests, cancelled = runTestsWithRunnerParallel(ctx, cancelFunc, runnerBinaryPath, absPath, activeTests, parallel, apiURL, runID, baseWorkdir, testTimeout)
+		// Resolve API URL for K8s (pods need to reach the API server)
+		k8sAPIURL := apiURL
+		if suiteConfig.K8s.APIUrl != "" {
+			k8sAPIURL = suiteConfig.K8s.APIUrl
 		} else {
-			passed, failed, skipped, failedTests, cancelled = runTestsWithRunnerSequential(ctx, cancelFunc, runnerBinaryPath, absPath, activeTests, apiURL, runID, baseWorkdir, testTimeout)
+			// Auto-detect: use host's outbound IP
+			hostIP := detectHostIP()
+			if hostIP != "" {
+				k8sAPIURL = fmt.Sprintf("http://%s:9999", hostIP)
+				fmt.Printf("K8s: auto-detected API URL: %s\n", k8sAPIURL)
+			}
+		}
+		apiURL = k8sAPIURL
+		k8sHandler, err := worker.NewK8sHandler(suiteConfig, absPath)
+		if err != nil {
+			return fmt.Errorf("K8s handler: %w", err)
+		}
+		handler = k8sHandler
+	default:
+		standaloneType := suiteConfig.Standalone.Type
+		if standaloneType == "remote" {
+			sshAPIURL := apiURL
+			if suiteConfig.SSH.APIUrl != "" {
+				sshAPIURL = suiteConfig.SSH.APIUrl
+			} else if hostIP := detectHostIP(); hostIP != "" {
+				sshAPIURL = fmt.Sprintf("http://%s:9999", hostIP)
+			}
+			sshHandler, sshErr := worker.NewSSHHandler(suiteConfig, absPath, sshAPIURL, testTimeout)
+			if sshErr != nil {
+				return fmt.Errorf("SSH handler: %w", sshErr)
+			}
+			handler = sshHandler
+			fmt.Printf("SSH Host: %s (runner: %s)\n", suiteConfig.SSH.Host, suiteConfig.SSH.RunnerDir)
+		} else {
+			runnerBinaryPath := findRunnerBinary()
+			if runnerBinaryPath == "" {
+				return fmt.Errorf("runner binary not found. Build it with: make build-runner")
+			}
+			handler = worker.NewStandaloneHandler(runnerBinaryPath, absPath, baseWorkdir, testTimeout)
 		}
 	}
+	defer handler.Close()
+
+	result := worker.RunPool(ctx, cancelFunc, worker.PoolConfig{
+		Handler:   handler,
+		Tests:     activeTests,
+		Workers:   parallel,
+		APIURL:    apiURL,
+		RunID:     runID,
+		Timeout:   testTimeout,
+		APIClient: apiClient,
+	})
+	passed = result.Passed
+	failed = result.Failed
+	skipped = result.Skipped
+	failedTests = result.FailedTests
+	cancelled = result.Cancelled
 
 	// Complete or cancel run via API
 	if apiClient != nil && runID != "" {
@@ -847,213 +772,228 @@ func runTests(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runTestsSequentialWithDocker(ctx context.Context, cancelFunc context.CancelFunc, suitePath string, tests []string, apiClient *client.Client, runID string, baseWorkdir string, dockerImage string, serverURL string) (passed, failed, skipped int, failedTests []string, cancelled bool) {
-	// Create docker executor
-	dockerConfig := &runner.ContainerConfig{
-		Image:   dockerImage,
-		Network: "bridge",
-	}
-	dockerExec, err := runner.NewDockerExecutor(serverURL, suitePath, baseWorkdir, dockerConfig, runID)
+func delegateToAPI(cmd *cobra.Command, args []string) error {
+	// Resolve suite path
+	absPath, err := filepath.Abs(suitePath)
 	if err != nil {
-		fmt.Printf("Failed to create Docker executor: %v\n", err)
-		return 0, len(tests), 0, tests, false
+		return fmt.Errorf("failed to resolve suite path: %w", err)
 	}
-	defer dockerExec.Close()
-
-	// Start cancel checker goroutine
-	if apiClient != nil {
-		executor.StartCancelChecker(ctx, cancelFunc, apiClient, runID)
+	absPath, err = filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve symlinks: %w", err)
 	}
 
-	for _, testID := range tests {
-		// Check if cancelled before starting test
-		select {
-		case <-ctx.Done():
-			fmt.Printf("[SKIP] %s (cancelled)\n", testID)
-			skipped++
-			cancelled = true
-			continue
-		default:
-		}
-
-		fmt.Printf("\n[RUN] %s\n", testID)
-
-		// Note: Runner inside container reports "running" status to API
-		// Don't duplicate here to avoid race conditions with counter updates
-
-		// Run in Docker container (Go runner reports steps to API)
-		// Use combined context with timeout
-		testCtx, testCancel := context.WithTimeout(ctx, 10*time.Minute)
-		result, err := dockerExec.ExecuteTest(testCtx, testID, nil)
-		testCancel()
-
-		// Check if cancelled during test
-		if ctx.Err() == context.Canceled {
-			fmt.Printf("[SKIP] %s (cancelled)\n", testID)
-			skipped++
-			cancelled = true
-			continue
-		}
-
-		var testPassed bool
-		var testError string
-		var duration time.Duration
-
-		if err != nil {
-			testPassed = false
-			testError = err.Error()
-			duration = 0
-			// Report failure to API since runner never started
-			if apiClient != nil && runID != "" {
-				apiClient.UpdateTestStatus(runID, testID, &client.UpdateTestStatusRequest{
-					Status:       "failed",
-					ErrorMessage: testError,
-				})
-			}
-		} else {
-			testPassed = result.ExitCode == 0 && result.Error == nil
-			if result.Error != nil {
-				testError = result.Error.Error()
-			} else if result.ExitCode != 0 {
-				testError = fmt.Sprintf("exit code %d", result.ExitCode)
-				if result.Stderr != "" {
-					lines := strings.Split(strings.TrimSpace(result.Stderr), "\n")
-					if len(lines) > 3 {
-						lines = lines[len(lines)-3:]
-					}
-					testError = strings.Join(lines, "; ")
-				}
-			}
-			duration = result.Duration
-		}
-
-		if testPassed {
-			fmt.Printf("[PASS] %s (%.1fs)\n", testID, duration.Seconds())
-			passed++
-		} else {
-			fmt.Printf("[FAIL] %s - %s (%.1fs)\n", testID, testError, duration.Seconds())
-			failed++
-			failedTests = append(failedTests, testID)
-		}
-		// Note: Go runner inside container reports final status with steps to API
-	}
-	return
-}
-
-func runTestsParallelWithDocker(ctx context.Context, cancelFunc context.CancelFunc, suitePath string, tests []string, workers int, apiClient *client.Client, runID string, baseWorkdir string, dockerImage string, serverURL string) (passed, failed, skipped int, failedTests []string, cancelled bool) {
-	testCh := make(chan string, len(tests))
-	resultCh := make(chan executor.TestResult, len(tests))
-
-	// Start cancel checker goroutine
-	if apiClient != nil {
-		executor.StartCancelChecker(ctx, cancelFunc, apiClient, runID)
+	// Load suite config
+	suiteConfig, err := config.LoadSuiteConfig(absPath)
+	if err != nil {
+		return fmt.Errorf("failed to load suite config: %w", err)
 	}
 
-	// Start workers
-	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
-
-			// Each worker gets its own docker executor (for isolation)
-			dockerConfig := &runner.ContainerConfig{
-				Image:   dockerImage,
-				Network: "bridge",
-			}
-			dockerExec, err := runner.NewDockerExecutor(serverURL, suitePath, baseWorkdir, dockerConfig, runID)
-			if err != nil {
-				fmt.Printf("Worker %d: Failed to create Docker executor: %v\n", workerID, err)
-				// Mark all remaining tests as failed
-				for testID := range testCh {
-					resultCh <- executor.TestResult{TestID: testID, Passed: false, Error: err.Error()}
-				}
-				return
-			}
-			defer dockerExec.Close()
-
-			for testID := range testCh {
-				// Check if cancelled before starting test
-				select {
-				case <-ctx.Done():
-					resultCh <- executor.TestResult{TestID: testID, Cancelled: true}
-					continue
-				default:
-				}
-
-				// Note: Runner inside container reports "running" status to API
-				// Don't duplicate here to avoid race conditions with counter updates
-
-				// Run in Docker container (Go runner reports steps to API)
-				// Use combined context with timeout
-				testCtx, testCancel := context.WithTimeout(ctx, 10*time.Minute)
-				result, err := dockerExec.ExecuteTest(testCtx, testID, nil)
-				testCancel()
-
-				// Check if cancelled during test
-				if ctx.Err() == context.Canceled {
-					resultCh <- executor.TestResult{TestID: testID, Cancelled: true}
-					continue
-				}
-
-				var testPassed bool
-				var testError string
-				var duration time.Duration
-
-				if err != nil {
-					testPassed = false
-					testError = err.Error()
-					duration = 0
-					// Report failure to API since runner never started
-					if apiClient != nil && runID != "" {
-						apiClient.UpdateTestStatus(runID, testID, &client.UpdateTestStatusRequest{
-							Status:       "failed",
-							ErrorMessage: testError,
-						})
-					}
-				} else {
-					testPassed = result.ExitCode == 0 && result.Error == nil
-					if result.Error != nil {
-						testError = result.Error.Error()
-					} else if result.ExitCode != 0 {
-						testError = fmt.Sprintf("exit code %d", result.ExitCode)
-						if result.Stderr != "" {
-							lines := strings.Split(strings.TrimSpace(result.Stderr), "\n")
-							if len(lines) > 3 {
-								lines = lines[len(lines)-3:]
-							}
-							testError = strings.Join(lines, "; ")
-						}
-					}
-					duration = result.Duration
-				}
-
-				resultCh <- executor.TestResult{
-					TestID:   testID,
-					Passed:   testPassed,
-					Error:    testError,
-					Duration: duration,
-				}
-				// Note: Go runner inside container reports final status with steps to API
-			}
-		}(i)
+	if suiteConfig.Suite.Disabled {
+		return fmt.Errorf("suite %q is disabled", suiteConfig.Suite.Name)
 	}
 
-	// Send tests to workers
+	mode := suiteConfig.Suite.Mode
+	if mode == "" {
+		mode = "standalone"
+	}
+
+	// Determine mode display
+	modeDisplay := mode
+	if mode == "standalone" && suiteConfig.Standalone.Type == "remote" {
+		modeDisplay = "standalone/remote"
+	}
+
+	// Create API client and check health
+	apiClient := client.NewClient(apiURL)
+	if err := apiClient.HealthCheck(); err != nil {
+		fmt.Printf("Warning: API server not available at %s\n", apiURL)
+		fmt.Println("Running tests directly (start API with: tsuite api)")
+		// Fall back to direct execution
+		executeMode = true
+		return executeTests(cmd, args)
+	}
+
+	// List tests for validation / dry-run
+	allTests, disabledSet, err := runner.ListTestsWithDisabled(absPath)
+	if err != nil {
+		return fmt.Errorf("failed to list tests: %w", err)
+	}
+	tests := filterTests(allTests)
+
+	var activeTests []string
 	for _, t := range tests {
-		testCh <- t
+		if !disabledSet[t] {
+			activeTests = append(activeTests, t)
+		}
 	}
-	close(testCh)
 
-	// Wait for all workers
+	if len(activeTests) == 0 {
+		fmt.Println("No tests found matching the filters")
+		return nil
+	}
+
+	// Dry run
+	if dryRun {
+		fmt.Printf("Suite: %s (mode: %s)\n", suiteConfig.Suite.Name, modeDisplay)
+		fmt.Printf("Found %d test(s)\n", len(activeTests))
+		fmt.Println("\nTests to run:")
+		for _, t := range activeTests {
+			fmt.Printf("  - %s\n", t)
+		}
+		return nil
+	}
+
+	// Upsert suite
+	syncResp, err := apiClient.UpsertSuite(&client.SyncSuiteRequest{
+		FolderPath: absPath,
+		SuiteName:  suiteConfig.Suite.Name,
+		Mode:       mode,
+		TestCount:  len(tests),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to sync suite: %w", err)
+	}
+
+	suiteID := syncResp.ID
+	if suiteID == 0 {
+		return fmt.Errorf("failed to get suite ID after sync")
+	}
+
+	// Build trigger request
+	triggerReq := &client.TriggerRunRequest{}
+	if len(ucFilter) > 0 {
+		triggerReq.UC = strings.Join(ucFilter, ",")
+	}
+	if len(tcFilter) > 0 {
+		triggerReq.TC = strings.Join(tcFilter, ",")
+	}
+	if len(tagFilter) > 0 {
+		triggerReq.Tags = tagFilter
+	}
+	if tcFile != "" {
+		// Read test IDs from file for test_ids field
+		content, err := os.ReadFile(tcFile)
+		if err == nil {
+			for _, line := range strings.Split(strings.TrimSpace(string(content)), "\n") {
+				line = strings.TrimSpace(line)
+				if line != "" {
+					triggerReq.TestIDs = append(triggerReq.TestIDs, line)
+				}
+			}
+		}
+	}
+
+	// Trigger run via API
+	triggerResp, err := apiClient.TriggerRun(suiteID, triggerReq)
+	if err != nil {
+		return fmt.Errorf("failed to trigger run: %w", err)
+	}
+
+	runID := triggerResp.RunID
+
+	// Print header
+	if suiteConfig.SSH.Host != "" && suiteConfig.Standalone.Type == "remote" {
+		fmt.Printf("Suite: %s (mode: %s, host: %s)\n", suiteConfig.Suite.Name, modeDisplay, suiteConfig.SSH.Host)
+	} else {
+		fmt.Printf("Suite: %s (mode: %s)\n", suiteConfig.Suite.Name, modeDisplay)
+	}
+	fmt.Printf("Run ID: %s\n", runID[:min(12, len(runID))])
+	fmt.Println("Watching progress...")
+	fmt.Println()
+
+	// Set up signal handling for CTRL+C
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		wg.Wait()
-		close(resultCh)
+		<-sigCh
+		fmt.Println("\nCancelling run...")
+		apiClient.CancelRun(runID)
 	}()
 
-	// Collect results
-	results := executor.CollectResults(resultCh)
-	return results.Passed, results.Failed, results.Skipped, results.FailedTests, results.Cancelled
+	// Poll for progress
+	return watchProgress(apiClient, runID)
+}
+
+func watchProgress(apiClient *client.Client, runID string) error {
+	printedTests := make(map[string]bool)
+	startTime := time.Now()
+
+	for {
+		runData, err := apiClient.GetRunWithTests(runID)
+		if err != nil {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		// Print newly completed tests
+		for _, test := range runData.Tests {
+			if printedTests[test.TestID] {
+				continue
+			}
+			// Only print completed tests (not pending/running)
+			if test.Status == "pending" || test.Status == "running" {
+				continue
+			}
+
+			printedTests[test.TestID] = true
+			duration := ""
+			if test.DurationMS != nil {
+				duration = fmt.Sprintf(" (%.1fs)", float64(*test.DurationMS)/1000)
+			}
+
+			switch test.Status {
+			case "passed":
+				fmt.Printf("[PASS] %s%s\n", test.TestID, duration)
+			case "failed", "crashed":
+				errMsg := ""
+				if test.ErrorMessage != "" {
+					errMsg = " - " + test.ErrorMessage
+				}
+				fmt.Printf("[FAIL] %s%s%s\n", test.TestID, errMsg, duration)
+			case "skipped":
+				fmt.Printf("[SKIP] %s\n", test.TestID)
+			}
+		}
+
+		// Check if run is finished
+		if runData.Status == "completed" || runData.Status == "cancelled" || runData.Status == "failed" {
+			duration := time.Since(startTime)
+			fmt.Println("\n" + strings.Repeat("=", 60))
+			if runData.Status == "cancelled" {
+				fmt.Printf("CANCELLED: %d passed, %d failed, %d skipped (%.1fs)\n",
+					runData.Passed, runData.Failed, runData.Skipped, duration.Seconds())
+			} else if runData.Skipped > 0 {
+				fmt.Printf("SUMMARY: %d passed, %d failed, %d skipped (%.1fs)\n",
+					runData.Passed, runData.Failed, runData.Skipped, duration.Seconds())
+			} else {
+				fmt.Printf("SUMMARY: %d passed, %d failed (%.1fs)\n",
+					runData.Passed, runData.Failed, duration.Seconds())
+			}
+
+			// Print failed tests
+			var failedTests []string
+			for _, test := range runData.Tests {
+				if test.Status == "failed" || test.Status == "crashed" {
+					failedTests = append(failedTests, test.TestID)
+				}
+			}
+			if len(failedTests) > 0 {
+				fmt.Println("\nFailed tests:")
+				for _, t := range failedTests {
+					fmt.Printf("  ✗ %s\n", t)
+				}
+			}
+			fmt.Println(strings.Repeat("=", 60))
+
+			if runData.Failed > 0 {
+				return fmt.Errorf("%d test(s) failed", runData.Failed)
+			}
+			return nil
+		}
+
+		time.Sleep(2 * time.Second)
+	}
 }
 
 func listTests(cmd *cobra.Command, args []string) error {
@@ -1177,17 +1117,6 @@ func filterTests(tests []string) []string {
 	}
 
 	return filtered
-}
-
-// Docker execution support
-func runTestInDocker(ctx context.Context, suitePath string, testID string) (*runner.TestResult, error) {
-	// This would use DockerExecutor to run tests in containers
-	// For now, we run tests locally
-	testRunner, err := runner.NewTestRunner(suitePath, "", "", "") // Empty baseWorkdir for docker mode
-	if err != nil {
-		return nil, err
-	}
-	return testRunner.RunTest(testID)
 }
 
 // =============================================================================

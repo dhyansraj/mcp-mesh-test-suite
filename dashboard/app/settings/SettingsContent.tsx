@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Container,
   Terminal,
+  Server,
   FlaskConical,
   Folder,
   ChevronUp,
@@ -473,15 +474,19 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
                             className={
                               suite.mode === "docker"
                                 ? "border-blue-500/50 text-blue-500"
+                                : suite.mode === "k8s"
+                                ? "border-purple-500/50 text-purple-500"
                                 : "border-orange-500/50 text-orange-500"
                             }
                           >
                             {suite.mode === "docker" ? (
                               <Container className="h-3 w-3 mr-1" />
+                            ) : suite.mode === "k8s" ? (
+                              <Server className="h-3 w-3 mr-1" />
                             ) : (
                               <Terminal className="h-3 w-3 mr-1" />
                             )}
-                            {suite.mode}
+                            {suite.mode === "standalone" && (suite.config as any)?.standalone?.type === "remote" ? "ssh" : suite.mode}
                           </Badge>
                         </div>
                         <p className="text-sm text-muted-foreground truncate mt-1">
@@ -908,6 +913,23 @@ export function SettingsContent({ initialSuites }: SettingsContentProps) {
               </p>
               <p className="text-xs text-muted-foreground mt-1">
                 Faster execution. Best for unit tests and library tests.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-start gap-3">
+            <Badge
+              variant="outline"
+              className="border-purple-500/50 text-purple-500 mt-0.5"
+            >
+              <Server className="h-3 w-3 mr-1" />
+              k8s
+            </Badge>
+            <div>
+              <p className="text-sm">
+                Tests run as Kubernetes Jobs in a cluster
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Distributed execution via NFS-shared test suites. Best for scaled testing.
               </p>
             </div>
           </div>

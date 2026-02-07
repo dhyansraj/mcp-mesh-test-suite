@@ -57,12 +57,17 @@ func (s *Server) runSuite(c *gin.Context) {
 		return
 	}
 
+	// Generate run ID for the subprocess
+	runID := generateUUID()
+
 	// Build CLI command
 	apiURL := "http://localhost:" + strconv.Itoa(s.port)
 	args := []string{
 		"run",
 		"--suite-path", suite.FolderPath,
 		"--api-url", apiURL,
+		"--execute",
+		"--run-id", runID,
 	}
 
 	// Add filter flags
@@ -135,6 +140,7 @@ func (s *Server) runSuite(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"started":     true,
+		"run_id":      runID,
 		"pid":         cmd.Process.Pid,
 		"description": description,
 		"log_file":    logPath,

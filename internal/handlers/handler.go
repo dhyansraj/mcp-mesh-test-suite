@@ -42,6 +42,7 @@ func NewRegistry() *Registry {
 	r.Register(&MavenInstallHandler{})
 	r.Register(&GradleInstallHandler{})
 	r.Register(&SecretsHandler{})
+	r.Register(&RunnerHandler{})
 
 	return r
 }

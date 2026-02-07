@@ -677,6 +677,20 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading, suiteId, on
                 <Badge variant={testDetail.status === "passed" ? "default" : "destructive"}>
                   {testDetail.status}
                 </Badge>
+                {testDetail.pod_name && (
+                  <>
+                    <div>
+                      <span className="text-muted-foreground">Pod: </span>
+                      <span className="font-mono">{testDetail.pod_name}</span>
+                    </div>
+                    {testDetail.node_name && (
+                      <div>
+                        <span className="text-muted-foreground">Node: </span>
+                        <span className="font-mono">{testDetail.node_name}</span>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
 
               {/* Error Message */}

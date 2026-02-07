@@ -35,3 +35,7 @@ reports/
 
 # Claude Code
 .claude/
+
+# Embedded runners (built by Makefile, not tracked)
+cmd/tsuite/runners/*
+!cmd/tsuite/runners/.keep

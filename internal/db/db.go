@@ -24,14 +24,14 @@ CREATE TABLE IF NOT EXISTS schema_version (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL DEFAULT 1
 );
-INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 3);
+INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 4);
 
 -- Registered test suites (for dashboard settings)
 CREATE TABLE IF NOT EXISTS suites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     folder_path TEXT UNIQUE NOT NULL,
     suite_name TEXT NOT NULL,
-    mode TEXT DEFAULT 'docker' CHECK(mode IN ('standalone', 'docker')),
+    mode TEXT DEFAULT 'docker' CHECK(mode IN ('standalone', 'docker', 'k8s')),
     config_json TEXT,
     test_count INTEGER DEFAULT 0,
     last_synced_at TEXT,
@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS runs (
     duration_ms INTEGER,
     filters TEXT,
     display_name TEXT,
-    mode TEXT DEFAULT 'docker' CHECK(mode IN ('standalone', 'docker')),
+    mode TEXT DEFAULT 'docker' CHECK(mode IN ('standalone', 'docker', 'k8s')),
     cancel_requested INTEGER DEFAULT 0
 );
 
@@ -83,6 +83,8 @@ CREATE TABLE IF NOT EXISTS test_results (
     steps_json TEXT,
     steps_passed INTEGER DEFAULT 0,
     steps_failed INTEGER DEFAULT 0,
+    pod_name TEXT,
+    node_name TEXT,
     UNIQUE(run_id, test_id)
 );
 

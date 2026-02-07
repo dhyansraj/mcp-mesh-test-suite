@@ -8,6 +8,8 @@ import {
   Settings,
   Package,
   Container,
+  Server,
+  Terminal,
   Clock,
   FileText,
   CheckCircle,
@@ -225,6 +227,7 @@ export function SuiteConfigEditor({
                 <SelectContent>
                   <SelectItem value="docker">Docker</SelectItem>
                   <SelectItem value="standalone">Standalone</SelectItem>
+                  <SelectItem value="k8s">Kubernetes</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -341,6 +344,188 @@ export function SuiteConfigEditor({
             </div>
           </CardContent>
         </Card>
+
+        {/* K8s Section */}
+        {structure.suite?.mode === "k8s" && (
+        <Card className="rounded-md">
+          <CardHeader className="py-3 px-4">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Server className="h-4 w-4" />
+              Kubernetes Settings
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-4 space-y-4">
+            <div className="grid gap-2">
+              <Label htmlFor="k8s-namespace">Namespace</Label>
+              <Input
+                id="k8s-namespace"
+                value={structure.k8s?.namespace || ""}
+                onChange={(e) => updateNestedField("k8s", "namespace", e.target.value)}
+                placeholder="tsuite"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="k8s-nfs-server">NFS Server</Label>
+              <Input
+                id="k8s-nfs-server"
+                value={structure.k8s?.nfs_server || ""}
+                onChange={(e) => updateNestedField("k8s", "nfs_server", e.target.value)}
+                placeholder="10.0.0.50"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="k8s-nfs-path">NFS Path</Label>
+              <Input
+                id="k8s-nfs-path"
+                value={structure.k8s?.nfs_path || ""}
+                onChange={(e) => updateNestedField("k8s", "nfs_path", e.target.value)}
+                placeholder="/path/to/tests"
+                className="font-mono"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="k8s-image">Image</Label>
+              <Input
+                id="k8s-image"
+                value={structure.k8s?.image || ""}
+                onChange={(e) => updateNestedField("k8s", "image", e.target.value)}
+                placeholder="tsuite-mesh:local"
+                className="font-mono"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="k8s-api-url">API URL</Label>
+              <Input
+                id="k8s-api-url"
+                value={structure.k8s?.api_url || ""}
+                onChange={(e) => updateNestedField("k8s", "api_url", e.target.value)}
+                placeholder="http://10.0.0.50:9999"
+                className="font-mono"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="k8s-kubeconfig">Kubeconfig (optional)</Label>
+              <Input
+                id="k8s-kubeconfig"
+                value={structure.k8s?.kubeconfig || ""}
+                onChange={(e) => updateNestedField("k8s", "kubeconfig", e.target.value)}
+                placeholder="~/.kube/config"
+                className="font-mono"
+              />
+            </div>
+          </CardContent>
+        </Card>
+        )}
+
+        {/* Standalone Settings - shown when mode is standalone */}
+        {structure.suite?.mode === "standalone" && (
+        <Card className="rounded-md">
+          <CardHeader className="py-3 px-4">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Terminal className="h-4 w-4" />
+              Standalone Settings
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-4 space-y-4">
+            <div className="grid gap-2">
+              <Label htmlFor="standalone-type">Execution Type</Label>
+              <Select
+                value={structure.standalone?.type || "local"}
+                onValueChange={(value) => updateNestedField("standalone", "type", value)}
+              >
+                <SelectTrigger id="standalone-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="local">Local</SelectItem>
+                  <SelectItem value="remote">Remote SSH</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {structure.standalone?.type === "remote"
+                  ? "Execute tests on a remote host via SSH"
+                  : "Execute tests directly on this machine"}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+        )}
+
+        {/* SSH Settings - shown when standalone + remote */}
+        {structure.suite?.mode === "standalone" && structure.standalone?.type === "remote" && (
+        <Card className="rounded-md">
+          <CardHeader className="py-3 px-4">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Server className="h-4 w-4" />
+              SSH Settings
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-4 space-y-4">
+            <div className="grid gap-2">
+              <Label htmlFor="ssh-host">Host</Label>
+              <Input
+                id="ssh-host"
+                value={structure.ssh?.host || ""}
+                onChange={(e) => updateNestedField("ssh", "host", e.target.value)}
+                placeholder="beelink1 or 10.0.0.101"
+                className="font-mono"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="ssh-runner-dir">Runner Directory</Label>
+              <Input
+                id="ssh-runner-dir"
+                value={structure.ssh?.runner_dir || ""}
+                onChange={(e) => updateNestedField("ssh", "runner_dir", e.target.value)}
+                placeholder="/tmp/tsuite"
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">
+                Where to stage the runner binary on the remote host
+              </p>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="ssh-api-url">API URL</Label>
+              <Input
+                id="ssh-api-url"
+                value={structure.ssh?.api_url || ""}
+                onChange={(e) => updateNestedField("ssh", "api_url", e.target.value)}
+                placeholder="http://10.0.0.50:9999"
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">
+                API URL reachable from the remote host (auto-detected if empty)
+              </p>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="ssh-local-path">Local Path (NFS Export)</Label>
+              <Input
+                id="ssh-local-path"
+                value={structure.ssh?.local_path || ""}
+                onChange={(e) => updateNestedField("ssh", "local_path", e.target.value)}
+                placeholder="/Users/dhyanraj/workspace"
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">
+                Local NFS export path on this machine
+              </p>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="ssh-mount-path">Mount Path (Remote)</Label>
+              <Input
+                id="ssh-mount-path"
+                value={structure.ssh?.mount_path || ""}
+                onChange={(e) => updateNestedField("ssh", "mount_path", e.target.value)}
+                placeholder="/mnt/workspace"
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">
+                Where the NFS export is mounted on the remote host
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+        )}
 
         {/* Defaults Section */}
         <Card className="rounded-md">

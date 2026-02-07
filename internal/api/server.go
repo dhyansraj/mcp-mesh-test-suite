@@ -108,6 +108,7 @@ func (s *Server) setupRoutes() {
 		api.GET("/runs/:run_id/test/*test_id", s.getTestDetail)              // CLI uses path-based ID
 		api.PATCH("/runs/:run_id/test/*test_id", s.updateTestStatus)          // Go runner uses wildcard path
 		api.PATCH("/runs/:run_id/tests/*test_id", s.updateTestStatusByPath)  // Python runner uses this (also wildcard for paths with /)
+		api.PATCH("/runs/:run_id/test-meta/*test_id", s.handleUpdateTestMeta)
 		api.POST("/runs/:run_id/complete", s.completeRun)
 		api.POST("/runs/:run_id/cancel", s.cancelRun)
 		api.POST("/runs/:run_id/rerun", s.rerunTests)
@@ -127,6 +128,10 @@ func (s *Server) setupRoutes() {
 		api.PUT("/secrets/:key", s.updateSecret)
 		api.DELETE("/secrets/:key", s.deleteSecret)
 		api.GET("/secrets/values", s.getSecretValues)
+
+		// Runner binaries
+		api.GET("/runners", s.handleListRunners)
+		api.GET("/runners/:name", s.handleGetRunner)
 	}
 
 	// Dashboard static files (must be after API routes)

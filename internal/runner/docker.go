@@ -55,7 +55,6 @@ type DockerExecutor struct {
 	baseWorkdir string
 	config      ContainerConfig
 	runID       string
-	runnerPath  string // Path to Go runner binary (Linux version for container)
 }
 
 // NewDockerExecutor creates a new Docker executor
@@ -107,13 +106,6 @@ func NewDockerExecutor(serverURL, suitePath, baseWorkdir string, config *Contain
 		cfg.Mounts = config.Mounts
 	}
 
-	// Find the Go runner binary for Linux (container architecture)
-	runnerPath, err := findRunnerBinaryForDocker()
-	if err != nil {
-		cli.Close()
-		return nil, fmt.Errorf("failed to find runner binary for docker: %w", err)
-	}
-
 	// Prune stopped containers on startup to prevent accumulation
 	// This cleans up orphaned containers from crashed runs
 	pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -125,28 +117,9 @@ func NewDockerExecutor(serverURL, suitePath, baseWorkdir string, config *Contain
 		serverURL:   serverURL,
 		suitePath:   suitePath,
 		baseWorkdir: baseWorkdir,
-		config:        cfg,
-		runID:         runID,
-		runnerPath:    runnerPath,
+		config:      cfg,
+		runID:       runID,
 	}, nil
-}
-
-// findRunnerBinaryForDocker finds the Go runner binary for Linux containers
-func findRunnerBinaryForDocker() (string, error) {
-	// Get the directory of the current executable
-	execPath, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	execDir := filepath.Dir(execPath)
-
-	// Look for tsuite-runner-linux (built with GOOS=linux, uses host architecture)
-	runnerPath := filepath.Join(execDir, "tsuite-runner-linux")
-	if _, err := os.Stat(runnerPath); err == nil {
-		return runnerPath, nil
-	}
-
-	return "", fmt.Errorf("runner binary not found. Run 'make build-runner-linux' to build it. Expected: %s", runnerPath)
 }
 
 // ContainerResult holds the result of running a container
@@ -207,12 +180,6 @@ func (e *DockerExecutor) ExecuteTest(ctx context.Context, testID string, testCon
 
 	// Prepare volume mounts
 	mounts := []mount.Mount{
-		{
-			Type:     mount.TypeBind,
-			Source:   e.runnerPath,
-			Target:   "/usr/local/bin/tsuite-runner",
-			ReadOnly: true,
-		},
 		{
 			Type:     mount.TypeBind,
 			Source:   e.suitePath,
@@ -406,7 +373,7 @@ func (e *DockerExecutor) ensureImage(ctx context.Context, imageName string) erro
 
 // buildTestCommand creates the command to run inside the container
 func (e *DockerExecutor) buildTestCommand(testID string) []string {
-	// Run the Go runner binary (mounted at /usr/local/bin/tsuite-runner)
+	// Run the Go runner binary via select-runner (picks correct arch binary)
 	// Environment variables TSUITE_API, TSUITE_RUN_ID, TSUITE_TEST_ID, TSUITE_LOG_DIR are already set
 	script := fmt.Sprintf(`
 set -e
@@ -417,7 +384,7 @@ if ! command -v jq &> /dev/null; then
 fi
 
 # Run the Go test runner (uses TSUITE_LOG_DIR env var for logging)
-/usr/local/bin/tsuite-runner \
+/usr/local/bin/select-runner /usr/local/bin \
     --test-yaml /tests/suites/%s/test.yaml \
     --suite-path /tests
 `, testID)

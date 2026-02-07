@@ -389,7 +389,7 @@ func (r *Repository) GetTestResultsByRunID(runID string) ([]models.TestResult, e
 	rows, err := r.db.Query(`
 		SELECT id, run_id, test_id, use_case, test_case, name, tags, status,
 		       started_at, finished_at, duration_ms, error_message, error_step,
-		       skip_reason, steps_json, steps_passed, steps_failed
+		       skip_reason, steps_json, steps_passed, steps_failed, pod_name, node_name
 		FROM test_results
 		WHERE run_id = ?
 		ORDER BY use_case, test_case
@@ -408,6 +408,7 @@ func (r *Repository) GetTestResultsByRunID(runID string) ([]models.TestResult, e
 			&t.ID, &t.RunID, &t.TestID, &t.UseCase, &t.TestCase, &t.Name, &t.Tags,
 			&t.Status, &startedAt, &finishedAt, &t.DurationMS, &t.ErrorMessage,
 			&t.ErrorStep, &t.SkipReason, &t.StepsJSON, &t.StepsPassed, &t.StepsFailed,
+			&t.PodName, &t.NodeName,
 		)
 		if err != nil {
 			return nil, err
@@ -430,13 +431,14 @@ func (r *Repository) GetTestResultByID(id int64) (*models.TestResult, error) {
 	err := r.db.QueryRow(`
 		SELECT id, run_id, test_id, use_case, test_case, name, tags, status,
 		       started_at, finished_at, duration_ms, error_message, error_step,
-		       skip_reason, steps_json, steps_passed, steps_failed
+		       skip_reason, steps_json, steps_passed, steps_failed, pod_name, node_name
 		FROM test_results
 		WHERE id = ?
 	`, id).Scan(
 		&t.ID, &t.RunID, &t.TestID, &t.UseCase, &t.TestCase, &t.Name, &t.Tags,
 		&t.Status, &startedAt, &finishedAt, &t.DurationMS, &t.ErrorMessage,
 		&t.ErrorStep, &t.SkipReason, &t.StepsJSON, &t.StepsPassed, &t.StepsFailed,
+		&t.PodName, &t.NodeName,
 	)
 
 	if err == sql.ErrNoRows {
@@ -450,6 +452,17 @@ func (r *Repository) GetTestResultByID(id int64) (*models.TestResult, error) {
 	t.FinishedAt = parseTime(finishedAt)
 
 	return &t, nil
+}
+
+// UpdateTestMeta updates pod/node metadata for a test result
+func (r *Repository) UpdateTestMeta(runID, testID, podName, nodeName string) error {
+	_, err := r.db.Exec(`
+		UPDATE test_results SET
+			pod_name = ?,
+			node_name = ?
+		WHERE run_id = ? AND test_id = ?
+	`, podName, nodeName, runID, testID)
+	return err
 }
 
 // ==================== Step Results ====================
@@ -659,7 +672,9 @@ func (r *Repository) UpdateTestResult(tr *models.TestResult) error {
 			error_step = ?,
 			steps_passed = ?,
 			steps_failed = ?,
-			steps_json = ?
+			steps_json = ?,
+			pod_name = ?,
+			node_name = ?
 		WHERE id = ?
 	`,
 		tr.Status,
@@ -671,6 +686,8 @@ func (r *Repository) UpdateTestResult(tr *models.TestResult) error {
 		tr.StepsPassed,
 		tr.StepsFailed,
 		nullString(tr.StepsJSON),
+		nullString(tr.PodName),
+		nullString(tr.NodeName),
 		tr.ID,
 	)
 	return err
@@ -684,13 +701,14 @@ func (r *Repository) GetTestResultByTestIDAndRunID(testID, runID string) (*model
 	err := r.db.QueryRow(`
 		SELECT id, run_id, test_id, use_case, test_case, name, tags, status,
 		       started_at, finished_at, duration_ms, error_message, error_step,
-		       skip_reason, steps_json, steps_passed, steps_failed
+		       skip_reason, steps_json, steps_passed, steps_failed, pod_name, node_name
 		FROM test_results
 		WHERE test_id = ? AND run_id = ?
 	`, testID, runID).Scan(
 		&t.ID, &t.RunID, &t.TestID, &t.UseCase, &t.TestCase, &t.Name, &t.Tags,
 		&t.Status, &startedAt, &finishedAt, &t.DurationMS, &t.ErrorMessage,
 		&t.ErrorStep, &t.SkipReason, &t.StepsJSON, &t.StepsPassed, &t.StepsFailed,
+		&t.PodName, &t.NodeName,
 	)
 
 	if err == sql.ErrNoRows {

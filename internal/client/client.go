@@ -28,6 +28,7 @@ func NewClient(baseURL string) *Client {
 
 // CreateRunRequest contains the parameters for creating a run
 type CreateRunRequest struct {
+	RunID                string     `json:"run_id,omitempty"`
 	SuiteID              int64      `json:"suite_id"`
 	SuiteName            string     `json:"suite_name"`
 	DisplayName          string     `json:"display_name"`
@@ -91,6 +92,8 @@ type UpdateTestStatusRequest struct {
 	ErrorMessage string `json:"error_message,omitempty"`
 	StepsPassed  *int   `json:"steps_passed,omitempty"`
 	StepsFailed  *int   `json:"steps_failed,omitempty"`
+	PodName      string `json:"pod_name,omitempty"`
+	NodeName     string `json:"node_name,omitempty"`
 }
 
 // UpdateTestStatus updates the status of a test
@@ -116,6 +119,36 @@ func (c *Client) UpdateTestStatus(runID, testID string, req *UpdateTestStatusReq
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to update test status: %s - %s", resp.Status, string(bodyBytes))
+	}
+
+	return nil
+}
+
+// UpdateTestMeta updates pod/node metadata for a test
+func (c *Client) UpdateTestMeta(runID, testID, podName, nodeName string) error {
+	body, err := json.Marshal(map[string]string{
+		"pod_name":  podName,
+		"node_name": nodeName,
+	})
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, c.baseURL+"/api/runs/"+runID+"/test-meta/"+testID, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to update test meta: %s - %s", resp.Status, string(bodyBytes))
 	}
 
 	return nil
@@ -265,4 +298,87 @@ func (c *Client) UpsertSuite(req *SyncSuiteRequest) (*SyncSuiteResponse, error) 
 		SuiteName:  req.SuiteName,
 		FolderPath: req.FolderPath,
 	}, nil
+}
+
+// TriggerRunRequest contains parameters for triggering a run via the API
+type TriggerRunRequest struct {
+	UC      string   `json:"uc,omitempty"`
+	TC      string   `json:"tc,omitempty"`
+	Tags    []string `json:"tags,omitempty"`
+	TestIDs []string `json:"test_ids,omitempty"`
+}
+
+// TriggerRunResponse is the response from triggering a run
+type TriggerRunResponse struct {
+	Started     bool   `json:"started"`
+	RunID       string `json:"run_id"`
+	PID         int    `json:"pid"`
+	Description string `json:"description"`
+	LogFile     string `json:"log_file"`
+}
+
+// TriggerRun starts a test run via the API
+func (c *Client) TriggerRun(suiteID int64, req *TriggerRunRequest) (*TriggerRunResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.httpClient.Post(
+		fmt.Sprintf("%s/api/suites/%d/run", c.baseURL, suiteID),
+		"application/json",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to trigger run: %s - %s", resp.Status, string(bodyBytes))
+	}
+
+	var result TriggerRunResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
+// RunWithTestsResponse contains run info and test results for progress display
+type RunWithTestsResponse struct {
+	RunID   string `json:"run_id"`
+	Status  string `json:"status"`
+	Passed  int    `json:"passed"`
+	Failed  int    `json:"failed"`
+	Skipped int    `json:"skipped"`
+	Tests   []struct {
+		TestID       string `json:"test_id"`
+		Status       string `json:"status"`
+		DurationMS   *int64 `json:"duration_ms"`
+		ErrorMessage string `json:"error_message"`
+	} `json:"tests"`
+}
+
+// GetRunWithTests gets run details including test results
+func (c *Client) GetRunWithTests(runID string) (*RunWithTestsResponse, error) {
+	resp, err := c.httpClient.Get(c.baseURL + "/api/runs/" + runID)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get run: %s - %s", resp.Status, string(bodyBytes))
+	}
+
+	var result RunWithTestsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
 }

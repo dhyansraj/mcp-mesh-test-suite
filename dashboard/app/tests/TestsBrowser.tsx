@@ -10,6 +10,7 @@ import {
   FileText,
   Container,
   Terminal,
+  Server,
   FlaskConical,
   Play,
   Loader2,
@@ -689,15 +690,19 @@ export function TestsBrowser({ suites }: TestsBrowserProps) {
                           "text-xs",
                           suite.mode === "docker"
                             ? "border-blue-500/50 text-blue-500"
+                            : suite.mode === "k8s"
+                            ? "border-purple-500/50 text-purple-500"
                             : "border-orange-500/50 text-orange-500"
                         )}
                       >
                         {suite.mode === "docker" ? (
                           <Container className="h-3 w-3 mr-1" />
+                        ) : suite.mode === "k8s" ? (
+                          <Server className="h-3 w-3 mr-1" />
                         ) : (
                           <Terminal className="h-3 w-3 mr-1" />
                         )}
-                        {suite.mode}
+                        {suite.mode === "standalone" && (suite.config as any)?.standalone?.type === "remote" ? "ssh" : suite.mode}
                       </Badge>
                       <span className="text-xs text-muted-foreground">
                         {suite.test_count} tests

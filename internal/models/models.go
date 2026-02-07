@@ -53,6 +53,7 @@ type SuiteMode string
 const (
 	SuiteModeDocker     SuiteMode = "docker"
 	SuiteModeStandalone SuiteMode = "standalone"
+	SuiteModeK8s        SuiteMode = "k8s"
 )
 
 // Suite represents a registered test suite
@@ -166,6 +167,8 @@ type TestResult struct {
 	Steps        any            `json:"steps,omitempty"`
 	StepsPassed  int            `json:"steps_passed"`
 	StepsFailed  int            `json:"steps_failed"`
+	PodName      sql.NullString `json:"pod_name,omitempty"`
+	NodeName     sql.NullString `json:"node_name,omitempty"`
 }
 
 // MarshalJSON customizes JSON output for TestResult
@@ -198,6 +201,8 @@ func (t TestResult) MarshalJSON() ([]byte, error) {
 		"steps":         steps,
 		"steps_passed":  t.StepsPassed,
 		"steps_failed":  t.StepsFailed,
+		"pod_name":      nullStringToAny(t.PodName),
+		"node_name":     nullStringToAny(t.NodeName),
 	})
 }
 

@@ -49,6 +49,8 @@ export interface TestResult {
   duration_ms: number | null;
   error_message: string | null;
   tags: string[];
+  pod_name: string | null;
+  node_name: string | null;
 }
 
 export interface TestDetail extends TestResult {
@@ -94,7 +96,7 @@ export interface Suite {
   id: number;
   folder_path: string;
   suite_name: string;
-  mode: "docker" | "standalone";
+  mode: "docker" | "standalone" | "k8s";
   config_json: string | null;
   config: Record<string, unknown> | null;
   test_count: number;
@@ -279,6 +281,7 @@ export async function browseFolders(path?: string): Promise<BrowseResponse> {
 
 export interface RunResponse {
   started: boolean;
+  run_id?: string;
   pid: number;
   description: string;
   mode: string;
@@ -634,7 +637,7 @@ export async function deleteTestStep(
 export interface SuiteConfigStructure {
   suite?: {
     name?: string;
-    mode?: "docker" | "standalone";
+    mode?: "docker" | "standalone" | "k8s";
     disabled?: boolean;
   };
   packages?: {
@@ -649,6 +652,24 @@ export interface SuiteConfigStructure {
   docker?: {
     base_image?: string;
     network?: string;
+  };
+  k8s?: {
+    namespace?: string;
+    nfs_server?: string;
+    nfs_path?: string;
+    image?: string;
+    api_url?: string;
+    kubeconfig?: string;
+  };
+  standalone?: {
+    type?: "local" | "remote";
+  };
+  ssh?: {
+    host?: string;
+    runner_dir?: string;
+    api_url?: string;
+    local_path?: string;
+    mount_path?: string;
   };
   execution?: {
     max_workers?: number;

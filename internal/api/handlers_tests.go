@@ -107,6 +107,8 @@ func (s *Server) sendTestDetailResponse(c *gin.Context, test *models.TestResult)
 		"skip_reason":   nullStringValue(test.SkipReason),
 		"steps_passed":  test.StepsPassed,
 		"steps_failed":  test.StepsFailed,
+		"pod_name":      nullStringValue(test.PodName),
+		"node_name":     nullStringValue(test.NodeName),
 		"steps":         steps,
 		"assertions":    assertions,
 		"captured":      captured,
@@ -393,4 +395,35 @@ func (s *Server) updateTestStatusByPath(c *gin.Context) {
 		testID = testID[1:]
 	}
 	s.doUpdateTestStatus(c, runID, testID)
+}
+
+// handleUpdateTestMeta handles PATCH /api/runs/:run_id/test-meta/*test_id
+func (s *Server) handleUpdateTestMeta(c *gin.Context) {
+	runID := c.Param("run_id")
+	testID := c.Param("test_id")
+	if len(testID) > 0 && testID[0] == '/' {
+		testID = testID[1:]
+	}
+
+	var req struct {
+		PodName  string `json:"pod_name"`
+		NodeName string `json:"node_name"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	if err := s.repo.UpdateTestMeta(runID, testID, req.PodName, req.NodeName); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update test meta: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":   true,
+		"test_id":   testID,
+		"pod_name":  req.PodName,
+		"node_name": req.NodeName,
+	})
 }
