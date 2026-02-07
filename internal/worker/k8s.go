@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -30,6 +31,7 @@ type K8sHandler struct {
 	image     string
 	nfsServer string
 	nfsPath   string
+	nfsRoot   string
 	suitePath string
 	podStates sync.Map // podName -> chan *WorkerResult
 }
@@ -94,6 +96,7 @@ func NewK8sHandler(cfg *config.SuiteConfig, suitePath string) (*K8sHandler, erro
 		image:     image,
 		nfsServer: cfg.K8s.NFSServer,
 		nfsPath:   cfg.K8s.NFSPath,
+		nfsRoot:   cfg.K8s.NFSRoot,
 		suitePath: suitePath,
 	}, nil
 }
@@ -104,11 +107,26 @@ func (h *K8sHandler) StartWorker(ctx context.Context, testID string, runID strin
 	// Generate pod name
 	podName := fmt.Sprintf("tsuite-%s-%s", k8sSanitizeName(testID), k8sShortID())
 
-	// Calculate NFS subpath for tests
-	testsSubPath := ""
-	if strings.HasPrefix(h.suitePath, h.nfsPath) {
-		testsSubPath = strings.TrimPrefix(h.suitePath, h.nfsPath)
-		testsSubPath = strings.TrimPrefix(testsSubPath, "/")
+	// Determine artifact paths
+	parts := strings.Split(testID, "/")
+	hasUCArtifacts := false
+	hasTCArtifacts := false
+	if len(parts) >= 1 {
+		ucLocalPath := filepath.Join(h.suitePath, "suites", parts[0], "artifacts")
+		if info, err := os.Stat(ucLocalPath); err == nil && info.IsDir() {
+			hasUCArtifacts = true
+		}
+	}
+	tcLocalPath := filepath.Join(h.suitePath, "suites", testID, "artifacts")
+	if info, err := os.Stat(tcLocalPath); err == nil && info.IsDir() {
+		hasTCArtifacts = true
+	}
+
+	// Compute suite path relative to NFS root (for initContainer mode)
+	suiteRelPath := ""
+	if h.nfsRoot != "" {
+		suiteRelPath = strings.TrimPrefix(h.nfsPath, h.nfsRoot)
+		suiteRelPath = strings.TrimPrefix(suiteRelPath, "/")
 	}
 
 	// Build pod spec
@@ -122,66 +140,29 @@ func (h *K8sHandler) StartWorker(ctx context.Context, testID string, runID strin
 				"test-id": k8sSanitizeName(testID),
 			},
 		},
-		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyNever,
-			Containers: []corev1.Container{
-				{
-					Name:    "test",
-					Image:   h.image,
-					Command: []string{"/usr/local/bin/tsuite-runner"},
-					Args: []string{
-						"--test-yaml", fmt.Sprintf("/tests/suites/%s/test.yaml", testID),
-						"--suite-path", "/tests",
-					},
-					Env: []corev1.EnvVar{
-						{Name: "TSUITE_API", Value: apiURL},
-						{Name: "TSUITE_RUN_ID", Value: runID},
-						{Name: "TSUITE_TEST_ID", Value: testID},
-					},
-					WorkingDir: "/workspace",
-					Resources: corev1.ResourceRequirements{
-						Requests: corev1.ResourceList{
-							corev1.ResourceCPU:    resource.MustParse("500m"),
-							corev1.ResourceMemory: resource.MustParse("1Gi"),
-						},
-						Limits: corev1.ResourceList{
-							corev1.ResourceCPU:    resource.MustParse("2"),
-							corev1.ResourceMemory: resource.MustParse("4Gi"),
-						},
-					},
-					VolumeMounts: []corev1.VolumeMount{
-						{
-							Name:      "tests",
-							MountPath: "/tests",
-							SubPath:   testsSubPath,
-							ReadOnly:  true,
-						},
-						{
-							Name:      "workspace",
-							MountPath: "/workspace",
-						},
-					},
+		Spec: k8sBuildPodSpec(
+			h.image, h.nfsServer, h.nfsPath, h.nfsRoot, suiteRelPath,
+			testID, parts, hasUCArtifacts, hasTCArtifacts,
+			[]string{
+				"--test-yaml", fmt.Sprintf("/tests/suites/%s/test.yaml", testID),
+				"--suite-path", "/tests",
+			},
+			[]corev1.EnvVar{
+				{Name: "TSUITE_API", Value: apiURL},
+				{Name: "TSUITE_RUN_ID", Value: runID},
+				{Name: "TSUITE_TEST_ID", Value: testID},
+			},
+			corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("500m"),
+					corev1.ResourceMemory: resource.MustParse("1Gi"),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("2"),
+					corev1.ResourceMemory: resource.MustParse("4Gi"),
 				},
 			},
-			Volumes: []corev1.Volume{
-				{
-					Name: "tests",
-					VolumeSource: corev1.VolumeSource{
-						NFS: &corev1.NFSVolumeSource{
-							Server:   h.nfsServer,
-							Path:     h.nfsPath,
-							ReadOnly: true,
-						},
-					},
-				},
-				{
-					Name: "workspace",
-					VolumeSource: corev1.VolumeSource{
-						EmptyDir: &corev1.EmptyDirVolumeSource{},
-					},
-				},
-			},
-		},
+		),
 	}
 
 	// Create pod
@@ -320,7 +301,133 @@ func k8sSanitizeName(s string) string {
 	if len(s) > 40 {
 		s = s[:40]
 	}
+	s = strings.TrimRight(s, "-.")
 	return s
+}
+
+// k8sBuildPodSpec builds the complete PodSpec for a test pod.
+// When nfsRoot is set, it uses an initContainer to copy artifacts with symlink
+// resolution (cp -rL) from the full NFS export into emptyDir volumes.
+// When nfsRoot is empty, it falls back to direct NFS artifact volume mounts.
+func k8sBuildPodSpec(image, nfsServer, nfsPath, nfsRoot, suiteRelPath string,
+	testID string, parts []string, hasUCArtifacts, hasTCArtifacts bool,
+	args []string, env []corev1.EnvVar, resources corev1.ResourceRequirements) corev1.PodSpec {
+
+	// Always present volumes
+	volumes := []corev1.Volume{
+		{Name: "tests", VolumeSource: corev1.VolumeSource{
+			NFS: &corev1.NFSVolumeSource{Server: nfsServer, Path: nfsPath, ReadOnly: true},
+		}},
+		{Name: "workspace", VolumeSource: corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{},
+		}},
+	}
+
+	// Always present mounts for main container
+	mainMounts := []corev1.VolumeMount{
+		{Name: "tests", MountPath: "/tests", ReadOnly: true},
+		{Name: "workspace", MountPath: "/workspace"},
+	}
+
+	var initContainers []corev1.Container
+
+	if nfsRoot != "" && (hasUCArtifacts || hasTCArtifacts) {
+		// InitContainer mode: mount full NFS export, copy with symlink resolution
+		volumes = append(volumes, corev1.Volume{
+			Name: "nfs-root",
+			VolumeSource: corev1.VolumeSource{
+				NFS: &corev1.NFSVolumeSource{Server: nfsServer, Path: nfsRoot, ReadOnly: true},
+			},
+		})
+
+		initMounts := []corev1.VolumeMount{
+			{Name: "nfs-root", MountPath: "/nfs", ReadOnly: true},
+		}
+
+		initScript := ""
+
+		if hasUCArtifacts {
+			volumes = append(volumes, corev1.Volume{
+				Name: "uc-artifacts",
+				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+			})
+			mainMounts = append(mainMounts, corev1.VolumeMount{
+				Name: "uc-artifacts", MountPath: "/uc-artifacts", ReadOnly: true,
+			})
+			initMounts = append(initMounts, corev1.VolumeMount{
+				Name: "uc-artifacts", MountPath: "/uc-artifacts",
+			})
+			ucSrc := fmt.Sprintf("/nfs/%s/suites/%s/artifacts/.", suiteRelPath, parts[0])
+			initScript += fmt.Sprintf("cp -rL %s /uc-artifacts/ 2>/dev/null || true\n", ucSrc)
+		}
+
+		if hasTCArtifacts {
+			volumes = append(volumes, corev1.Volume{
+				Name: "artifacts",
+				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+			})
+			mainMounts = append(mainMounts, corev1.VolumeMount{
+				Name: "artifacts", MountPath: "/artifacts", ReadOnly: true,
+			})
+			initMounts = append(initMounts, corev1.VolumeMount{
+				Name: "artifacts", MountPath: "/artifacts",
+			})
+			tcSrc := fmt.Sprintf("/nfs/%s/suites/%s/artifacts/.", suiteRelPath, testID)
+			initScript += fmt.Sprintf("cp -rL %s /artifacts/ 2>/dev/null || true\n", tcSrc)
+		}
+
+		initContainers = []corev1.Container{{
+			Name:            "setup-artifacts",
+			Image:           image,
+			ImagePullPolicy: corev1.PullAlways,
+			Command:         []string{"sh", "-c", initScript},
+			VolumeMounts:    initMounts,
+		}}
+	} else if hasUCArtifacts || hasTCArtifacts {
+		// Direct NFS mode (no nfsRoot): mount artifact dirs directly
+		// Note: symlinks won't resolve in this mode
+		if hasUCArtifacts {
+			ucNFSPath := nfsPath + "/suites/" + parts[0] + "/artifacts"
+			volumes = append(volumes, corev1.Volume{
+				Name: "uc-artifacts",
+				VolumeSource: corev1.VolumeSource{
+					NFS: &corev1.NFSVolumeSource{Server: nfsServer, Path: ucNFSPath, ReadOnly: true},
+				},
+			})
+			mainMounts = append(mainMounts, corev1.VolumeMount{
+				Name: "uc-artifacts", MountPath: "/uc-artifacts", ReadOnly: true,
+			})
+		}
+		if hasTCArtifacts {
+			tcNFSPath := nfsPath + "/suites/" + testID + "/artifacts"
+			volumes = append(volumes, corev1.Volume{
+				Name: "artifacts",
+				VolumeSource: corev1.VolumeSource{
+					NFS: &corev1.NFSVolumeSource{Server: nfsServer, Path: tcNFSPath, ReadOnly: true},
+				},
+			})
+			mainMounts = append(mainMounts, corev1.VolumeMount{
+				Name: "artifacts", MountPath: "/artifacts", ReadOnly: true,
+			})
+		}
+	}
+
+	return corev1.PodSpec{
+		RestartPolicy:  corev1.RestartPolicyNever,
+		InitContainers: initContainers,
+		Containers: []corev1.Container{{
+			Name:            "test",
+			Image:           image,
+			ImagePullPolicy: corev1.PullAlways,
+			Command:         []string{"/usr/local/bin/select-runner", "/usr/local/bin"},
+			Args:            args,
+			Env:             env,
+			WorkingDir:      "/workspace",
+			Resources:       resources,
+			VolumeMounts:    mainMounts,
+		}},
+		Volumes: volumes,
+	}
 }
 
 // logNoop is a helper that discards the logs string but satisfies the return signature.

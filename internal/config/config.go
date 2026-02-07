@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -55,6 +56,7 @@ type K8sSettings struct {
 	Namespace  string `yaml:"namespace"`   // default: "tsuite"
 	NFSServer  string `yaml:"nfs_server"`  // e.g., "10.0.0.50"
 	NFSPath    string `yaml:"nfs_path"`    // e.g., "/path/to/tests"
+	NFSRoot    string `yaml:"nfs_root"`    // NFS export root for symlink resolution (e.g., "/home/dhyanraj/workspace")
 	Image      string `yaml:"image"`       // override docker.base_image
 	APIUrl     string `yaml:"api_url"`     // e.g., "http://10.0.0.50:9999"
 	Kubeconfig string `yaml:"kubeconfig"`  // optional, defaults to ~/.kube/config
@@ -335,4 +337,22 @@ func (c *SuiteConfig) ToMap() map[string]any {
 	}
 
 	return m
+}
+
+// ResolveWithSecrets resolves relative paths in K8s settings using WORKSPACE_ROOT from secrets.
+func (c *SuiteConfig) ResolveWithSecrets(secrets map[string]string) {
+	root := strings.TrimRight(secrets["WORKSPACE_ROOT"], "/")
+	if root == "" {
+		return
+	}
+
+	if c.K8s.NFSPath != "" && !filepath.IsAbs(c.K8s.NFSPath) {
+		c.K8s.NFSPath = root + "/" + c.K8s.NFSPath
+	}
+
+	if c.K8s.NFSRoot == "" {
+		c.K8s.NFSRoot = root
+	} else if !filepath.IsAbs(c.K8s.NFSRoot) {
+		c.K8s.NFSRoot = root + "/" + c.K8s.NFSRoot
+	}
 }

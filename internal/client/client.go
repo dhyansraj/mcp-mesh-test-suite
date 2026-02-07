@@ -382,3 +382,24 @@ func (c *Client) GetRunWithTests(runID string) (*RunWithTestsResponse, error) {
 
 	return &result, nil
 }
+
+// GetSecretValues fetches all secret values from the API server
+func (c *Client) GetSecretValues() (map[string]string, error) {
+	resp, err := c.httpClient.Get(c.baseURL + "/api/secrets/values")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get secret values: %s - %s", resp.Status, string(bodyBytes))
+	}
+
+	var result map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}

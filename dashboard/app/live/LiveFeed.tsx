@@ -291,7 +291,11 @@ function TestTree({ useCases, expandedIds, onToggle, onTestClick, onRerunTest, f
   const filteredUseCases = useCases.map((uc) => ({
     ...uc,
     tests: filter
-      ? uc.tests.filter((t) => t.status === filter)
+      ? uc.tests.filter((t) =>
+          filter === "failed"
+            ? t.status === "failed" || t.status === "crashed"
+            : t.status === filter
+        )
       : uc.tests,
   })).filter((uc) => uc.tests.length > 0);
 
@@ -899,6 +903,30 @@ export function LiveFeed() {
       .length;
   }, [testTree]);
 
+  const filteredTestIds = useMemo(() => {
+    if (!statusFilter || !testTree?.use_cases) return [];
+    return testTree.use_cases
+      .flatMap((uc) => uc.tests)
+      .filter((t) =>
+        statusFilter === "failed"
+          ? t.status === "failed" || t.status === "crashed"
+          : t.status === statusFilter
+      )
+      .map((t) => t.test_id);
+  }, [statusFilter, testTree]);
+
+  const handleRunFiltered = useCallback(async () => {
+    if (!run?.suite_id || filteredTestIds.length === 0) return;
+    setRerunning(true);
+    try {
+      await runTests(run.suite_id, { test_ids: filteredTestIds });
+    } catch (err) {
+      console.error("Failed to run filtered tests:", err);
+    } finally {
+      setRerunning(false);
+    }
+  }, [run, filteredTestIds]);
+
   // Find all currently running tests
   const runningTests = useMemo(() => {
     if (!testTree) return [];
@@ -995,18 +1023,22 @@ export function LiveFeed() {
                   {/* Rerun button - show for completed/cancelled/failed runs */}
                   {run.suite_id && (run.status === "completed" || run.status === "cancelled" || run.status === "failed") && (
                     <Button
-                      variant="outline"
+                      variant={statusFilter ? "default" : "outline"}
                       size="sm"
-                      onClick={handleRerun}
+                      onClick={statusFilter && filteredTestIds.length > 0 ? handleRunFiltered : handleRerun}
                       disabled={rerunning}
                       className="gap-2"
                     >
                       {rerunning ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : statusFilter ? (
+                        <Play className="h-4 w-4" />
                       ) : (
                         <RotateCcw className="h-4 w-4" />
                       )}
-                      Rerun
+                      {statusFilter
+                        ? `Run ${statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1)} (${filteredTestIds.length})`
+                        : "Rerun"}
                     </Button>
                   )}
                 </div>

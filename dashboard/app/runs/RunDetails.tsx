@@ -100,6 +100,17 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
 
   const useCases = useMemo(() => groupTestsByUseCase(tests), [tests]);
 
+  const filteredTestIds = useMemo(() => {
+    if (!filter) return [];
+    return tests
+      .filter((t) =>
+        filter === "failed"
+          ? t.status === "failed" || t.status === "crashed"
+          : t.status === filter
+      )
+      .map((t) => t.test_id);
+  }, [filter, tests]);
+
   const handleRerun = async () => {
     if (!run.suite_id) return;
 
@@ -109,6 +120,19 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
       router.push("/live");
     } catch (error) {
       console.error("Failed to rerun:", error);
+    } finally {
+      setRerunning(false);
+    }
+  };
+
+  const handleRunFiltered = async () => {
+    if (!run.suite_id || filteredTestIds.length === 0) return;
+    setRerunning(true);
+    try {
+      await runTests(run.suite_id, { test_ids: filteredTestIds });
+      router.push("/live");
+    } catch (error) {
+      console.error("Failed to run filtered tests:", error);
     } finally {
       setRerunning(false);
     }
@@ -216,18 +240,22 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
               {/* Rerun button */}
               {run.suite_id && (
                 <Button
-                  variant="outline"
+                  variant={filter ? "default" : "outline"}
                   size="sm"
-                  onClick={handleRerun}
+                  onClick={filter && filteredTestIds.length > 0 ? handleRunFiltered : handleRerun}
                   disabled={rerunning}
                   className="gap-2"
                 >
                   {rerunning ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : filter ? (
+                    <Play className="h-4 w-4" />
                   ) : (
                     <RotateCcw className="h-4 w-4" />
                   )}
-                  Rerun
+                  {filter
+                    ? `Run ${filter === "failed" ? "Failed" : "Passed"} (${filteredTestIds.length})`
+                    : "Rerun"}
                 </Button>
               )}
               {/* Delete button */}

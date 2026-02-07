@@ -537,6 +537,13 @@ func executeTests(cmd *cobra.Command, args []string) error {
 		fmt.Printf("API Server: %s\n", apiURL)
 	}
 
+	// Resolve config paths using secrets (e.g., WORKSPACE_ROOT for k8s NFS paths)
+	if apiClient != nil {
+		if secrets, err := apiClient.GetSecretValues(); err == nil {
+			suiteConfig.ResolveWithSecrets(secrets)
+		}
+	}
+
 	var runID string
 	var suiteID int64
 

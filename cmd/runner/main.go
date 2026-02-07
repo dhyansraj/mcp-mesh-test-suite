@@ -73,6 +73,17 @@ func runTest(cmd *cobra.Command, args []string) error {
 		logDir = os.Getenv("TSUITE_LOG_DIR")
 	}
 
+	// Export resolved values to environment so shell handlers can access them
+	if apiURL != "" {
+		os.Setenv("TSUITE_API", apiURL)
+	}
+	if runID != "" {
+		os.Setenv("TSUITE_RUN_ID", runID)
+	}
+	if testID != "" {
+		os.Setenv("TSUITE_TEST_ID", testID)
+	}
+
 	// Validate required parameters
 	if suitePath == "" {
 		return fmt.Errorf("--suite-path is required")
