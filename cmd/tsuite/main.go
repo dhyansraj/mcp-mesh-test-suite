@@ -348,6 +348,8 @@ func runAPIServer(cmd *cobra.Command, args []string) error {
 	defer os.Remove(pidFile)
 	defer os.Remove(portFile)
 
+	api.Version = version
+
 	server, err := api.NewServer(port)
 	if err != nil {
 		return fmt.Errorf("failed to create server: %w", err)

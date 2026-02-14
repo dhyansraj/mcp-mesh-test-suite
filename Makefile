@@ -1,4 +1,4 @@
-.PHONY: build build-cli build-runner run clean deps test build-dashboard build-with-dashboard build-runner-linux-amd64 build-runner-linux-arm64 build-runner-linux-all build-runner-darwin-amd64 build-runner-darwin-arm64 build-runner-all build-with-runners prepare-runners build-all
+.PHONY: build build-cli build-runner run clean deps test build-dashboard build-with-dashboard build-runner-linux-amd64 build-runner-linux-arm64 build-runner-linux-all build-runner-darwin-amd64 build-runner-darwin-arm64 build-runner-all build-with-runners prepare-runners clean-runners build-all
 
 # Version can be overridden: make build VERSION=1.2.3
 VERSION ?= dev
@@ -75,8 +75,13 @@ prepare-runners: build-runner-all
 	cp bin/tsuite-runner-darwin-arm64 cmd/tsuite/runners/
 	cp scripts/select-runner.sh cmd/tsuite/runners/select-runner
 
+# Clean runner embed directory (for smaller CLI builds after prepare-runners)
+clean-runners:
+	rm -f cmd/tsuite/runners/tsuite-runner-*
+	rm -f cmd/tsuite/runners/select-runner
+
 # Build CLI with embedded runner binaries
 build-with-runners: prepare-runners build-cli
 
 # Build everything (dashboard + runners)
-build-all: build-dashboard prepare-runners build-cli build-runner
+build-all: build-dashboard build-cli build-runner
