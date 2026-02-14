@@ -72,12 +72,20 @@ func (h *NpmInstallHandler) Execute(step map[string]any, ctx *interpolate.Contex
 			}
 		}
 
-		if err := replaceFileDepependencies(packageJSON, version); err != nil {
+		modified, err := replaceFileDepependencies(packageJSON, version)
+		if err != nil {
 			return StepResult{
 				Success:  false,
 				ExitCode: 1,
 				Error:    fmt.Sprintf("failed to replace file: dependencies: %v", err),
 			}
+		}
+
+		// Delete package-lock.json if file: deps were replaced
+		// The lock file contains stale file: references that would cause npm install to fail
+		if modified {
+			lockFile := filepath.Join(path, "package-lock.json")
+			os.Remove(lockFile)
 		}
 	}
 
@@ -194,17 +202,17 @@ func (h *NpmInstallHandler) Execute(step map[string]any, ctx *interpolate.Contex
 // This is useful when examples reference local packages via file: paths
 // that don't exist in the container. The version is replaced so npm install
 // can resolve the package, and local .tgz packages can override afterward.
-func replaceFileDepependencies(packageJSONPath string, version string) error {
+func replaceFileDepependencies(packageJSONPath string, version string) (bool, error) {
 	// Read package.json
 	data, err := os.ReadFile(packageJSONPath)
 	if err != nil {
-		return fmt.Errorf("failed to read package.json: %w", err)
+		return false, fmt.Errorf("failed to read package.json: %w", err)
 	}
 
 	// Parse as generic map to preserve structure
 	var pkg map[string]any
 	if err := json.Unmarshal(data, &pkg); err != nil {
-		return fmt.Errorf("failed to parse package.json: %w", err)
+		return false, fmt.Errorf("failed to parse package.json: %w", err)
 	}
 
 	modified := false
@@ -254,14 +262,14 @@ func replaceFileDepependencies(packageJSONPath string, version string) error {
 		// Marshal with indentation to preserve readability
 		newData, err := json.MarshalIndent(pkg, "", "  ")
 		if err != nil {
-			return fmt.Errorf("failed to marshal package.json: %w", err)
+			return false, fmt.Errorf("failed to marshal package.json: %w", err)
 		}
 
 		// Write back
 		if err := os.WriteFile(packageJSONPath, newData, 0644); err != nil {
-			return fmt.Errorf("failed to write package.json: %w", err)
+			return false, fmt.Errorf("failed to write package.json: %w", err)
 		}
 	}
 
-	return nil
+	return modified, nil
 }

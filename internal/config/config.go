@@ -59,7 +59,9 @@ type K8sSettings struct {
 	NFSRoot    string `yaml:"nfs_root"`    // NFS export root for symlink resolution (e.g., "/home/dhyanraj/workspace")
 	Image      string `yaml:"image"`       // override docker.base_image
 	APIUrl     string `yaml:"api_url"`     // e.g., "http://10.0.0.50:9999"
-	Kubeconfig string `yaml:"kubeconfig"`  // optional, defaults to ~/.kube/config
+	Kubeconfig  string `yaml:"kubeconfig"`    // optional, defaults to ~/.kube/config
+	MemoryLimit string `yaml:"memory_limit"` // pod memory limit, default "4Gi"
+	CPULimit    string `yaml:"cpu_limit"`    // pod CPU limit, default "2"
 }
 
 // StandaloneSettings contains standalone mode configuration
@@ -339,20 +341,37 @@ func (c *SuiteConfig) ToMap() map[string]any {
 	return m
 }
 
-// ResolveWithSecrets resolves relative paths in K8s settings using WORKSPACE_ROOT from secrets.
-func (c *SuiteConfig) ResolveWithSecrets(secrets map[string]string) {
-	root := strings.TrimRight(secrets["WORKSPACE_ROOT"], "/")
-	if root == "" {
-		return
+// ResolveWithSecrets resolves paths using workspace root secrets.
+// REMOTE_WORKSPACE_ROOT: used for k8s NFS paths and SSH mount_path
+// LOCAL_WORKSPACE_ROOT: used for SSH local_path and deriving k8s nfs_path
+func (c *SuiteConfig) ResolveWithSecrets(secrets map[string]string, suitePath string) {
+	remoteRoot := strings.TrimRight(secrets["REMOTE_WORKSPACE_ROOT"], "/")
+	localRoot := strings.TrimRight(secrets["LOCAL_WORKSPACE_ROOT"], "/")
+
+	// K8s: resolve relative NFS paths
+	if remoteRoot != "" {
+		if c.K8s.NFSPath != "" && !filepath.IsAbs(c.K8s.NFSPath) {
+			c.K8s.NFSPath = remoteRoot + "/" + c.K8s.NFSPath
+		}
+		if c.K8s.NFSRoot == "" {
+			c.K8s.NFSRoot = remoteRoot
+		} else if !filepath.IsAbs(c.K8s.NFSRoot) {
+			c.K8s.NFSRoot = remoteRoot + "/" + c.K8s.NFSRoot
+		}
 	}
 
-	if c.K8s.NFSPath != "" && !filepath.IsAbs(c.K8s.NFSPath) {
-		c.K8s.NFSPath = root + "/" + c.K8s.NFSPath
+	// K8s: derive nfs_path from suite path when not configured
+	if c.K8s.NFSPath == "" && localRoot != "" && remoteRoot != "" && strings.HasPrefix(suitePath, localRoot) {
+		relPath := strings.TrimPrefix(suitePath, localRoot)
+		relPath = strings.TrimPrefix(relPath, "/")
+		c.K8s.NFSPath = remoteRoot + "/" + relPath
 	}
 
-	if c.K8s.NFSRoot == "" {
-		c.K8s.NFSRoot = root
-	} else if !filepath.IsAbs(c.K8s.NFSRoot) {
-		c.K8s.NFSRoot = root + "/" + c.K8s.NFSRoot
+	// SSH: default local_path and mount_path from secrets
+	if c.SSH.LocalPath == "" && localRoot != "" {
+		c.SSH.LocalPath = localRoot
+	}
+	if c.SSH.MountPath == "" && remoteRoot != "" {
+		c.SSH.MountPath = remoteRoot
 	}
 }

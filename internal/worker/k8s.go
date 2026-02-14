@@ -31,9 +31,11 @@ type K8sHandler struct {
 	image     string
 	nfsServer string
 	nfsPath   string
-	nfsRoot   string
-	suitePath string
-	podStates sync.Map // podName -> chan *WorkerResult
+	nfsRoot     string
+	suitePath   string
+	memoryLimit string
+	cpuLimit    string
+	podStates   sync.Map // podName -> chan *WorkerResult
 }
 
 // NewK8sHandler creates a new K8s worker handler
@@ -90,14 +92,25 @@ func NewK8sHandler(cfg *config.SuiteConfig, suitePath string) (*K8sHandler, erro
 		namespace = "tsuite"
 	}
 
+	memLimit := "4Gi"
+	if cfg.K8s.MemoryLimit != "" {
+		memLimit = cfg.K8s.MemoryLimit
+	}
+	cpuLim := "2"
+	if cfg.K8s.CPULimit != "" {
+		cpuLim = cfg.K8s.CPULimit
+	}
+
 	return &K8sHandler{
-		client:    clientset,
-		namespace: namespace,
-		image:     image,
-		nfsServer: cfg.K8s.NFSServer,
-		nfsPath:   cfg.K8s.NFSPath,
-		nfsRoot:   cfg.K8s.NFSRoot,
-		suitePath: suitePath,
+		client:      clientset,
+		namespace:   namespace,
+		image:       image,
+		nfsServer:   cfg.K8s.NFSServer,
+		nfsPath:     cfg.K8s.NFSPath,
+		nfsRoot:     cfg.K8s.NFSRoot,
+		suitePath:   suitePath,
+		memoryLimit: memLimit,
+		cpuLimit:    cpuLim,
 	}, nil
 }
 
@@ -158,8 +171,8 @@ func (h *K8sHandler) StartWorker(ctx context.Context, testID string, runID strin
 					corev1.ResourceMemory: resource.MustParse("1Gi"),
 				},
 				Limits: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("2"),
-					corev1.ResourceMemory: resource.MustParse("4Gi"),
+					corev1.ResourceCPU:    resource.MustParse(h.cpuLimit),
+					corev1.ResourceMemory: resource.MustParse(h.memoryLimit),
 				},
 			},
 		),
@@ -359,6 +372,8 @@ func k8sBuildPodSpec(image, nfsServer, nfsPath, nfsRoot, suiteRelPath string,
 			})
 			ucSrc := fmt.Sprintf("/nfs/%s/suites/%s/artifacts/.", suiteRelPath, parts[0])
 			initScript += fmt.Sprintf("cp -rL %s /uc-artifacts/ 2>/dev/null || true\n", ucSrc)
+			initScript += "find /uc-artifacts -type d \\( -name node_modules -o -name .venv -o -name __pycache__ -o -name target -o -name dist -o -name build \\) -exec rm -rf {} + 2>/dev/null || true\n"
+			initScript += "find /uc-artifacts -name package-lock.json -delete 2>/dev/null || true\n"
 		}
 
 		if hasTCArtifacts {
@@ -374,6 +389,8 @@ func k8sBuildPodSpec(image, nfsServer, nfsPath, nfsRoot, suiteRelPath string,
 			})
 			tcSrc := fmt.Sprintf("/nfs/%s/suites/%s/artifacts/.", suiteRelPath, testID)
 			initScript += fmt.Sprintf("cp -rL %s /artifacts/ 2>/dev/null || true\n", tcSrc)
+			initScript += "find /artifacts -type d \\( -name node_modules -o -name .venv -o -name __pycache__ -o -name target -o -name dist -o -name build \\) -exec rm -rf {} + 2>/dev/null || true\n"
+			initScript += "find /artifacts -name package-lock.json -delete 2>/dev/null || true\n"
 		}
 
 		initContainers = []corev1.Container{{
