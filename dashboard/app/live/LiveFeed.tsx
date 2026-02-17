@@ -45,6 +45,8 @@ import {
   StopCircle,
   Play,
   RotateCcw,
+  Link2,
+  Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import SlotCounter from "react-slot-counter";
@@ -438,6 +440,7 @@ interface TestDetailDialogProps {
 function TestDetailDialog({ open, onOpenChange, testDetail, loading, error, suiteId, onRerunTest }: TestDetailDialogProps) {
   const [expandedAssertions, setExpandedAssertions] = useState<Set<number>>(new Set());
   const [rerunning, setRerunning] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const handleRerun = async () => {
     if (!testDetail || !suiteId || !onRerunTest) return;
@@ -449,6 +452,14 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading, error, suit
     } finally {
       setRerunning(false);
     }
+  };
+
+  const handleCopyUrl = () => {
+    if (!testDetail) return;
+    const url = `${window.location.protocol}//${window.location.host}/api/runs/${testDetail.run_id}/tests/${testDetail.id}`;
+    navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const toggleAssertion = (idx: number) => {
@@ -475,21 +486,37 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading, error, suit
               {error && <XCircle className="h-4 w-4 text-destructive" />}
               <span className="truncate">{testDetail?.name || testDetail?.test_id || "Test Details"}</span>
             </DialogTitle>
-            {suiteId && testDetail && onRerunTest && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleRerun}
-                disabled={rerunning}
-                className="ml-4"
-              >
-                {rerunning ? (
-                  <Loader2 className="h-4 w-4 animate-spin mr-1" />
-                ) : (
-                  <Play className="h-4 w-4 mr-1" />
+            {testDetail && (
+              <div className="flex flex-col gap-1 items-end ml-4">
+                {suiteId && onRerunTest && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleRerun}
+                    disabled={rerunning}
+                  >
+                    {rerunning ? (
+                      <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                    ) : (
+                      <Play className="h-4 w-4 mr-1" />
+                    )}
+                    Rerun
+                  </Button>
                 )}
-                Rerun
-              </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={handleCopyUrl}
+                  title="Copy API URL"
+                  className="h-7 px-2 text-muted-foreground"
+                >
+                  {copied ? (
+                    <Check className="h-3.5 w-3.5 text-green-500" />
+                  ) : (
+                    <Link2 className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+              </div>
             )}
           </div>
         </DialogHeader>
