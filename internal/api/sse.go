@@ -240,3 +240,36 @@ func (h *SSEHub) EmitRunCancelled(runID string, passed, failed, skipped int, dur
 	}), runID)
 	h.SetCurrentRun("")
 }
+
+// EmitStepStarted broadcasts a step_started event for live step progress
+func (h *SSEHub) EmitStepStarted(runID, testID, phase string, stepIndex int, name, handler string) {
+	h.Emit(NewSSEEvent("step_started", map[string]any{
+		"run_id":  runID,
+		"test_id": testID,
+		"phase":   phase,
+		"step_index": stepIndex,
+		"name":       name,
+		"handler":    handler,
+	}), runID)
+}
+
+// EmitStepCompleted broadcasts a step_completed event for live step progress
+func (h *SSEHub) EmitStepCompleted(runID, testID, phase string, stepIndex int, name, handler string, success bool, stdout, stderr, errorMsg string, durationMS int64) {
+	status := "passed"
+	if !success {
+		status = "failed"
+	}
+	h.Emit(NewSSEEvent("step_completed", map[string]any{
+		"run_id":        runID,
+		"test_id":       testID,
+		"phase":         phase,
+		"step_index":    stepIndex,
+		"name":          name,
+		"handler":       handler,
+		"status":        status,
+		"stdout":        stdout,
+		"stderr":        stderr,
+		"error_message": errorMsg,
+		"duration_ms":   durationMS,
+	}), runID)
+}

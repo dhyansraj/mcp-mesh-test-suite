@@ -436,8 +436,7 @@ func k8sBuildPodSpec(image, nfsServer, nfsPath, nfsRoot, suiteRelPath string,
 			Name:            "test",
 			Image:           image,
 			ImagePullPolicy: corev1.PullAlways,
-			Command:         []string{"/usr/local/bin/select-runner", "/usr/local/bin"},
-			Args:            args,
+			Command:         []string{"sh", "-c", k8sRunnerScript(args)},
 			Env:             env,
 			WorkingDir:      "/workspace",
 			Resources:       resources,
@@ -445,6 +444,34 @@ func k8sBuildPodSpec(image, nfsServer, nfsPath, nfsRoot, suiteRelPath string,
 		}},
 		Volumes: volumes,
 	}
+}
+
+// k8sRunnerScript generates a shell script that downloads the runner from the API and executes it.
+// This ensures k8s pods always use the latest runner without needing to rebuild the Docker image.
+// The TSUITE_API env var is already set on the pod.
+func k8sRunnerScript(args []string) string {
+	// Quote args for shell safety
+	quotedArgs := ""
+	for _, arg := range args {
+		quotedArgs += fmt.Sprintf(" %q", arg)
+	}
+
+	return fmt.Sprintf(`set -e
+# Detect architecture and download the correct runner from the API
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64)  RUNNER=tsuite-runner-linux-amd64 ;;
+  aarch64) RUNNER=tsuite-runner-linux-arm64 ;;
+  *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
+esac
+
+# Download runner from API (TSUITE_API is set as env var)
+echo "Fetching runner from $TSUITE_API/api/runners/$RUNNER..."
+curl -sf -o /tmp/tsuite-runner "$TSUITE_API/api/runners/$RUNNER"
+chmod +x /tmp/tsuite-runner
+
+# Execute the runner with test arguments
+exec /tmp/tsuite-runner%s`, quotedArgs)
 }
 
 // logNoop is a helper that discards the logs string but satisfies the return signature.

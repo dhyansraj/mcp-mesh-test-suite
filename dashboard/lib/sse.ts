@@ -25,6 +25,9 @@ export interface SSEEvent {
   handler?: string;
   steps_passed?: number;
   steps_failed?: number;
+  stdout?: string;
+  stderr?: string;
+  error_message?: string;
 }
 
 export interface UseSSEOptions {

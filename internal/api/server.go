@@ -106,6 +106,7 @@ func (s *Server) setupRoutes() {
 		api.GET("/runs/:run_id/tests/tree", s.getRunTestsTree)              // Dashboard uses this
 		api.GET("/runs/:run_id/tests/:test_id", s.getTestDetailByNumericID)  // Dashboard uses numeric ID
 		api.GET("/runs/:run_id/test/*test_id", s.getTestDetail)              // CLI uses path-based ID
+		api.POST("/runs/:run_id/test-steps/*test_id", s.reportStepCompleted)  // Per-step live reporting
 		api.PATCH("/runs/:run_id/test/*test_id", s.updateTestStatus)          // Go runner uses wildcard path
 		api.PATCH("/runs/:run_id/tests/*test_id", s.updateTestStatusByPath)  // Python runner uses this (also wildcard for paths with /)
 		api.PATCH("/runs/:run_id/test-meta/*test_id", s.handleUpdateTestMeta)

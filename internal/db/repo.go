@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/models"
@@ -474,7 +475,7 @@ func (r *Repository) GetStepResultsByTestID(testResultID int64) ([]models.StepRe
 		       started_at, finished_at, duration_ms, exit_code, stdout, stderr, error_message
 		FROM step_results
 		WHERE test_result_id = ?
-		ORDER BY phase, step_index
+		ORDER BY CASE phase WHEN 'pre_run' THEN 1 WHEN 'test' THEN 2 WHEN 'post_run' THEN 3 ELSE 4 END, step_index
 	`, testResultID)
 	if err != nil {
 		return nil, err
@@ -871,6 +872,12 @@ func (r *Repository) DeleteRun(runID string) error {
 
 // ==================== Step Results ====================
 
+// DeleteStepResultsByTestID deletes all step results for a test
+func (r *Repository) DeleteStepResultsByTestID(testResultID int64) error {
+	_, err := r.db.Exec("DELETE FROM step_results WHERE test_result_id = ?", testResultID)
+	return err
+}
+
 // CreateStepResult creates a new step result record
 func (r *Repository) CreateStepResult(sr *models.StepResult) error {
 	result, err := r.db.Exec(`
@@ -902,6 +909,41 @@ func (r *Repository) CreateStepResult(sr *models.StepResult) error {
 		return err
 	}
 	sr.ID = id
+	return nil
+}
+
+// UpdateStepResult updates an existing step result (e.g., from running to passed/failed)
+func (r *Repository) UpdateStepResult(sr *models.StepResult) error {
+	result, err := r.db.Exec(`
+		UPDATE step_results SET
+			handler = ?, description = ?, status = ?,
+			finished_at = ?, duration_ms = ?, exit_code = ?,
+			stdout = ?, stderr = ?, error_message = ?
+		WHERE test_result_id = ? AND phase = ? AND step_index = ?
+	`,
+		sr.Handler,
+		nullString(sr.Description),
+		sr.Status,
+		formatTime(sr.FinishedAt),
+		nullInt64(sr.DurationMS),
+		nullInt64(sr.ExitCode),
+		nullString(sr.Stdout),
+		nullString(sr.Stderr),
+		nullString(sr.ErrorMessage),
+		sr.TestResultID,
+		sr.Phase,
+		sr.StepIndex,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("no step found to update")
+	}
 	return nil
 }
 

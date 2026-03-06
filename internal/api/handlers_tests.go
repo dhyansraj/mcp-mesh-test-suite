@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -307,6 +308,10 @@ func (s *Server) doUpdateTestStatus(c *gin.Context, runID, testID string) {
 
 	// Store step results in step_results table
 	if len(req.Steps) > 0 {
+		// Clear any previously inserted step results (from per-step reporting)
+		// to avoid duplicates when the final report re-inserts all steps
+		s.repo.DeleteStepResultsByTestID(tr.ID)
+
 		for _, step := range req.Steps {
 			stepResult := &models.StepResult{
 				TestResultID: tr.ID,
@@ -425,5 +430,132 @@ func (s *Server) handleUpdateTestMeta(c *gin.Context) {
 		"test_id":   testID,
 		"pod_name":  req.PodName,
 		"node_name": req.NodeName,
+	})
+}
+
+// reportStepCompleted handles POST /api/runs/:run_id/test-steps/*test_id
+// This is called by the runner for live step progress reporting.
+// - Step start: {"phase":"test","index":0,"name":"...","handler":"...","status":"running"}
+// - Step complete: full StepReport with success/exit_code/stdout/stderr
+func (s *Server) reportStepCompleted(c *gin.Context) {
+	runID := c.Param("run_id")
+	testID := c.Param("test_id")
+	// Gin wildcard includes leading slash, strip it
+	if len(testID) > 0 && testID[0] == '/' {
+		testID = testID[1:]
+	}
+
+	// Parse into a map first to check for explicit status field
+	var raw map[string]json.RawMessage
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read body"})
+		return
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
+		return
+	}
+
+	// Look up the test result
+	tr, err := s.repo.GetTestResultByTestIDAndRunID(testID, runID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if tr == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Test not found"})
+		return
+	}
+
+	// Check if this is a step start (has explicit "status":"running")
+	var explicitStatus string
+	if statusRaw, ok := raw["status"]; ok {
+		json.Unmarshal(statusRaw, &explicitStatus)
+	}
+
+	if explicitStatus == "running" {
+		// Step start -- create a running step record
+		var req struct {
+			Phase   string `json:"phase"`
+			Index   int    `json:"index"`
+			Name    string `json:"name"`
+			Handler string `json:"handler"`
+		}
+		json.Unmarshal(body, &req)
+
+		now := time.Now()
+		stepResult := &models.StepResult{
+			TestResultID: tr.ID,
+			StepIndex:    req.Index,
+			Phase:        req.Phase,
+			Handler:      req.Handler,
+			Description:  sql.NullString{String: req.Name, Valid: req.Name != ""},
+			Status:       models.StepStatusRunning,
+			StartedAt:    &now,
+		}
+
+		if err := s.repo.CreateStepResult(stepResult); err != nil {
+			// May fail if step already exists (e.g. retry) -- ignore
+			fmt.Printf("Warning: Failed to insert step start: %v\n", err)
+		}
+
+		// Emit SSE event
+		s.sseHub.EmitStepStarted(runID, testID, req.Phase, req.Index, req.Name, req.Handler)
+
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"test_id": testID,
+			"phase":   req.Phase,
+			"index":   req.Index,
+			"status":  "running",
+		})
+		return
+	}
+
+	// Step complete -- parse full step report and update
+	var step StepReport
+	if err := json.Unmarshal(body, &step); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid step report"})
+		return
+	}
+
+	status := models.StepStatusPassed
+	if !step.Success {
+		status = models.StepStatusFailed
+	}
+
+	now := time.Now()
+	stepResult := &models.StepResult{
+		TestResultID: tr.ID,
+		StepIndex:    step.Index,
+		Phase:        step.Phase,
+		Handler:      step.Handler,
+		Description:  sql.NullString{String: step.Name, Valid: step.Name != ""},
+		Status:       status,
+		FinishedAt:   &now,
+		ExitCode:     sql.NullInt64{Int64: int64(step.ExitCode), Valid: true},
+		Stdout:       sql.NullString{String: step.Stdout, Valid: step.Stdout != ""},
+		Stderr:       sql.NullString{String: step.Stderr, Valid: step.Stderr != ""},
+		ErrorMessage: sql.NullString{String: step.Error, Valid: step.Error != ""},
+		DurationMS:   sql.NullInt64{Int64: step.DurationMS, Valid: step.DurationMS > 0},
+	}
+
+	// Try update first (step was created at start), fall back to insert
+	if err := s.repo.UpdateStepResult(stepResult); err != nil {
+		// Fallback: insert if no existing record (runner may not have sent start)
+		if err2 := s.repo.CreateStepResult(stepResult); err2 != nil {
+			fmt.Printf("Warning: Failed to upsert step result: %v\n", err2)
+		}
+	}
+
+	// Emit SSE event
+	s.sseHub.EmitStepCompleted(runID, testID, step.Phase, step.Index, step.Name, step.Handler, step.Success, step.Stdout, step.Stderr, step.Error, step.DurationMS)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"test_id": testID,
+		"phase":   step.Phase,
+		"index":   step.Index,
 	})
 }

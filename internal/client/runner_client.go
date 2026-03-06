@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/runner"
@@ -165,4 +166,92 @@ func (c *RunnerClient) sendStatusUpdate(report *TestStatusReport) error {
 	}
 
 	return nil
+}
+
+// ReportStepStarted reports that a step has started executing
+func (c *RunnerClient) ReportStepStarted(phase string, index int, name string, handler string) error {
+	report := map[string]any{
+		"phase":   phase,
+		"index":   index,
+		"name":    name,
+		"handler": handler,
+		"status":  "running",
+	}
+	body, err := json.Marshal(report)
+	if err != nil {
+		return fmt.Errorf("failed to marshal step start: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/runs/%s/test-steps/%s", c.baseURL, c.runID, c.testID)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error: %s - %s", resp.Status, string(bodyBytes))
+	}
+
+	return nil
+}
+
+// OnStepStarted implements runner.StepReporter by reporting step start to the API
+func (c *RunnerClient) OnStepStarted(phase string, index int, name string, handler string) {
+	if err := c.ReportStepStarted(phase, index, name, handler); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to report step started: %v\n", err)
+	}
+}
+
+// ReportStepCompleted reports a single step result to the API server
+func (c *RunnerClient) ReportStepCompleted(step StepReport) error {
+	body, err := json.Marshal(step)
+	if err != nil {
+		return fmt.Errorf("failed to marshal step: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/runs/%s/test-steps/%s", c.baseURL, c.runID, c.testID)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error: %s - %s", resp.Status, string(bodyBytes))
+	}
+
+	return nil
+}
+
+// OnStepCompleted implements runner.StepReporter by reporting to the API
+func (c *RunnerClient) OnStepCompleted(result runner.StepResult) {
+	step := StepReport{
+		Phase:    result.Phase,
+		Index:    result.Index,
+		Handler:  result.Handler,
+		Name:     result.Name,
+		Success:  result.Success,
+		ExitCode: result.ExitCode,
+		Stdout:   result.Stdout,
+		Stderr:   result.Stderr,
+		Error:    result.Error,
+	}
+	if err := c.ReportStepCompleted(step); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to report step completed: %v\n", err)
+	}
 }

@@ -59,6 +59,12 @@ type AssertionResult struct {
 	Expected string
 }
 
+// StepReporter is called before and after each step to enable live progress reporting.
+type StepReporter interface {
+	OnStepStarted(phase string, index int, name string, handler string)
+	OnStepCompleted(result StepResult)
+}
+
 // NewTestRunner creates a new test runner
 func NewTestRunner(suitePath string, serverURL string, runID string, baseWorkdir string) (*TestRunner, error) {
 	// Load suite config
@@ -86,7 +92,7 @@ func NewTestRunner(suitePath string, serverURL string, runID string, baseWorkdir
 }
 
 // RunTest executes a single test
-func (r *TestRunner) RunTest(testID string) (*TestResult, error) {
+func (r *TestRunner) RunTest(testID string, reporter StepReporter) (*TestResult, error) {
 	startTime := time.Now()
 
 	// Parse test path
@@ -166,8 +172,14 @@ func (r *TestRunner) RunTest(testID string) (*TestResult, error) {
 
 	// Execute pre_run
 	for i, step := range testConfig.PreRun {
+		if reporter != nil {
+			reporter.OnStepStarted("pre_run", i, step.Name, step.Handler+step.Routine)
+		}
 		stepResult := r.executeStep(step, ctx, "pre_run", i)
 		result.Steps = append(result.Steps, stepResult)
+		if reporter != nil {
+			reporter.OnStepCompleted(stepResult)
+		}
 
 		if !stepResult.Success && !step.IgnoreErrors {
 			result.Passed = false
@@ -182,8 +194,14 @@ func (r *TestRunner) RunTest(testID string) (*TestResult, error) {
 	// Execute test steps (if pre_run succeeded)
 	if result.Passed {
 		for i, step := range testConfig.Test {
+			if reporter != nil {
+				reporter.OnStepStarted("test", i, step.Name, step.Handler+step.Routine)
+			}
 			stepResult := r.executeStep(step, ctx, "test", i)
 			result.Steps = append(result.Steps, stepResult)
+			if reporter != nil {
+				reporter.OnStepCompleted(stepResult)
+			}
 
 			if !stepResult.Success && !step.IgnoreErrors {
 				result.Passed = false
@@ -220,8 +238,14 @@ func (r *TestRunner) RunTest(testID string) (*TestResult, error) {
 	// Execute post_run (always)
 	for i, step := range testConfig.PostRun {
 		step.IgnoreErrors = true // Always ignore errors in post_run
+		if reporter != nil {
+			reporter.OnStepStarted("post_run", i, step.Name, step.Handler+step.Routine)
+		}
 		stepResult := r.executeStep(step, ctx, "post_run", i)
 		result.Steps = append(result.Steps, stepResult)
+		if reporter != nil {
+			reporter.OnStepCompleted(stepResult)
+		}
 	}
 
 	result.Duration = time.Since(startTime)

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useEffect, useCallback } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -573,12 +573,15 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading, error, suit
                         className={cn(
                           "rounded-md border p-3",
                           step.status === "passed" && "border-success/30 bg-success/5",
+                          step.status === "running" && "border-blue-500/30 bg-blue-500/5 animate-pulse",
                           (step.status === "failed" || step.status === "crashed") && "border-destructive/30 bg-destructive/5"
                         )}
                       >
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
-                            {step.status === "passed" ? (
+                            {step.status === "running" ? (
+                              <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />
+                            ) : step.status === "passed" ? (
                               <CheckCircle className="h-4 w-4 text-success" />
                             ) : step.status === "failed" || step.status === "crashed" ? (
                               <XCircle className="h-4 w-4 text-destructive" />
@@ -731,7 +734,6 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading, error, suit
 
 export function LiveFeed() {
   const router = useRouter();
-  const { events, currentRunId } = useLiveEvents({ maxEvents: 500 });
   const [run, setRun] = useState<RunExtended | null>(null);
   const [testTree, setTestTree] = useState<RunTestTreeResponse | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -746,6 +748,116 @@ export function LiveFeed() {
   // Cancel and rerun state
   const [cancelling, setCancelling] = useState(false);
   const [rerunning, setRerunning] = useState(false);
+
+  // Ref to track displayedRunId inside the stable SSE callback
+  const displayedRunIdRef = useRef<string | null>(null);
+  useEffect(() => { displayedRunIdRef.current = displayedRunId; }, [displayedRunId]);
+
+  // Debounced refetch to avoid hammering the API on rapid events
+  const refetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Process each SSE event exactly once as it arrives (no array-length tracking)
+  const handleSSEEvent = useCallback((event: SSEEvent) => {
+    // Refetch run/tree data on test-level events (debounced)
+    if (
+      event.type === "test_started" ||
+      event.type === "test_completed" ||
+      event.type === "run_completed" ||
+      event.type === "run_cancelled"
+    ) {
+      if (refetchTimeoutRef.current) clearTimeout(refetchTimeoutRef.current);
+      refetchTimeoutRef.current = setTimeout(() => {
+        const runId = displayedRunIdRef.current;
+        if (runId) {
+          Promise.all([
+            getRunExtended(runId),
+            getRunTestsTree(runId),
+          ]).then(([runData, treeData]) => {
+            setRun(runData);
+            setTestTree(treeData);
+          }).catch(console.error);
+        }
+      }, 300);
+    }
+
+    // Live step updates for open test detail dialog
+    if (event.type === "step_started") {
+      setTestDetail((prev) => {
+        if (!prev || event.test_id !== prev.test_id) return prev;
+        const exists = prev.steps.some(
+          (s) => s.phase === event.phase && s.step_index === (event.step_index ?? -1)
+        );
+        if (exists) return prev;
+        return {
+          ...prev,
+          steps: [...prev.steps, {
+            id: Date.now() + (event.step_index ?? 0),
+            test_result_id: prev.id,
+            step_index: event.step_index ?? 0,
+            phase: event.phase ?? "",
+            handler: event.handler ?? null,
+            description: event.name ?? null,
+            status: "running",
+            duration_ms: null,
+            stdout: null,
+            stderr: null,
+            error_message: null,
+          }],
+        };
+      });
+    }
+
+    if (event.type === "step_completed") {
+      setTestDetail((prev) => {
+        if (!prev || event.test_id !== prev.test_id) return prev;
+        let found = false;
+        const updatedSteps = prev.steps.map((s) => {
+          if (s.phase === event.phase && s.step_index === (event.step_index ?? -1)) {
+            found = true;
+            return {
+              ...s,
+              status: event.status ?? "passed",
+              stdout: event.stdout ?? s.stdout,
+              stderr: event.stderr ?? s.stderr,
+              error_message: event.error_message ?? s.error_message,
+              duration_ms: event.duration_ms ?? s.duration_ms,
+            };
+          }
+          return s;
+        });
+        if (!found) {
+          updatedSteps.push({
+            id: Date.now() + (event.step_index ?? 0),
+            test_result_id: prev.id,
+            step_index: event.step_index ?? 0,
+            phase: event.phase ?? "",
+            handler: event.handler ?? null,
+            description: event.name ?? null,
+            status: event.status ?? "passed",
+            duration_ms: event.duration_ms ?? null,
+            stdout: event.stdout ?? null,
+            stderr: event.stderr ?? null,
+            error_message: event.error_message ?? null,
+          });
+        }
+        return { ...prev, steps: updatedSteps };
+      });
+    }
+
+    // When test completes, re-fetch full detail to get stdout/stderr
+    if (event.type === "test_completed") {
+      setTestDetail((prev) => {
+        if (prev && event.test_id === prev.test_id) {
+          getTestDetail(prev.run_id, prev.id).then((fullDetail) => {
+            setTestDetail(fullDetail);
+          }).catch(console.error);
+        }
+        return prev;
+      });
+    }
+  }, []);
+
+  const { currentRunId } = useLiveEvents({ maxEvents: 500, onEvent: handleSSEEvent });
 
   // Update displayed run ID when a new run starts (but don't clear on completion)
   useEffect(() => {
@@ -787,28 +899,6 @@ export function LiveFeed() {
 
     fetchData();
   }, [displayedRunId]);
-
-  // Refresh data on SSE events
-  useEffect(() => {
-    if (!displayedRunId || events.length === 0) return;
-
-    const latestEvent = events[0];
-    if (
-      latestEvent.type === "test_started" ||
-      latestEvent.type === "test_completed" ||
-      latestEvent.type === "run_completed" ||
-      latestEvent.type === "run_cancelled"
-    ) {
-      // Refetch data
-      Promise.all([
-        getRunExtended(displayedRunId),
-        getRunTestsTree(displayedRunId),
-      ]).then(([runData, treeData]) => {
-        setRun(runData);
-        setTestTree(treeData);
-      }).catch(console.error);
-    }
-  }, [events, displayedRunId]);
 
   // Track elapsed time for running tests and run duration (force re-render every 100ms)
   const [, setTick] = useState(0);

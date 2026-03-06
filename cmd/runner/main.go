@@ -168,7 +168,12 @@ func runTest(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	result, err := testRunner.RunTest(testID)
+	// Pass apiClient as StepReporter for live per-step reporting
+	var stepReporter runner.StepReporter
+	if apiClient != nil {
+		stepReporter = apiClient
+	}
+	result, err := testRunner.RunTest(testID, stepReporter)
 	if err != nil {
 		if workerLog != nil {
 			workerLog.Log("ERROR: Test execution failed: %v", err)
