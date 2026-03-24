@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -45,6 +45,7 @@ import {
   Play,
   Trash2,
   Link,
+  Link2,
   Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -99,6 +100,7 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
   const [cancelling, setCancelling] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [copiedUrls, setCopiedUrls] = useState(false);
 
   const useCases = useMemo(() => groupTestsByUseCase(tests), [tests]);
 
@@ -139,6 +141,21 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
       setRerunning(false);
     }
   };
+
+  const handleCopyFilteredUrls = useCallback(() => {
+    if (!run.run_id || !tests) return;
+    const filtered = tests.filter((t) =>
+      filter === "failed"
+        ? t.status === "failed" || t.status === "crashed"
+        : t.status === filter
+    );
+    const urls = filtered.map(
+      (t) => `${window.location.protocol}//${window.location.host}/api/runs/${run.run_id}/tests/${t.id}`
+    );
+    navigator.clipboard.writeText(urls.join("\n"));
+    setCopiedUrls(true);
+    setTimeout(() => setCopiedUrls(false), 2000);
+  }, [run.run_id, tests, filter]);
 
   const handleCancel = async () => {
     setCancelling(true);
@@ -241,24 +258,41 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
               )}
               {/* Rerun button */}
               {run.suite_id && (
-                <Button
-                  variant={filter ? "default" : "outline"}
-                  size="sm"
-                  onClick={filter && filteredTestIds.length > 0 ? handleRunFiltered : handleRerun}
-                  disabled={rerunning}
-                  className="gap-2"
-                >
-                  {rerunning ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : filter ? (
-                    <Play className="h-4 w-4" />
-                  ) : (
-                    <RotateCcw className="h-4 w-4" />
+                <>
+                  <Button
+                    variant={filter ? "default" : "outline"}
+                    size="sm"
+                    onClick={filter && filteredTestIds.length > 0 ? handleRunFiltered : handleRerun}
+                    disabled={rerunning}
+                    className="gap-2"
+                  >
+                    {rerunning ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : filter ? (
+                      <Play className="h-4 w-4" />
+                    ) : (
+                      <RotateCcw className="h-4 w-4" />
+                    )}
+                    {filter
+                      ? `Run ${filter === "failed" ? "Failed" : "Passed"} (${filteredTestIds.length})`
+                      : "Rerun"}
+                  </Button>
+                  {filter && filteredTestIds.length > 0 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleCopyFilteredUrls}
+                      title="Copy test URLs to clipboard"
+                      className="h-8 px-2 text-muted-foreground"
+                    >
+                      {copiedUrls ? (
+                        <Check className="h-3.5 w-3.5 text-green-500" />
+                      ) : (
+                        <Link2 className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
                   )}
-                  {filter
-                    ? `Run ${filter === "failed" ? "Failed" : "Passed"} (${filteredTestIds.length})`
-                    : "Rerun"}
-                </Button>
+                </>
               )}
               {/* Delete button */}
               <Button

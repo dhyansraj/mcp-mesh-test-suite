@@ -748,6 +748,7 @@ export function LiveFeed() {
   // Cancel and rerun state
   const [cancelling, setCancelling] = useState(false);
   const [rerunning, setRerunning] = useState(false);
+  const [copiedUrls, setCopiedUrls] = useState(false);
 
   // Ref to track displayedRunId inside the stable SSE callback
   const displayedRunIdRef = useRef<string | null>(null);
@@ -1044,6 +1045,23 @@ export function LiveFeed() {
     }
   }, [run, filteredTestIds]);
 
+  const handleCopyFilteredUrls = useCallback(() => {
+    if (!displayedRunId || !testTree?.use_cases) return;
+    const filtered = testTree.use_cases
+      .flatMap((uc) => uc.tests)
+      .filter((t) =>
+        statusFilter === "failed"
+          ? t.status === "failed" || t.status === "crashed"
+          : t.status === statusFilter
+      );
+    const urls = filtered.map(
+      (t) => `${window.location.protocol}//${window.location.host}/api/runs/${displayedRunId}/tests/${t.id}`
+    );
+    navigator.clipboard.writeText(urls.join("\n"));
+    setCopiedUrls(true);
+    setTimeout(() => setCopiedUrls(false), 2000);
+  }, [displayedRunId, testTree, statusFilter]);
+
   // Find all currently running tests
   const runningTests = useMemo(() => {
     if (!testTree) return [];
@@ -1156,6 +1174,21 @@ export function LiveFeed() {
                       {statusFilter
                         ? `Run ${statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1)} (${filteredTestIds.length})`
                         : "Rerun"}
+                    </Button>
+                  )}
+                  {statusFilter && filteredTestIds.length > 0 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleCopyFilteredUrls}
+                      title="Copy test URLs to clipboard"
+                      className="h-8 px-2 text-muted-foreground"
+                    >
+                      {copiedUrls ? (
+                        <Check className="h-3.5 w-3.5 text-green-500" />
+                      ) : (
+                        <Link2 className="h-3.5 w-3.5" />
+                      )}
                     </Button>
                   )}
                 </div>

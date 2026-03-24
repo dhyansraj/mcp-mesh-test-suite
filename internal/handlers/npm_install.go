@@ -357,6 +357,29 @@ func rewriteDepsToLocalTarballs(packageJSONPath string) (bool, error) {
 		}
 	}
 
+	// Inject any remaining local packages that aren't in any dep section.
+	// This ensures transitive deps (e.g., @mcpmesh/core required by @mcpmesh/sdk)
+	// are resolved from local tarballs rather than the npm registry.
+	injected := make(map[string]bool)
+	for _, section := range depSections {
+		if deps, ok := pkg[section].(map[string]any); ok {
+			for name := range deps {
+				injected[name] = true
+			}
+		}
+	}
+	deps, ok := pkg["dependencies"].(map[string]any)
+	if !ok {
+		deps = make(map[string]any)
+		pkg["dependencies"] = deps
+	}
+	for name, tgzPath := range localPkgs {
+		if !injected[name] {
+			deps[name] = "file:" + tgzPath
+			modified = true
+		}
+	}
+
 	if !modified {
 		return false, nil
 	}
