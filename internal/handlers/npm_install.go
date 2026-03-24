@@ -1,10 +1,13 @@
 package handlers
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -107,39 +110,31 @@ func (h *NpmInstallHandler) Execute(step map[string]any, ctx *interpolate.Contex
 	var stdout, stderr bytes.Buffer
 
 	if mode == "local" {
-		// Local mode: npm install with local packages
-		// First run npm install, then override with local packages
+		// Local mode: rewrite package.json deps to point at local tarballs,
+		// then run a single npm install so transitive deps also resolve locally.
+		rewritten, err := rewriteDepsToLocalTarballs(packageJSON)
+		if err != nil {
+			return StepResult{
+				Success:  false,
+				ExitCode: 1,
+				Error:    fmt.Sprintf("failed to rewrite deps to local tarballs: %v", err),
+			}
+		}
+		if rewritten {
+			// Remove stale lock file so npm re-resolves everything
+			os.Remove(filepath.Join(path, "package-lock.json"))
+		}
+
 		cmd := exec.CommandContext(cmdCtx, "bash", "-c", `
 			cd "$1"
-
-			# Remove existing node_modules to avoid platform mismatch
-			# (e.g., darwin binaries copied into linux container)
 			rm -rf node_modules 2>/dev/null || true
-
-			# Run standard npm install first
 			npm install --legacy-peer-deps
-
-			# Then override with local packages if they exist
-			if [ -d /packages ]; then
-				echo "Overriding with local packages from /packages"
-
-				# Remove package-lock.json to avoid npm "extraneous" bug with local tarballs
-				rm -f package-lock.json 2>/dev/null || true
-
-				# Install @mcpmesh packages from local tarballs (overrides npm versions)
-				for pkg in /packages/*.tgz; do
-					if [ -f "$pkg" ]; then
-						echo "Installing local package: $pkg"
-						npm install "$pkg" --save --legacy-peer-deps
-					fi
-				done
-			fi
 		`, "bash", path)
 
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
 
-		err := cmd.Run()
+		err = cmd.Run()
 		if err != nil {
 			if cmdCtx.Err() == context.DeadlineExceeded {
 				return StepResult{
@@ -272,4 +267,108 @@ func replaceFileDepependencies(packageJSONPath string, version string) (bool, er
 	}
 
 	return modified, nil
+}
+
+// getPackageNameFromTarball extracts the package name from a .tgz tarball
+// by reading the embedded package/package.json.
+func getPackageNameFromTarball(tgzPath string) (string, error) {
+	f, err := os.Open(tgzPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return "", err
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return "", fmt.Errorf("package.json not found in tarball %s", filepath.Base(tgzPath))
+		}
+		if err != nil {
+			return "", fmt.Errorf("reading tarball %s: %w", filepath.Base(tgzPath), err)
+		}
+		if hdr.Name == "package/package.json" {
+			var pkg struct {
+				Name string `json:"name"`
+			}
+			if err := json.NewDecoder(tr).Decode(&pkg); err != nil {
+				return "", fmt.Errorf("parsing package.json in %s: %w", filepath.Base(tgzPath), err)
+			}
+			if pkg.Name == "" {
+				return "", fmt.Errorf("empty name in package.json of %s", filepath.Base(tgzPath))
+			}
+			return pkg.Name, nil
+		}
+	}
+}
+
+// rewriteDepsToLocalTarballs scans /packages/*.tgz, extracts each package name,
+// and rewrites matching dependencies in the given package.json to use file: paths.
+// This ensures that a single npm install resolves both direct and transitive deps
+// from local tarballs instead of the npm registry.
+func rewriteDepsToLocalTarballs(packageJSONPath string) (bool, error) {
+	tarballs, err := filepath.Glob("/packages/*.tgz")
+	if err != nil || len(tarballs) == 0 {
+		return false, nil
+	}
+
+	// Build map: package name -> tgz path
+	localPkgs := make(map[string]string)
+	for _, tgz := range tarballs {
+		name, err := getPackageNameFromTarball(tgz)
+		if err != nil {
+			// Skip tarballs we can't parse
+			continue
+		}
+		localPkgs[name] = tgz
+	}
+	if len(localPkgs) == 0 {
+		return false, nil
+	}
+
+	data, err := os.ReadFile(packageJSONPath)
+	if err != nil {
+		return false, fmt.Errorf("failed to read package.json: %w", err)
+	}
+
+	var pkg map[string]any
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return false, fmt.Errorf("failed to parse package.json: %w", err)
+	}
+
+	modified := false
+	depSections := []string{"dependencies", "devDependencies", "optionalDependencies", "peerDependencies"}
+	for _, section := range depSections {
+		deps, ok := pkg[section].(map[string]any)
+		if !ok {
+			continue
+		}
+		for name := range deps {
+			if tgzPath, found := localPkgs[name]; found {
+				deps[name] = "file:" + tgzPath
+				modified = true
+			}
+		}
+	}
+
+	if !modified {
+		return false, nil
+	}
+
+	newData, err := json.MarshalIndent(pkg, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("failed to marshal package.json: %w", err)
+	}
+
+	if err := os.WriteFile(packageJSONPath, newData, 0644); err != nil {
+		return false, fmt.Errorf("failed to write package.json: %w", err)
+	}
+
+	return true, nil
 }
