@@ -55,7 +55,7 @@ func RunPool(ctx context.Context, cancelFunc context.CancelFunc, cfg PoolConfig)
 				default:
 				}
 
-				result := runSingleTest(ctx, cfg, testID)
+				result := RunSingleTest(ctx, cfg, testID)
 				resultCh <- result
 			}
 		}(i)
@@ -84,8 +84,8 @@ func RunPool(ctx context.Context, cancelFunc context.CancelFunc, cfg PoolConfig)
 	}
 }
 
-// runSingleTest executes one test through the handler lifecycle
-func runSingleTest(ctx context.Context, cfg PoolConfig, testID string) executor.TestResult {
+// RunSingleTest executes one test through the handler lifecycle
+func RunSingleTest(ctx context.Context, cfg PoolConfig, testID string) executor.TestResult {
 	// Start worker
 	info, err := cfg.Handler.StartWorker(ctx, testID, cfg.RunID, cfg.APIURL)
 	if err != nil {

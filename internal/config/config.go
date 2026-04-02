@@ -104,6 +104,7 @@ type TestConfig struct {
 	Disabled    bool                `yaml:"disabled"`
 	Description string              `yaml:"description"`
 	Tags        []string            `yaml:"tags"`
+	DependsOn   []string            `yaml:"depends_on"`
 	Timeout     int                 `yaml:"timeout"`
 	PreRun      []Step              `yaml:"pre_run"`
 	Test        []Step              `yaml:"test"`

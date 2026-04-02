@@ -23,6 +23,7 @@ import (
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/man"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/runner"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/scaffold"
+	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/scheduler"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/worker"
 )
 
@@ -472,6 +473,30 @@ func executeTests(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Build dependency graph if any test has depends_on
+	depLoader := func(testID string) []string {
+		parts := strings.Split(testID, "/")
+		if len(parts) != 2 {
+			return nil
+		}
+		testPath := filepath.Join(absPath, "suites", parts[0], parts[1])
+		tc, err := config.LoadTestConfig(testPath)
+		if err != nil || tc == nil {
+			return nil
+		}
+		return tc.DependsOn
+	}
+	testDAG, err := scheduler.Build(activeTests, depLoader)
+	if err != nil {
+		return fmt.Errorf("dependency graph error: %w", err)
+	}
+	if err := testDAG.Validate(); err != nil {
+		return fmt.Errorf("dependency validation failed: %w", err)
+	}
+	if testDAG.HasDependencies() {
+		fmt.Printf("Dependencies: %d test(s) have depends_on constraints\n", testDAG.DependentCount())
+	}
+
 	if len(activeTests) == 0 && len(disabledTests) == 0 {
 		fmt.Println("No tests found matching the filters")
 		return nil
@@ -487,7 +512,12 @@ func executeTests(cmd *cobra.Command, args []string) error {
 	if dryRun {
 		fmt.Println("\nTests to run:")
 		for _, t := range activeTests {
-			fmt.Printf("  - %s\n", t)
+			node := testDAG.GetNode(t)
+			if node != nil && len(node.DependsOn) > 0 {
+				fmt.Printf("  - %s (depends on: %s)\n", t, strings.Join(node.DependsOn, ", "))
+			} else {
+				fmt.Printf("  - %s\n", t)
+			}
 		}
 		if len(disabledTests) > 0 {
 			fmt.Println("\nDisabled tests:")
@@ -725,7 +755,11 @@ func executeTests(cmd *cobra.Command, args []string) error {
 	}
 	defer handler.Close()
 
-	result := worker.RunPool(ctx, cancelFunc, worker.PoolConfig{
+	var dagPtr *scheduler.DAG
+	if testDAG.HasDependencies() {
+		dagPtr = testDAG
+	}
+	result := scheduler.RunScheduled(ctx, cancelFunc, worker.PoolConfig{
 		Handler:   handler,
 		Tests:     activeTests,
 		Workers:   parallel,
@@ -733,7 +767,7 @@ func executeTests(cmd *cobra.Command, args []string) error {
 		RunID:     runID,
 		Timeout:   testTimeout,
 		APIClient: apiClient,
-	})
+	}, dagPtr)
 	passed = result.Passed
 	failed = result.Failed
 	skipped = result.Skipped
@@ -844,11 +878,38 @@ func delegateToAPI(cmd *cobra.Command, args []string) error {
 
 	// Dry run
 	if dryRun {
+		// Build DAG for dependency display
+		depLoader := func(testID string) []string {
+			parts := strings.Split(testID, "/")
+			if len(parts) != 2 {
+				return nil
+			}
+			testPath := filepath.Join(absPath, "suites", parts[0], parts[1])
+			tc, err := config.LoadTestConfig(testPath)
+			if err != nil || tc == nil {
+				return nil
+			}
+			return tc.DependsOn
+		}
+		testDAG, _ := scheduler.Build(activeTests, depLoader)
+
 		fmt.Printf("Suite: %s (mode: %s)\n", suiteConfig.Suite.Name, modeDisplay)
+		if testDAG != nil && testDAG.HasDependencies() {
+			fmt.Printf("Dependencies: %d test(s) have depends_on constraints\n", testDAG.DependentCount())
+		}
 		fmt.Printf("Found %d test(s)\n", len(activeTests))
 		fmt.Println("\nTests to run:")
 		for _, t := range activeTests {
-			fmt.Printf("  - %s\n", t)
+			if testDAG != nil {
+				node := testDAG.GetNode(t)
+				if node != nil && len(node.DependsOn) > 0 {
+					fmt.Printf("  - %s (depends on: %s)\n", t, strings.Join(node.DependsOn, ", "))
+				} else {
+					fmt.Printf("  - %s\n", t)
+				}
+			} else {
+				fmt.Printf("  - %s\n", t)
+			}
 		}
 		return nil
 	}
