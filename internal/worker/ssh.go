@@ -59,7 +59,7 @@ func NewSSHHandler(cfg *config.SuiteConfig, suitePath string, apiURL string, tim
 	if err != nil {
 		return nil, fmt.Errorf("SSH connectivity check failed for %s: %v (output: %s)", h.sshHost, err, strings.TrimSpace(string(out)))
 	}
-	if strings.TrimSpace(string(out)) != "ok" {
+	if !strings.Contains(string(out), "ok") {
 		return nil, fmt.Errorf("SSH connectivity check unexpected output for %s: %s", h.sshHost, strings.TrimSpace(string(out)))
 	}
 

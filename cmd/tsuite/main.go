@@ -237,16 +237,19 @@ Features: embedded dashboard UI, Docker/standalone modes for isolation, parallel
 	// Clear command
 	clearCmd := &cobra.Command{
 		Use:   "clear",
-		Short: "Clear test data (database, logs, reports)",
-		Long: `Clear test data from ~/.tsuite directory.
+		Short: "Clear test data",
+		Long: `Clear test run history or all tsuite data.
 
 Examples:
-  tsuite clear --all              Clear all test data
+  tsuite clear --runs             Clear only test run history (preserves suites & secrets)
+  tsuite clear --runs --force     Clear runs without confirmation
+  tsuite clear --all              Clear ALL data (database, logs, reports)
   tsuite clear --all --force      Clear without confirmation`,
 		RunE: clearData,
 	}
-	var clearAll, clearForce bool
-	clearCmd.Flags().BoolVar(&clearAll, "all", false, "Clear all test data")
+	var clearAll, clearRuns, clearForce bool
+	clearCmd.Flags().BoolVar(&clearAll, "all", false, "Clear all test data (database, logs, reports, secrets, suites)")
+	clearCmd.Flags().BoolVar(&clearRuns, "runs", false, "Clear only test run history (preserves suites and secrets)")
 	clearCmd.Flags().BoolVarP(&clearForce, "force", "f", false, "Skip confirmation prompt")
 	rootCmd.AddCommand(clearCmd)
 
@@ -1276,13 +1279,18 @@ func stopServer(cmd *cobra.Command, args []string) error {
 
 func clearData(cmd *cobra.Command, args []string) error {
 	clearAll, _ := cmd.Flags().GetBool("all")
+	clearRuns, _ := cmd.Flags().GetBool("runs")
 	force, _ := cmd.Flags().GetBool("force")
 
-	if !clearAll {
-		fmt.Println("Use --all to clear all test data")
-		fmt.Println("  tsuite clear --all           Clear database, logs, and reports")
-		fmt.Println("  tsuite clear --all --force   Clear without confirmation")
+	if !clearAll && !clearRuns {
+		fmt.Println("Use --runs or --all to clear data")
+		fmt.Println("  tsuite clear --runs          Clear run history only (preserves suites & secrets)")
+		fmt.Println("  tsuite clear --all           Clear everything (database, logs, reports)")
 		return nil
+	}
+
+	if clearAll && clearRuns {
+		return fmt.Errorf("--all and --runs are mutually exclusive")
 	}
 
 	tsuiteDir := getTsuiteHome()
@@ -1291,6 +1299,56 @@ func clearData(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// --runs path: delete run history but keep suites and secrets
+	if clearRuns {
+		if !force {
+			fmt.Print("Delete all test run history (keeping suites and secrets)? This cannot be undone. [y/N]: ")
+			var response string
+			fmt.Scanln(&response)
+			if strings.ToLower(response) != "y" && strings.ToLower(response) != "yes" {
+				fmt.Println("Aborted.")
+				return nil
+			}
+		}
+
+		dbPath := filepath.Join(tsuiteDir, "results.db")
+		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+			fmt.Println("No database found, nothing to clear")
+			return nil
+		}
+
+		repo, err := db.NewRepository()
+		if err != nil {
+			return fmt.Errorf("opening database: %w", err)
+		}
+
+		if err := repo.DeleteAllRuns(); err != nil {
+			return fmt.Errorf("deleting runs: %w", err)
+		}
+
+		var cleared []string
+		cleared = append(cleared, "run history from database")
+
+		// Also clear per-run files (runs/ directory and reports/)
+		runsDir := filepath.Join(tsuiteDir, "runs")
+		if _, err := os.Stat(runsDir); err == nil {
+			if err := os.RemoveAll(runsDir); err == nil {
+				cleared = append(cleared, "runs/")
+			}
+		}
+		reportsDir := filepath.Join(tsuiteDir, "reports")
+		if _, err := os.Stat(reportsDir); err == nil {
+			if err := os.RemoveAll(reportsDir); err == nil {
+				cleared = append(cleared, "reports/")
+			}
+		}
+
+		fmt.Printf("Cleared: %s\n", strings.Join(cleared, ", "))
+		fmt.Println("Preserved: suites, secrets")
+		return nil
+	}
+
+	// --all path: original behavior
 	if !force {
 		fmt.Print("Delete ALL test data (database, logs, reports)? This cannot be undone. [y/N]: ")
 		var response string

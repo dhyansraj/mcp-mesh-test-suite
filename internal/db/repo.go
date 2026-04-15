@@ -870,6 +870,32 @@ func (r *Repository) DeleteRun(runID string) error {
 	return tx.Commit()
 }
 
+// DeleteAllRuns deletes all runs and associated records while preserving suites and secrets.
+func (r *Repository) DeleteAllRuns() error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Order matters: delete child tables first
+	statements := []string{
+		`DELETE FROM step_results`,
+		`DELETE FROM assertion_results`,
+		`DELETE FROM captured_values`,
+		`DELETE FROM test_results`,
+		`DELETE FROM runs`,
+	}
+
+	for _, stmt := range statements {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("executing %q: %w", stmt, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
 // ==================== Step Results ====================
 
 // DeleteStepResultsByTestID deletes all step results for a test
