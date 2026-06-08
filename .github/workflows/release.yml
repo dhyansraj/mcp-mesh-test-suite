@@ -61,7 +61,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.22'
+          go-version-file: go.mod
           cache-dependency-path: go.sum
 
       - name: Download dashboard artifact
