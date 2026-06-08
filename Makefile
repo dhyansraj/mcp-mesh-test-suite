@@ -44,14 +44,14 @@ test:
 # Only needed when developing on Mac and running Docker tests
 # Uses host architecture (arm64 on M1/M2, amd64 on Intel)
 build-runner-linux:
-	GOOS=linux go build -o bin/tsuite-runner-linux ./cmd/runner
+	CGO_ENABLED=0 GOOS=linux go build -o bin/tsuite-runner-linux ./cmd/runner
 
 # Build runner for specific Linux architectures
 build-runner-linux-amd64:
-	GOOS=linux GOARCH=amd64 go build -o bin/tsuite-runner-linux-amd64 ./cmd/runner
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/tsuite-runner-linux-amd64 ./cmd/runner
 
 build-runner-linux-arm64:
-	GOOS=linux GOARCH=arm64 go build -o bin/tsuite-runner-linux-arm64 ./cmd/runner
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o bin/tsuite-runner-linux-arm64 ./cmd/runner
 
 # Build runner for all Linux architectures
 build-runner-linux-all: build-runner-linux-amd64 build-runner-linux-arm64
