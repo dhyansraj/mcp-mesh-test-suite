@@ -42,11 +42,9 @@ func (s *Server) runSuite(c *gin.Context) {
 
 	// Parse request body for filters
 	var req struct {
-		UC       string   `json:"uc"`
-		TC       string   `json:"tc"`
-		Tags     []string `json:"tags"`
-		SkipTags []string `json:"skip_tags"`
-		TestIDs  []string `json:"test_ids"`
+		UC      string   `json:"uc"`
+		TC      string   `json:"tc"`
+		TestIDs []string `json:"test_ids"`
 	}
 	c.ShouldBindJSON(&req) // Optional body
 
@@ -70,19 +68,17 @@ func (s *Server) runSuite(c *gin.Context) {
 		"--run-id", runID,
 	}
 
-	// Add filter flags
+	// Add filter flags (uc and tc are mutually exclusive)
+	if req.TC != "" && req.UC != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "specify only one of 'tc' or 'uc', not both"})
+		return
+	}
 	if req.TC != "" {
 		args = append(args, "--tc", req.TC)
 	} else if req.UC != "" {
 		args = append(args, "--uc", req.UC)
 	}
 	// If no filters, run all tests (default behavior)
-
-	// Add tag filters
-	for _, tag := range req.Tags {
-		args = append(args, "--tags", tag)
-	}
-	// Note: skip_tags not implemented in Go CLI yet
 
 	// Handle test_ids - write to temp file and pass --tc-file flag
 	if len(req.TestIDs) > 0 {

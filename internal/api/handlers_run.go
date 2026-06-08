@@ -447,18 +447,6 @@ func (s *Server) rerunTests(c *gin.Context) {
 		}
 		tcFile.Close()
 		cmd = append(cmd, "--tc-file", tcFile.Name())
-
-		// Pass original tags if they existed (for display_name consistency)
-		if run.Filters.Valid && run.Filters.String != "" {
-			var filters struct {
-				Tags []string `json:"tags"`
-			}
-			if err := json.Unmarshal([]byte(run.Filters.String), &filters); err == nil {
-				for _, tag := range filters.Tags {
-					cmd = append(cmd, "--tags", tag)
-				}
-			}
-		}
 	}
 
 	// Create log file for output

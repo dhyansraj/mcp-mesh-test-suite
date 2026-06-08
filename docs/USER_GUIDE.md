@@ -889,11 +889,11 @@ tsuite
 # Run specific use case
 tsuite --uc uc01_registry
 
-# Run specific test case
+# Run specific test case (--uc/--tc accept comma-separated values; mutually exclusive)
 tsuite --tc uc01_registry/tc01_start
 
-# Run tests with specific tag
-tsuite --tag smoke
+# Run multiple test cases
+tsuite --tc tc01_start,tc03_heartbeat
 
 # Run in standalone mode (override config)
 tsuite --standalone

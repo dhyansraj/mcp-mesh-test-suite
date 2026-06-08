@@ -38,7 +38,6 @@ var (
 	parallel    int
 	ucFilter    []string
 	tcFilter    []string
-	tagFilter   []string
 	dryRun      bool
 	apiURL      string
 	runnerPath  string
@@ -143,7 +142,6 @@ Features: embedded dashboard UI, Docker/standalone modes for isolation, parallel
 	runCmd.Flags().IntVarP(&parallel, "parallel", "p", 1, "Number of parallel test runners")
 	runCmd.Flags().StringSliceVar(&ucFilter, "uc", nil, "Filter by use case (e.g., uc01_registry)")
 	runCmd.Flags().StringSliceVar(&tcFilter, "tc", nil, "Filter by test case (e.g., tc01_agent_registration)")
-	runCmd.Flags().StringSliceVar(&tagFilter, "tags", nil, "Filter by tags")
 	runCmd.Flags().BoolVar(&dryRun, "dry-run", false, "List tests without running")
 	runCmd.Flags().StringVar(&apiURL, "api-url", "http://localhost:9999", "API server URL")
 	runCmd.Flags().StringVar(&runnerPath, "runner-path", "", "Path to runner binary (default: auto-detect)")
@@ -152,6 +150,7 @@ Features: embedded dashboard UI, Docker/standalone modes for isolation, parallel
 	runCmd.Flags().StringVar(&runIDFlag, "run-id", "", "Pre-assigned run ID (used by API server)")
 	runCmd.Flags().MarkHidden("execute")
 	runCmd.Flags().MarkHidden("run-id")
+	runCmd.MarkFlagsMutuallyExclusive("uc", "tc")
 
 	rootCmd.AddCommand(runCmd)
 
@@ -165,7 +164,6 @@ Features: embedded dashboard UI, Docker/standalone modes for isolation, parallel
 
 	listCmd.Flags().StringVarP(&suitePath, "suite-path", "s", ".", "Path to test suite")
 	listCmd.Flags().StringSliceVar(&ucFilter, "uc", nil, "Filter by use case")
-	listCmd.Flags().StringSliceVar(&tagFilter, "tags", nil, "Filter by tags")
 
 	rootCmd.AddCommand(listCmd)
 
@@ -610,10 +608,7 @@ func executeTests(cmd *cobra.Command, args []string) error {
 
 		// Build display name based on filters
 		var displayName string
-		if len(tagFilter) > 0 {
-			// Tag-based run
-			displayName = "tags: " + strings.Join(tagFilter, ", ")
-		} else if tcFile != "" {
+		if tcFile != "" {
 			// Multi-select from file
 			displayName = fmt.Sprintf("%d selected tests", len(tests))
 		} else if len(tests) == 1 {
@@ -624,16 +619,11 @@ func executeTests(cmd *cobra.Command, args []string) error {
 
 		// Build filters JSON for the run record
 		var filtersJSON string
-		if len(tagFilter) > 0 || tcFile != "" {
+		if tcFile != "" {
 			filterData := map[string]any{}
-			if len(tagFilter) > 0 {
-				filterData["tags"] = tagFilter
-			}
-			if tcFile != "" {
-				ids := make([]string, len(tests))
-				copy(ids, tests)
-				filterData["test_ids"] = ids
-			}
+			ids := make([]string, len(tests))
+			copy(ids, tests)
+			filterData["test_ids"] = ids
 			if data, err := json.Marshal(filterData); err == nil {
 				filtersJSON = string(data)
 			}
@@ -941,9 +931,6 @@ func delegateToAPI(cmd *cobra.Command, args []string) error {
 	if len(tcFilter) > 0 {
 		triggerReq.TC = strings.Join(tcFilter, ",")
 	}
-	if len(tagFilter) > 0 {
-		triggerReq.Tags = tagFilter
-	}
 	if tcFile != "" {
 		// Read test IDs from file for test_ids field
 		content, err := os.ReadFile(tcFile)
@@ -1183,8 +1170,6 @@ func filterTests(tests []string) []string {
 				continue
 			}
 		}
-
-		// TODO: Filter by tags (requires loading test.yaml)
 
 		filtered = append(filtered, testID)
 	}

@@ -34,8 +34,8 @@ tsuite run --suite ./my-suite --uc uc01_registry --docker
 # Run specific test case
 tsuite run --suite ./my-suite --tc uc01_registry/tc01_agent_registration --docker
 
-# Run tests matching tags
-tsuite run --suite ./my-suite --tag smoke --docker
+# Run a specific test case by name
+tsuite run --suite ./my-suite --tc tc01_agent_registration --docker
 
 # Dry run (list tests without executing)
 tsuite run --suite ./my-suite --dry-run --all

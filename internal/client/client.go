@@ -308,7 +308,6 @@ func (c *Client) UpsertSuite(req *SyncSuiteRequest) (*SyncSuiteResponse, error) 
 type TriggerRunRequest struct {
 	UC      string   `json:"uc,omitempty"`
 	TC      string   `json:"tc,omitempty"`
-	Tags    []string `json:"tags,omitempty"`
 	TestIDs []string `json:"test_ids,omitempty"`
 }
 

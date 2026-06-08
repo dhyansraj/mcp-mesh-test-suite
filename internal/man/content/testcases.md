@@ -89,7 +89,7 @@ the test to pass.
 
 ## Tags
 
-Use tags to categorize and filter tests:
+Use tags to categorize tests for discovery and display:
 
 ```yaml
 tags:
@@ -98,12 +98,23 @@ tags:
   - slow
 ```
 
-Run by tag:
+Tags are surfaced in the dashboard and can be used to filter the test list
+via the discovery API (`?tag=smoke`).
+
+## Run Filters
+
+Select which tests to run with `--uc` (use case) or `--tc` (test case). Both
+accept multiple comma-separated values:
 
 ```bash
-tsuite run --suite-path ./my-suite --tag smoke
-tsuite run --suite-path ./my-suite --skip-tag slow
+# Run specific test cases
+tsuite run --suite-path ./my-suite --tc tc01_agent_registration,tc03_heartbeat
+
+# Run an entire use case
+tsuite run --suite-path ./my-suite --uc uc01_registry
 ```
+
+`--uc` and `--tc` are mutually exclusive; use only one per run.
 
 ## Timeout
 
