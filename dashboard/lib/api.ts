@@ -30,6 +30,8 @@ export interface Run {
   filters: RunFilters | null;
   mode: string | null;
   cancel_requested: boolean;
+  image_ids?: string[];
+  image_mismatch?: boolean;
 }
 
 export interface RunSummary extends Run {
@@ -51,6 +53,7 @@ export interface TestResult {
   tags: string[];
   pod_name: string | null;
   node_name: string | null;
+  image_id: string | null;
 }
 
 export interface TestDetail extends TestResult {

@@ -18,6 +18,7 @@ type WorkerResult struct {
 	Passed   bool
 	Error    string
 	Duration time.Duration
+	ImageID  string // k8s only: resolved container image digest
 }
 
 // WorkerHandler abstracts test execution across standalone, Docker, and K8s modes

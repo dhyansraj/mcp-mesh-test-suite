@@ -390,7 +390,8 @@ func (r *Repository) GetTestResultsByRunID(runID string) ([]models.TestResult, e
 	rows, err := r.db.Query(`
 		SELECT id, run_id, test_id, use_case, test_case, name, tags, status,
 		       started_at, finished_at, duration_ms, error_message, error_step,
-		       skip_reason, steps_json, steps_passed, steps_failed, pod_name, node_name
+		       skip_reason, steps_json, steps_passed, steps_failed, pod_name, node_name,
+		       image_id
 		FROM test_results
 		WHERE run_id = ?
 		ORDER BY use_case, test_case
@@ -409,7 +410,7 @@ func (r *Repository) GetTestResultsByRunID(runID string) ([]models.TestResult, e
 			&t.ID, &t.RunID, &t.TestID, &t.UseCase, &t.TestCase, &t.Name, &t.Tags,
 			&t.Status, &startedAt, &finishedAt, &t.DurationMS, &t.ErrorMessage,
 			&t.ErrorStep, &t.SkipReason, &t.StepsJSON, &t.StepsPassed, &t.StepsFailed,
-			&t.PodName, &t.NodeName,
+			&t.PodName, &t.NodeName, &t.ImageID,
 		)
 		if err != nil {
 			return nil, err
@@ -432,14 +433,15 @@ func (r *Repository) GetTestResultByID(id int64) (*models.TestResult, error) {
 	err := r.db.QueryRow(`
 		SELECT id, run_id, test_id, use_case, test_case, name, tags, status,
 		       started_at, finished_at, duration_ms, error_message, error_step,
-		       skip_reason, steps_json, steps_passed, steps_failed, pod_name, node_name
+		       skip_reason, steps_json, steps_passed, steps_failed, pod_name, node_name,
+		       image_id
 		FROM test_results
 		WHERE id = ?
 	`, id).Scan(
 		&t.ID, &t.RunID, &t.TestID, &t.UseCase, &t.TestCase, &t.Name, &t.Tags,
 		&t.Status, &startedAt, &finishedAt, &t.DurationMS, &t.ErrorMessage,
 		&t.ErrorStep, &t.SkipReason, &t.StepsJSON, &t.StepsPassed, &t.StepsFailed,
-		&t.PodName, &t.NodeName,
+		&t.PodName, &t.NodeName, &t.ImageID,
 	)
 
 	if err == sql.ErrNoRows {
@@ -455,14 +457,16 @@ func (r *Repository) GetTestResultByID(id int64) (*models.TestResult, error) {
 	return &t, nil
 }
 
-// UpdateTestMeta updates pod/node metadata for a test result
-func (r *Repository) UpdateTestMeta(runID, testID, podName, nodeName string) error {
+// UpdateTestMeta updates pod/node/image metadata for a test result.
+// Only non-empty fields are updated; empty strings preserve existing values.
+func (r *Repository) UpdateTestMeta(runID, testID, podName, nodeName, imageID string) error {
 	_, err := r.db.Exec(`
 		UPDATE test_results SET
-			pod_name = ?,
-			node_name = ?
+			pod_name = CASE WHEN ? != '' THEN ? ELSE pod_name END,
+			node_name = CASE WHEN ? != '' THEN ? ELSE node_name END,
+			image_id = CASE WHEN ? != '' THEN ? ELSE image_id END
 		WHERE run_id = ? AND test_id = ?
-	`, podName, nodeName, runID, testID)
+	`, podName, podName, nodeName, nodeName, imageID, imageID, runID, testID)
 	return err
 }
 
@@ -675,7 +679,8 @@ func (r *Repository) UpdateTestResult(tr *models.TestResult) error {
 			steps_failed = ?,
 			steps_json = ?,
 			pod_name = ?,
-			node_name = ?
+			node_name = ?,
+			image_id = ?
 		WHERE id = ?
 	`,
 		tr.Status,
@@ -689,6 +694,7 @@ func (r *Repository) UpdateTestResult(tr *models.TestResult) error {
 		nullString(tr.StepsJSON),
 		nullString(tr.PodName),
 		nullString(tr.NodeName),
+		nullString(tr.ImageID),
 		tr.ID,
 	)
 	return err
@@ -702,14 +708,15 @@ func (r *Repository) GetTestResultByTestIDAndRunID(testID, runID string) (*model
 	err := r.db.QueryRow(`
 		SELECT id, run_id, test_id, use_case, test_case, name, tags, status,
 		       started_at, finished_at, duration_ms, error_message, error_step,
-		       skip_reason, steps_json, steps_passed, steps_failed, pod_name, node_name
+		       skip_reason, steps_json, steps_passed, steps_failed, pod_name, node_name,
+		       image_id
 		FROM test_results
 		WHERE test_id = ? AND run_id = ?
 	`, testID, runID).Scan(
 		&t.ID, &t.RunID, &t.TestID, &t.UseCase, &t.TestCase, &t.Name, &t.Tags,
 		&t.Status, &startedAt, &finishedAt, &t.DurationMS, &t.ErrorMessage,
 		&t.ErrorStep, &t.SkipReason, &t.StepsJSON, &t.StepsPassed, &t.StepsFailed,
-		&t.PodName, &t.NodeName,
+		&t.PodName, &t.NodeName, &t.ImageID,
 	)
 
 	if err == sql.ErrNoRows {
@@ -723,6 +730,28 @@ func (r *Repository) GetTestResultByTestIDAndRunID(testID, runID string) (*model
 	t.FinishedAt = parseTime(finishedAt)
 
 	return &t, nil
+}
+
+// GetRunImageIDs returns the distinct image IDs used by tests in a run
+func (r *Repository) GetRunImageIDs(runID string) ([]string, error) {
+	rows, err := r.db.Query(`
+		SELECT DISTINCT image_id FROM test_results
+		WHERE run_id = ? AND image_id IS NOT NULL AND image_id != ''
+	`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // UpdateRunCounters updates the test count fields on a run (full recount - use sparingly)

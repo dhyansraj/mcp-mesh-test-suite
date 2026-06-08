@@ -110,6 +110,7 @@ func (s *Server) sendTestDetailResponse(c *gin.Context, test *models.TestResult)
 		"steps_failed":  test.StepsFailed,
 		"pod_name":      nullStringValue(test.PodName),
 		"node_name":     nullStringValue(test.NodeName),
+		"image_id":      nullStringValue(test.ImageID),
 		"steps":         steps,
 		"assertions":    assertions,
 		"captured":      captured,
@@ -413,6 +414,7 @@ func (s *Server) handleUpdateTestMeta(c *gin.Context) {
 	var req struct {
 		PodName  string `json:"pod_name"`
 		NodeName string `json:"node_name"`
+		ImageID  string `json:"image_id"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -420,7 +422,7 @@ func (s *Server) handleUpdateTestMeta(c *gin.Context) {
 		return
 	}
 
-	if err := s.repo.UpdateTestMeta(runID, testID, req.PodName, req.NodeName); err != nil {
+	if err := s.repo.UpdateTestMeta(runID, testID, req.PodName, req.NodeName, req.ImageID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update test meta: " + err.Error()})
 		return
 	}
@@ -430,6 +432,7 @@ func (s *Server) handleUpdateTestMeta(c *gin.Context) {
 		"test_id":   testID,
 		"pod_name":  req.PodName,
 		"node_name": req.NodeName,
+		"image_id":  req.ImageID,
 	})
 }
 

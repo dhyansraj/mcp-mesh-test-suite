@@ -124,12 +124,16 @@ func (c *Client) UpdateTestStatus(runID, testID string, req *UpdateTestStatusReq
 	return nil
 }
 
-// UpdateTestMeta updates pod/node metadata for a test
-func (c *Client) UpdateTestMeta(runID, testID, podName, nodeName string) error {
-	body, err := json.Marshal(map[string]string{
+// UpdateTestMeta updates pod/node/image metadata for a test
+func (c *Client) UpdateTestMeta(runID, testID, podName, nodeName, imageID string) error {
+	payload := map[string]string{
 		"pod_name":  podName,
 		"node_name": nodeName,
-	})
+	}
+	if imageID != "" {
+		payload["image_id"] = imageID
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}

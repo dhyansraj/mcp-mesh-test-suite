@@ -169,6 +169,7 @@ type TestResult struct {
 	StepsFailed  int            `json:"steps_failed"`
 	PodName      sql.NullString `json:"pod_name,omitempty"`
 	NodeName     sql.NullString `json:"node_name,omitempty"`
+	ImageID      sql.NullString `json:"image_id,omitempty"`
 }
 
 // MarshalJSON customizes JSON output for TestResult
@@ -203,6 +204,7 @@ func (t TestResult) MarshalJSON() ([]byte, error) {
 		"steps_failed":  t.StepsFailed,
 		"pod_name":      nullStringToAny(t.PodName),
 		"node_name":     nullStringToAny(t.NodeName),
+		"image_id":      nullStringToAny(t.ImageID),
 	})
 }
 

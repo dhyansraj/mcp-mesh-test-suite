@@ -84,6 +84,12 @@ func (s *Server) getRun(c *gin.Context) {
 		return
 	}
 
+	// Collect distinct image IDs for mismatch detection
+	imageIDs, _ := s.repo.GetRunImageIDs(run.RunID)
+	if imageIDs == nil {
+		imageIDs = []string{}
+	}
+
 	// Build response matching Python's RunSummary
 	c.JSON(http.StatusOK, gin.H{
 		"run_id":                 run.RunID,
@@ -107,6 +113,8 @@ func (s *Server) getRun(c *gin.Context) {
 		"mode":                   run.Mode,
 		"cancel_requested":       run.CancelRequested,
 		"tests":                  tests,
+		"image_ids":              imageIDs,
+		"image_mismatch":         len(imageIDs) > 1,
 	})
 }
 

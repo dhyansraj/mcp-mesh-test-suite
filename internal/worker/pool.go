@@ -105,7 +105,7 @@ func RunSingleTest(ctx context.Context, cfg PoolConfig, testID string) executor.
 
 	// Report pod/node metadata for K8s mode
 	if info.PodName != "" && cfg.APIClient != nil && cfg.RunID != "" {
-		cfg.APIClient.UpdateTestMeta(cfg.RunID, testID, info.PodName, info.NodeName)
+		cfg.APIClient.UpdateTestMeta(cfg.RunID, testID, info.PodName, info.NodeName, "")
 	}
 
 	// Ensure cleanup always happens
@@ -132,6 +132,11 @@ func RunSingleTest(ctx context.Context, cfg PoolConfig, testID string) executor.
 			Passed: false,
 			Error:  err.Error(),
 		}
+	}
+
+	// Update image_id metadata after worker completes (k8s only)
+	if result.ImageID != "" && cfg.APIClient != nil && cfg.RunID != "" {
+		cfg.APIClient.UpdateTestMeta(cfg.RunID, testID, "", "", result.ImageID)
 	}
 
 	return executor.TestResult{

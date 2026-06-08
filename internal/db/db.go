@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL DEFAULT 1
 );
-INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 4);
+INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 5);
 
 -- Registered test suites (for dashboard settings)
 CREATE TABLE IF NOT EXISTS suites (
@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS test_results (
     steps_failed INTEGER DEFAULT 0,
     pod_name TEXT,
     node_name TEXT,
+    image_id TEXT,
     UNIQUE(run_id, test_id)
 );
 
@@ -212,10 +213,30 @@ func GetDB() (*sql.DB, error) {
 	return db, initErr
 }
 
-// initSchema creates tables if they don't exist
+// initSchema creates tables if they don't exist and runs migrations
 func initSchema(db *sql.DB) error {
-	_, err := db.Exec(schema)
-	return err
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	return migrateSchema(db)
+}
+
+// migrateSchema applies incremental schema migrations based on schema_version
+func migrateSchema(db *sql.DB) error {
+	var version int
+	err := db.QueryRow("SELECT version FROM schema_version WHERE id = 1").Scan(&version)
+	if err != nil {
+		// Table may not exist yet on very old databases; schema was just created at latest version
+		return nil
+	}
+
+	// Migration to version 5: add image_id column to test_results
+	if version < 5 {
+		_, _ = db.Exec("ALTER TABLE test_results ADD COLUMN image_id TEXT")
+		_, _ = db.Exec("UPDATE schema_version SET version = 5 WHERE id = 1")
+	}
+
+	return nil
 }
 
 // Close closes the database connection

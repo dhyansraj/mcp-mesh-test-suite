@@ -241,9 +241,11 @@ func (h *K8sHandler) WaitForWorker(ctx context.Context, info WorkerInfo) (*Worke
 			case corev1.PodSucceeded:
 				logs, _ := h.getPodLogs(ctx, info.PodName)
 				duration := time.Since(startTime)
+				imageID := k8sExtractImageID(pod)
 				return &WorkerResult{
 					Passed:   true,
 					Duration: duration,
+					ImageID:  imageID,
 				}, logNoop(logs)
 			case corev1.PodFailed:
 				logs, _ := h.getPodLogs(ctx, info.PodName)
@@ -254,6 +256,7 @@ func (h *K8sHandler) WaitForWorker(ctx context.Context, info WorkerInfo) (*Worke
 					}
 				}
 				duration := time.Since(startTime)
+				imageID := k8sExtractImageID(pod)
 				errMsg := fmt.Sprintf("pod failed with exit code %d", exitCode)
 				if logs != "" {
 					lines := strings.Split(strings.TrimSpace(logs), "\n")
@@ -266,6 +269,7 @@ func (h *K8sHandler) WaitForWorker(ctx context.Context, info WorkerInfo) (*Worke
 					Passed:   false,
 					Error:    errMsg,
 					Duration: duration,
+					ImageID:  imageID,
 				}, nil
 			case corev1.PodPending, corev1.PodRunning:
 				continue
@@ -472,6 +476,15 @@ chmod +x /tmp/tsuite-runner
 
 # Execute the runner with test arguments
 exec /tmp/tsuite-runner%s`, quotedArgs)
+}
+
+// k8sExtractImageID extracts the resolved image digest from pod container statuses.
+// Returns the ImageID of the first container (the "test" container), or empty string.
+func k8sExtractImageID(pod *corev1.Pod) string {
+	if len(pod.Status.ContainerStatuses) > 0 {
+		return pod.Status.ContainerStatuses[0].ImageID
+	}
+	return ""
 }
 
 // logNoop is a helper that discards the logs string but satisfies the return signature.

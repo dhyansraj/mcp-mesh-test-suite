@@ -352,6 +352,26 @@ export function RunDetails({ run, tests }: RunDetailsProps) {
             </div>
           </div>
 
+          {/* Image mismatch warning */}
+          {run.image_mismatch && (
+            <div className="mt-4 rounded-md bg-warning/10 border border-warning/30 p-3 flex items-start gap-2">
+              <AlertCircle className="h-4 w-4 text-warning mt-0.5 flex-shrink-0" />
+              <div className="text-sm">
+                <p className="font-medium text-warning">Image mismatch detected</p>
+                <p className="text-muted-foreground mt-1">
+                  Workers used different image versions. This may cause inconsistent test results.
+                </p>
+                {run.image_ids && run.image_ids.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {run.image_ids.map((id, idx) => (
+                      <p key={idx} className="font-mono text-xs text-muted-foreground truncate">{id}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Metadata */}
           {(run.cli_version || run.docker_image) && (
             <div className="mt-6 flex gap-4 border-t border-border pt-4">
@@ -777,6 +797,12 @@ function TestDetailDialog({ open, onOpenChange, testDetail, loading, suiteId, on
                       <div>
                         <span className="text-muted-foreground">Node: </span>
                         <span className="font-mono">{testDetail.node_name}</span>
+                      </div>
+                    )}
+                    {testDetail.image_id && (
+                      <div>
+                        <span className="text-muted-foreground">Image: </span>
+                        <span className="font-mono text-xs">{testDetail.image_id}</span>
                       </div>
                     )}
                   </>
