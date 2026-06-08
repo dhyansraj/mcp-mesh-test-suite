@@ -95,6 +95,9 @@ jobs:
   publish-npm:
     needs: build-go-binaries
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -102,7 +105,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Set version from tag
@@ -154,7 +157,7 @@ jobs:
             },
             "repository": {
               "type": "git",
-              "url": "https://github.com/mcpmesh/mcp-mesh-test-suite"
+              "url": "https://github.com/dhyansraj/mcp-mesh-test-suite"
             },
             "license": "MIT",
             "engines": {
@@ -249,7 +252,7 @@ jobs:
             "cpu": ["arm64"],
             "repository": {
               "type": "git",
-              "url": "https://github.com/mcpmesh/mcp-mesh-test-suite"
+              "url": "https://github.com/dhyansraj/mcp-mesh-test-suite"
             },
             "license": "MIT"
           }
@@ -266,7 +269,7 @@ jobs:
             "cpu": ["x64"],
             "repository": {
               "type": "git",
-              "url": "https://github.com/mcpmesh/mcp-mesh-test-suite"
+              "url": "https://github.com/dhyansraj/mcp-mesh-test-suite"
             },
             "license": "MIT"
           }
@@ -283,7 +286,7 @@ jobs:
             "cpu": ["arm64"],
             "repository": {
               "type": "git",
-              "url": "https://github.com/mcpmesh/mcp-mesh-test-suite"
+              "url": "https://github.com/dhyansraj/mcp-mesh-test-suite"
             },
             "license": "MIT"
           }
@@ -300,7 +303,7 @@ jobs:
             "cpu": ["x64"],
             "repository": {
               "type": "git",
-              "url": "https://github.com/mcpmesh/mcp-mesh-test-suite"
+              "url": "https://github.com/dhyansraj/mcp-mesh-test-suite"
             },
             "license": "MIT"
           }
@@ -315,25 +318,21 @@ jobs:
           ls -lh packages/*/bin/* 2>/dev/null || true
 
       - name: Publish platform packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -e  # Exit on first error
           # Publish platform packages first (main package depends on them)
           for pkg in tsuite-darwin-arm64 tsuite-darwin-x64 tsuite-linux-arm64 tsuite-linux-x64; do
             echo "Publishing @mcpmesh/$pkg..."
             cd packages/$pkg
-            npm publish --access public
+            npm publish --access public --provenance
             echo "✓ Published @mcpmesh/$pkg"
             cd ../..
           done
 
       - name: Publish main package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -e  # Exit on first error
           echo "Publishing @mcpmesh/tsuite..."
           cd packages/tsuite
-          npm publish --access public
+          npm publish --access public --provenance
           echo "✓ Published @mcpmesh/tsuite"
