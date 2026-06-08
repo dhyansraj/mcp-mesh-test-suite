@@ -81,7 +81,7 @@ jobs:
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags "-X main.version=${{ env.VERSION }}" -o bin/tsuite ./cmd/tsuite
 
           # Build runner (native)
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o bin/tsuite-runner ./cmd/runner
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o bin/tsuite-runner ./cmd/runner
 
       - name: Upload binaries artifact
         uses: actions/upload-artifact@v4
