@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/interpolate"
+	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/textutil"
 )
 
 // StepResult holds the result of executing a step
@@ -74,6 +76,20 @@ func (r *Registry) Execute(handlerName string, step map[string]any, ctx *interpo
 	}
 
 	return handler.Execute(step, ctx)
+}
+
+// commandFailureError builds a diagnostic error string for a command that exited
+// non-zero, folding in the most useful output it produced so the message is not
+// left empty when the failure detail only exists on stderr/stdout.
+func commandFailureError(what string, exitCode int, stdout, stderr string) string {
+	detail := strings.TrimSpace(stderr)
+	if detail == "" {
+		detail = strings.TrimSpace(stdout)
+	}
+	if detail == "" {
+		return fmt.Sprintf("%s exited with code %d (no output)", what, exitCode)
+	}
+	return fmt.Sprintf("%s exited with code %d: %s", what, exitCode, textutil.Truncate(detail, textutil.MaxErrorDetail))
 }
 
 // parseDuration normalizes a step's timeout/interval value. YAML hands back an

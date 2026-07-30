@@ -41,7 +41,11 @@ func (h *ShellHandler) Execute(step map[string]any, ctx *interpolate.Context) St
 
 	timeout := parseDuration(step["timeout"], defaultShellTimeout)
 
-	return runShellCommand(interpolatedCmd, workdir, timeout)
+	result := runShellCommand(interpolatedCmd, workdir, timeout)
+	if !result.Success && result.Error == "" {
+		result.Error = commandFailureError("command", result.ExitCode, result.Stdout, result.Stderr)
+	}
+	return result
 }
 
 // defaultShellTimeout bounds a single shell command when the step does not set one.
@@ -113,6 +117,5 @@ func runShellCommand(command, workdir string, timeout time.Duration) StepResult 
 		ExitCode: exitCode,
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
-		Error:    "",
 	}
 }

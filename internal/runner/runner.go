@@ -184,7 +184,7 @@ func (r *TestRunner) RunTest(testID string, reporter StepReporter) (*TestResult,
 
 		if !stepResult.Success && !step.IgnoreErrors {
 			result.Passed = false
-			result.Error = fmt.Sprintf("pre_run step %d failed: %s", i, stepResult.Error)
+			result.Error = stepFailureMessage("pre_run", i, stepResult)
 			break
 		}
 
@@ -206,7 +206,7 @@ func (r *TestRunner) RunTest(testID string, reporter StepReporter) (*TestResult,
 
 			if !stepResult.Success && !step.IgnoreErrors {
 				result.Passed = false
-				result.Error = fmt.Sprintf("test step %d failed: %s", i, stepResult.Error)
+				result.Error = stepFailureMessage("test", i, stepResult)
 				break
 			}
 
@@ -232,6 +232,9 @@ func (r *TestRunner) RunTest(testID string, reporter StepReporter) (*TestResult,
 
 			if !assertResult.Passed {
 				result.Passed = false
+				if result.Error == "" {
+					result.Error = assertionFailureMessage(i, assertion.Expr, assertion.Message, assertResult.Message)
+				}
 			}
 		}
 	}
@@ -251,6 +254,46 @@ func (r *TestRunner) RunTest(testID string, reporter StepReporter) (*TestResult,
 
 	result.Duration = time.Since(startTime)
 	return result, nil
+}
+
+// stepFailureDetail returns the most useful diagnostic available for a failed
+// step: its error, else stderr, else stdout, else the exit code.
+func stepFailureDetail(result StepResult) string {
+	for _, candidate := range []string{result.Error, result.Stderr, result.Stdout} {
+		if detail := strings.TrimSpace(candidate); detail != "" {
+			return textutil.Truncate(detail, textutil.MaxErrorDetail)
+		}
+	}
+	if result.ExitCode != 0 {
+		return fmt.Sprintf("exit code %d", result.ExitCode)
+	}
+	return "step failed (no output)"
+}
+
+// stepFailureMessage composes the error message for a failed step, including the
+// step name when one is defined.
+func stepFailureMessage(phase string, index int, result StepResult) string {
+	label := fmt.Sprintf("%s step %d", phase, index)
+	if name := strings.TrimSpace(result.Name); name != "" {
+		label = fmt.Sprintf("%s (%s)", label, name)
+	}
+	return fmt.Sprintf("%s failed: %s", label, stepFailureDetail(result))
+}
+
+// assertionFailureMessage composes the error message for a failed assertion.
+func assertionFailureMessage(index int, expr, message, details string) string {
+	label := fmt.Sprintf("assertion %d", index)
+	if msg := strings.TrimSpace(message); msg != "" {
+		label = fmt.Sprintf("%s (%s)", label, msg)
+	}
+	detail := strings.TrimSpace(details)
+	if detail == "" {
+		detail = strings.TrimSpace(expr)
+	}
+	if detail == "" {
+		return fmt.Sprintf("%s failed", label)
+	}
+	return fmt.Sprintf("%s failed: %s", label, textutil.Truncate(detail, textutil.MaxErrorDetail))
 }
 
 // executeStep runs a single step
@@ -387,7 +430,7 @@ func (r *TestRunner) executeRoutine(step config.Step, ctx *interpolate.Context, 
 				ExitCode: stepResult.ExitCode,
 				Stdout:   textutil.TruncateOutput(stdout.String(), textutil.MaxStepOutput),
 				Stderr:   textutil.TruncateOutput(stderr.String(), textutil.MaxStepOutput),
-				Error:    fmt.Sprintf("routine step %d failed: %s", i, stepResult.Error),
+				Error:    stepFailureMessage("routine", i, stepResult),
 			}
 		}
 
@@ -415,6 +458,7 @@ func (r *TestRunner) executeRoutine(step config.Step, ctx *interpolate.Context, 
 }
 
 // routineStepHeader labels one inner routine step in the aggregated output.
+// The index matches the one used by stepFailureMessage("routine", i, ...).
 func routineStepHeader(index int, step config.Step) string {
 	handler := step.Handler
 	if handler == "" {
