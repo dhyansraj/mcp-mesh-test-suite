@@ -174,8 +174,10 @@ func (c *Client) CompleteRun(runID string) error {
 	return nil
 }
 
-// CancelRun marks a run as cancelled (called by CLI after terminating workers)
-func (c *Client) CancelRun(runID string) error {
+// FinalizeCancelled marks an already-torn-down run as cancelled (FINALIZE path).
+// Called by the driver AFTER workers have been torn down: it immediately sets
+// status='cancelled', finished_at, and marks pending/running tests as skipped.
+func (c *Client) FinalizeCancelled(runID string) error {
 	req, err := http.NewRequest(http.MethodPatch, c.baseURL+"/api/runs/"+runID, bytes.NewReader([]byte(`{"status":"cancelled"}`)))
 	if err != nil {
 		return err
@@ -190,7 +192,25 @@ func (c *Client) CancelRun(runID string) error {
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to cancel run: %s - %s", resp.Status, string(bodyBytes))
+		return fmt.Errorf("failed to finalize run as cancelled: %s - %s", resp.Status, string(bodyBytes))
+	}
+
+	return nil
+}
+
+// RequestCancel requests graceful cancellation of a run (GRACEFUL path).
+// It sets cancel_requested only; the driver's CancelChecker observes the flag,
+// tears workers down, and finalizes the run itself.
+func (c *Client) RequestCancel(runID string) error {
+	resp, err := c.httpClient.Post(c.baseURL+"/api/runs/"+runID+"/cancel", "application/json", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to request run cancellation: %s - %s", resp.Status, string(bodyBytes))
 	}
 
 	return nil

@@ -770,7 +770,7 @@ func executeTests(cmd *cobra.Command, args []string) error {
 	// Complete or cancel run via API
 	if apiClient != nil && runID != "" {
 		if cancelled {
-			if err := apiClient.CancelRun(runID); err != nil {
+			if err := apiClient.FinalizeCancelled(runID); err != nil {
 				fmt.Printf("Warning: Failed to mark run as cancelled: %v\n", err)
 			}
 		} else {
@@ -962,13 +962,22 @@ func delegateToAPI(cmd *cobra.Command, args []string) error {
 	fmt.Println("Watching progress...")
 	fmt.Println()
 
-	// Set up signal handling for CTRL+C
+	// Set up signal handling.
+	// SIGINT (interactive Ctrl-C): gracefully request cancellation; the driver
+	// tears workers down and finalizes the run.
+	// SIGTERM (watcher killed by a supervisor/harness): just detach and exit,
+	// leaving the run to continue in the background.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigCh
-		fmt.Println("\nCancelling run...")
-		apiClient.CancelRun(runID)
+		sig := <-sigCh
+		if sig == syscall.SIGINT {
+			fmt.Println("\nCancelling run (graceful)...")
+			apiClient.RequestCancel(runID)
+		} else {
+			fmt.Println("\nDetaching from run (still running in background)...")
+		}
+		os.Exit(0)
 	}()
 
 	// Poll for progress
