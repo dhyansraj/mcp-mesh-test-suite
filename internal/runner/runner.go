@@ -10,6 +10,7 @@ import (
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/config"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/handlers"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/interpolate"
+	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/textutil"
 )
 
 // TestRunner executes tests locally (inside container or standalone)
@@ -351,9 +352,23 @@ func (r *TestRunner) executeRoutine(step config.Step, ctx *interpolate.Context, 
 	routineCtx := *ctx // shallow copy
 	routineCtx.Params = interpolatedParams
 
-	// Execute routine steps
+	// Execute routine steps, aggregating their output so a routine step is not
+	// a black box in the API/dashboard.
+	var stdout, stderr strings.Builder
 	for i, routineStep := range routine.Steps {
 		stepResult := r.executeStep(routineStep, &routineCtx, phase, i)
+
+		header := routineStepHeader(i, routineStep)
+		appendSection(&stdout, header, stepResult.Stdout)
+		// Only add a stderr section when the inner step actually said something,
+		// so an all-clean routine keeps an empty stderr.
+		errOutput := stepResult.Stderr
+		if errOutput == "" && !stepResult.Success {
+			errOutput = stepResult.Error
+		}
+		if errOutput != "" {
+			appendSection(&stderr, header, errOutput)
+		}
 
 		if !stepResult.Success && !routineStep.IgnoreErrors {
 			return StepResult{
@@ -363,8 +378,8 @@ func (r *TestRunner) executeRoutine(step config.Step, ctx *interpolate.Context, 
 				Handler:  routineRef,
 				Success:  false,
 				ExitCode: stepResult.ExitCode,
-				Stdout:   stepResult.Stdout,
-				Stderr:   stepResult.Stderr,
+				Stdout:   textutil.TruncateOutput(stdout.String(), textutil.MaxStepOutput),
+				Stderr:   textutil.TruncateOutput(stderr.String(), textutil.MaxStepOutput),
 				Error:    fmt.Sprintf("routine step %d failed: %s", i, stepResult.Error),
 			}
 		}
@@ -387,6 +402,36 @@ func (r *TestRunner) executeRoutine(step config.Step, ctx *interpolate.Context, 
 		Name:    step.Name,
 		Handler: routineRef,
 		Success: true,
+		Stdout:  textutil.TruncateOutput(stdout.String(), textutil.MaxStepOutput),
+		Stderr:  textutil.TruncateOutput(stderr.String(), textutil.MaxStepOutput),
+	}
+}
+
+// routineStepHeader labels one inner routine step in the aggregated output.
+func routineStepHeader(index int, step config.Step) string {
+	handler := step.Handler
+	if handler == "" {
+		handler = step.Routine
+	}
+	if name := strings.TrimSpace(step.Name); name != "" {
+		return fmt.Sprintf("--- step %d: %s (%s) ---", index, name, handler)
+	}
+	return fmt.Sprintf("--- step %d (%s) ---", index, handler)
+}
+
+// appendSection appends a headed block of output to b, separating consecutive
+// sections with a blank line.
+func appendSection(b *strings.Builder, header, body string) {
+	if b.Len() > 0 {
+		b.WriteString("\n")
+	}
+	b.WriteString(header)
+	b.WriteString("\n")
+	if body != "" {
+		b.WriteString(body)
+		if !strings.HasSuffix(body, "\n") {
+			b.WriteString("\n")
+		}
 	}
 }
 

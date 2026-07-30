@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/runner"
+	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/textutil"
 )
 
 // RunnerClient is an API client specifically for the runner binary.
@@ -46,6 +47,23 @@ type StepReport struct {
 	Stderr     string `json:"stderr"`
 	Error      string `json:"error,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
+}
+
+// newStepReport converts a step result for transmission, capping stdout/stderr
+// so a chatty step cannot write an unbounded blob into step_results. The
+// runner's own result keeps the full output.
+func newStepReport(result runner.StepResult) StepReport {
+	return StepReport{
+		Phase:    result.Phase,
+		Index:    result.Index,
+		Handler:  result.Handler,
+		Name:     result.Name,
+		Success:  result.Success,
+		ExitCode: result.ExitCode,
+		Stdout:   textutil.TruncateOutput(result.Stdout, textutil.MaxStepOutput),
+		Stderr:   textutil.TruncateOutput(result.Stderr, textutil.MaxStepOutput),
+		Error:    result.Error,
+	}
 }
 
 // AssertionReport represents an assertion result for API reporting
@@ -95,17 +113,7 @@ func (c *RunnerClient) buildReport(result *runner.TestResult, status string) *Te
 	stepsPassed := 0
 	stepsFailed := 0
 	for i, step := range result.Steps {
-		steps[i] = StepReport{
-			Phase:    step.Phase,
-			Index:    step.Index,
-			Handler:  step.Handler,
-			Name:     step.Name,
-			Success:  step.Success,
-			ExitCode: step.ExitCode,
-			Stdout:   step.Stdout,
-			Stderr:   step.Stderr,
-			Error:    step.Error,
-		}
+		steps[i] = newStepReport(step)
 		if step.Success {
 			stepsPassed++
 		} else {
@@ -240,18 +248,7 @@ func (c *RunnerClient) ReportStepCompleted(step StepReport) error {
 
 // OnStepCompleted implements runner.StepReporter by reporting to the API
 func (c *RunnerClient) OnStepCompleted(result runner.StepResult) {
-	step := StepReport{
-		Phase:    result.Phase,
-		Index:    result.Index,
-		Handler:  result.Handler,
-		Name:     result.Name,
-		Success:  result.Success,
-		ExitCode: result.ExitCode,
-		Stdout:   result.Stdout,
-		Stderr:   result.Stderr,
-		Error:    result.Error,
-	}
-	if err := c.ReportStepCompleted(step); err != nil {
+	if err := c.ReportStepCompleted(newStepReport(result)); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to report step completed: %v\n", err)
 	}
 }
