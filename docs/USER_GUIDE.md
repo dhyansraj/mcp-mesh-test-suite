@@ -306,6 +306,53 @@ Wait for conditions.
   interval: 2
 ```
 
+### probe
+
+Poll a command until it reports readiness. Replaces hand-written
+`for i in $(seq 1 40); do ...; sleep 3; done` loops.
+
+```yaml
+- name: "Wait for calendar-agent to serve"
+  handler: probe
+  command: curl -sf "${captured.endpoint}/health"
+  interval: 2            # seconds between attempts (default 2)
+  timeout: 120           # overall deadline (default 60)
+  capture: probe_out     # captures the final attempt's stdout
+```
+
+| Field | Description |
+|-------|-------------|
+| `command` | Command to poll; same semantics as the shell handler |
+| `interval` | Seconds between attempts, or a duration string (`"2s"`, `"1m"`). Default 2 |
+| `timeout` | Overall deadline, seconds or duration string. Default 60 |
+| `until` | Optional assertion expression; when absent, success is exit code 0 |
+| `success_threshold` | Consecutive passes required before declaring ready (default 1) |
+| `on_failure` | Optional command run once when the probe gives up, for diagnostics |
+
+A non-zero exit is just a failed attempt, not a fatal error. `until` uses the
+same expression syntax as `assertions:` and is evaluated against the latest
+attempt's `${stdout}`, `${stderr}`, and `${exit_code}` (`${stdout}` and
+`${stderr}` have trailing whitespace trimmed):
+
+```yaml
+- name: "Wait for 3 agents"
+  handler: probe
+  command: "meshctl list --json | jq '.agents | length'"
+  until: "${stdout} >= 3"
+  interval: 3
+  timeout: 120
+  success_threshold: 2   # must hold twice in a row
+  on_failure: "meshctl logs registry | tail -50"
+```
+
+On success, stdout is the final attempt's output verbatim (so `capture` behaves
+exactly as for `shell`) and the poll trace is written to stderr. On timeout the
+step fails with an error naming the probe, elapsed time, attempt count, and the
+last attempt's output; `on_failure` output is appended to stderr.
+
+> **Note:** `timeout` is enforced by the probe itself. Keep it below the test's
+> own `timeout:`, which hard-kills the whole test.
+
 ### file
 
 File operations.

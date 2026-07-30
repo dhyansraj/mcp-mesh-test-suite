@@ -17,6 +17,7 @@ name. The captured value is then available to later steps and to assertions as
 |---------|-------------|
 | `shell` | Run a shell command with bash |
 | `wait` | Pause for N seconds or poll a URL until ready |
+| `probe` | Poll a command until it reports readiness |
 | `file` | File operations (exists, read, write, delete, mkdir) |
 | `http` | Make an HTTP request |
 | `pip-install` | Install Python packages or a requirements.txt |
@@ -76,6 +77,55 @@ A URL is considered ready when it responds with a status below 400.
   type: seconds
   seconds: 5
 ```
+
+## probe Handler
+
+Poll a command until it reports readiness, instead of hand-writing a retry loop
+in bash. The command runs exactly like a `shell` step, once per attempt, until
+the success condition holds or the deadline passes.
+
+| Option | Description | Required / Default |
+|--------|-------------|--------------------|
+| `command` | Command to poll | required |
+| `workdir` | Working directory | default `/workspace` |
+| `interval` | Seconds between attempts (or `"2s"`, `"1m"`) | default `2` |
+| `timeout` | Overall deadline (seconds or duration string) | default `60` |
+| `until` | Assertion expression deciding success | default: exit code `0` |
+| `success_threshold` | Consecutive passes required | default `1` |
+| `on_failure` | Command run once when the probe gives up | optional |
+
+A non-zero exit is a failed attempt, not a fatal error. When `until` is set it
+is evaluated with the same syntax as `assertions:`, against the latest attempt's
+`${stdout}`, `${stderr}`, and `${exit_code}`; `${stdout}` and `${stderr}` have
+trailing whitespace trimmed, so `${stdout} == 3` matches jq's `3\n`.
+
+On success the step's stdout is the final attempt's output verbatim, so
+`capture` behaves exactly as it does for `shell`, and the poll trace is written
+to stderr. On timeout the step fails with an error naming the probe, the elapsed
+time, the attempt count, and the last attempt's output, and any `on_failure`
+output is appended to stderr.
+
+```yaml
+- name: Wait for calendar-agent to serve
+  handler: probe
+  command: curl -sf http://localhost:9092/health
+  interval: 2
+  timeout: 120
+```
+
+```yaml
+- name: Wait for 3 agents to register
+  handler: probe
+  command: meshctl list --json | jq '.agents | length'
+  until: ${stdout} >= 3
+  interval: 3
+  timeout: 120
+  success_threshold: 2
+  on_failure: meshctl logs registry | tail -50
+```
+
+> Keep `timeout` below the test's own `timeout:`, which hard-kills the whole
+> test; the probe enforces its own deadline and reports a diagnostic failure.
 
 ## file Handler
 

@@ -289,6 +289,13 @@ func (r *TestRunner) executeStep(step config.Step, ctx *interpolate.Context, pha
 		}
 	}
 
+	// The probe handler evaluates `until` itself, once per attempt, against that
+	// attempt's output. Pre-interpolating it here would bake in the *previous*
+	// step's ${stdout}/${exit_code}, so hand the expression over untouched.
+	if raw, ok := stepMap["until"].(string); ok {
+		interpolatedMap["until"] = raw
+	}
+
 	// Execute handler
 	handlerResult := r.handlers.Execute(handlerName, interpolatedMap, ctx)
 
@@ -481,7 +488,7 @@ func stepToMap(step config.Step) map[string]any {
 	if step.Capture != "" {
 		m["capture"] = step.Capture
 	}
-	if step.Timeout > 0 {
+	if step.Timeout != nil {
 		m["timeout"] = step.Timeout
 	}
 	if step.IgnoreErrors {
@@ -519,6 +526,18 @@ func stepToMap(step config.Step) map[string]any {
 	}
 	if len(step.Keys) > 0 {
 		m["keys"] = step.Keys
+	}
+	if step.Interval != nil {
+		m["interval"] = step.Interval
+	}
+	if step.Until != "" {
+		m["until"] = step.Until
+	}
+	if step.SuccessThreshold > 0 {
+		m["success_threshold"] = step.SuccessThreshold
+	}
+	if step.OnFailure != "" {
+		m["on_failure"] = step.OnFailure
 	}
 
 	return m

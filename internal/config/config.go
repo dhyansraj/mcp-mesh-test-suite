@@ -117,13 +117,14 @@ type TestConfig struct {
 
 // Step represents a test step
 type Step struct {
-	Name         string         `yaml:"name"`
-	Handler      string         `yaml:"handler"`
-	Command      string         `yaml:"command,omitempty"`
-	Workdir      string         `yaml:"workdir,omitempty"`
-	Capture      string         `yaml:"capture,omitempty"`
-	Timeout      int            `yaml:"timeout,omitempty"`
-	IgnoreErrors bool           `yaml:"ignore_errors,omitempty"`
+	Name    string `yaml:"name"`
+	Handler string `yaml:"handler"`
+	Command string `yaml:"command,omitempty"`
+	Workdir string `yaml:"workdir,omitempty"`
+	Capture string `yaml:"capture,omitempty"`
+	// Timeout is seconds when given as a number, or a duration string ("5m").
+	Timeout      any  `yaml:"timeout,omitempty"`
+	IgnoreErrors bool `yaml:"ignore_errors,omitempty"`
 
 	// Handler-specific fields
 	Path       string            `yaml:"path,omitempty"`        // npm-install, pip-install
@@ -137,6 +138,12 @@ type Step struct {
 	Content    string            `yaml:"content,omitempty"`     // file
 	Target     string            `yaml:"target,omitempty"`      // secrets
 	Keys       []string          `yaml:"keys,omitempty"`        // secrets
+
+	// Probe fields
+	Interval         any    `yaml:"interval,omitempty"`          // probe: seconds or duration string
+	Until            string `yaml:"until,omitempty"`             // probe: assertion expression
+	SuccessThreshold int    `yaml:"success_threshold,omitempty"` // probe: consecutive passes
+	OnFailure        string `yaml:"on_failure,omitempty"`        // probe: diagnostic command
 
 	// Routine fields
 	Routine string         `yaml:"routine,omitempty"`

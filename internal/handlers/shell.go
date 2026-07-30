@@ -37,44 +37,53 @@ func (h *ShellHandler) Execute(step map[string]any, ctx *interpolate.Context) St
 		}
 	}
 
-	// Get workdir
+	workdir := stepWorkdir(step, ctx)
+
+	timeout := parseDuration(step["timeout"], defaultShellTimeout)
+
+	return runShellCommand(interpolatedCmd, workdir, timeout)
+}
+
+// defaultShellTimeout bounds a single shell command when the step does not set one.
+const defaultShellTimeout = 120 * time.Second
+
+// stepWorkdir resolves the directory a command runs in: the step's own workdir,
+// else the context workdir, else /workspace. The result is interpolated.
+func stepWorkdir(step map[string]any, ctx *interpolate.Context) string {
 	workdir := "/workspace"
 	if w, ok := step["workdir"].(string); ok && w != "" {
 		workdir = w
 	} else if ctx.Workdir != "" {
 		workdir = ctx.Workdir
 	}
-
-	// Interpolate workdir
 	workdir, _ = interpolate.Interpolate(workdir, ctx)
+	return workdir
+}
 
-	// Get timeout
-	timeout := 120 * time.Second
-	if t, ok := step["timeout"].(int); ok && t > 0 {
-		timeout = time.Duration(t) * time.Second
-	}
-
-	// Create command context with timeout
+// runShellCommand executes an already-interpolated command with bash and
+// captures its output. It is shared by the shell and probe handlers so both get
+// identical environment, working directory, and exit-code semantics.
+//
+// A non-zero exit is reported as Success=false with an empty Error: the caller
+// decides whether that is fatal (shell) or just a failed attempt (probe). Only
+// a timeout or a failure to start the process sets Error here.
+func runShellCommand(command, workdir string, timeout time.Duration) StepResult {
 	cmdCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Execute command with bash
-	cmd := exec.CommandContext(cmdCtx, "bash", "-c", interpolatedCmd)
+	cmd := exec.CommandContext(cmdCtx, "bash", "-c", command)
 	cmd.Dir = workdir
 
-	// Set up environment
 	cmd.Env = os.Environ()
 	if apiURL := os.Getenv("TSUITE_API"); apiURL != "" {
 		cmd.Env = append(cmd.Env, "TSUITE_API="+apiURL)
 	}
 
-	// Capture output
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	// Run the command
-	err = cmd.Run()
+	err := cmd.Run()
 
 	exitCode := 0
 	if err != nil {

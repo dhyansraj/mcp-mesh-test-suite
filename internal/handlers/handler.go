@@ -1,6 +1,10 @@
 package handlers
 
 import (
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/interpolate"
 )
 
@@ -35,6 +39,7 @@ func NewRegistry() *Registry {
 	// Register built-in handlers
 	r.Register(&ShellHandler{})
 	r.Register(&WaitHandler{})
+	r.Register(&ProbeHandler{})
 	r.Register(&FileHandler{})
 	r.Register(&HTTPHandler{})
 	r.Register(&NpmInstallHandler{})
@@ -69,4 +74,72 @@ func (r *Registry) Execute(handlerName string, step map[string]any, ctx *interpo
 	}
 
 	return handler.Execute(step, ctx)
+}
+
+// parseDuration normalizes a step's timeout/interval value. YAML hands back an
+// int for `timeout: 300`, a float64 for `timeout: 2.5`, and a string for
+// `timeout: "5m"`, so all three are accepted: bare numbers are seconds, strings
+// are either a bare number of seconds or a Go duration ("300s", "5m").
+// Anything missing, unparseable, or non-positive falls back to def.
+func parseDuration(v any, def time.Duration) time.Duration {
+	var d time.Duration
+
+	switch val := v.(type) {
+	case int:
+		d = time.Duration(val) * time.Second
+	case int64:
+		d = time.Duration(val) * time.Second
+	case float64:
+		d = time.Duration(val * float64(time.Second))
+	case time.Duration:
+		d = val
+	case string:
+		s := strings.TrimSpace(val)
+		if s == "" {
+			return def
+		}
+		if secs, err := strconv.ParseFloat(s, 64); err == nil {
+			d = time.Duration(secs * float64(time.Second))
+		} else if parsed, err := time.ParseDuration(s); err == nil {
+			d = parsed
+		} else {
+			return def
+		}
+	default:
+		return def
+	}
+
+	if d <= 0 {
+		return def
+	}
+	return d
+}
+
+// parseCount normalizes a small positive integer step field, accepting the int,
+// float64, and string forms YAML may produce. Non-positive or unparseable
+// values fall back to def.
+func parseCount(v any, def int) int {
+	var n int
+
+	switch val := v.(type) {
+	case int:
+		n = val
+	case int64:
+		n = int(val)
+	case float64:
+		n = int(val)
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(val))
+		if err != nil {
+			return def
+		}
+		n = parsed
+	default:
+		return def
+	}
+
+	if n <= 0 {
+		return def
+	}
+	return n
 }
