@@ -63,8 +63,23 @@ func (h *ProbeHandler) Execute(step map[string]any, ctx *interpolate.Context) St
 	}
 
 	workdir := stepWorkdir(step, ctx)
-	timeout := parseDuration(step["timeout"], defaultProbeTimeout)
-	interval := parseDuration(step["interval"], defaultProbeInterval)
+
+	timeout, err := durationField(step, "timeout", defaultProbeTimeout)
+	if err != nil {
+		return StepResult{
+			Success: false,
+			Error:   fmt.Sprintf("probe handler: %v", err),
+		}
+	}
+
+	interval, err := durationField(step, "interval", defaultProbeInterval)
+	if err != nil {
+		return StepResult{
+			Success: false,
+			Error:   fmt.Sprintf("probe handler: %v", err),
+		}
+	}
+
 	threshold := parseCount(step["success_threshold"], 1)
 	until := strings.TrimSpace(stringField(step, "until"))
 	onFailure := stringField(step, "on_failure")

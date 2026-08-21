@@ -27,6 +27,29 @@ name. The captured value is then available to later steps and to assertions as
 | `secrets` | Write configured secrets into an env file |
 | `runner` | Download the embedded runner binaries from the API server |
 
+## Duration Options
+
+Every duration option below (`timeout`, `interval`) accepts either a number of
+seconds or a duration string such as `500ms`, `30s`, `5m`, or `1m30s`. The two
+forms are interchangeable, so `timeout: 1200` and `timeout: 20m` are the same
+deadline.
+
+```yaml
+- name: Build the agent image
+  handler: shell
+  command: docker build -t agent .
+  timeout: 20m
+```
+
+Leave the option out to get the handler's default. A value that is present but
+unparseable (`timeout: fivem`) fails the step with an error naming the field,
+rather than quietly reverting to the default and running with a deadline you did
+not ask for. `0` and negative values are rejected the same way; there is no
+"no timeout" value.
+
+The `wait` handler's `seconds:` is a plain number of seconds, not a duration
+string.
+
 ## shell Handler
 
 Run a command with `bash -c`. Stdout, stderr, and the exit code are captured.
@@ -35,7 +58,7 @@ Run a command with `bash -c`. Stdout, stderr, and the exit code are captured.
 |--------|-------------|--------------------|
 | `command` | Command to run | required |
 | `workdir` | Working directory | default `/workspace` |
-| `timeout` | Timeout in seconds | default `120` |
+| `timeout` | Timeout, in seconds or as a duration string | default `120` (seconds) |
 
 ```yaml
 - name: Print mesh version
@@ -54,8 +77,8 @@ Pause execution, either for a fixed duration or until a URL becomes reachable.
 | `type` | `seconds` or `http` | default `seconds` |
 | `seconds` | Seconds to wait (`type: seconds`) | default `1` |
 | `url` | URL to poll (`type: http`) | required for `http` |
-| `interval` | Seconds between polls (`type: http`) | default `2` |
-| `timeout` | Max seconds to wait for the URL (`type: http`) | default `30` |
+| `interval` | Time between polls (`type: http`), in seconds or as a duration string | default `2` (seconds) |
+| `timeout` | How long to wait for the URL (`type: http`), in seconds or as a duration string | default `30` (seconds) |
 
 A URL is considered ready when it responds with a status below 400.
 
@@ -85,8 +108,8 @@ the success condition holds or the deadline passes.
 |--------|-------------|--------------------|
 | `command` | Command to poll | required |
 | `workdir` | Working directory | default `/workspace` |
-| `interval` | Seconds between attempts (or `"2s"`, `"1m"`) | default `2` |
-| `timeout` | Overall deadline (seconds or duration string) | default `60` |
+| `interval` | Time between attempts, in seconds or as a duration string | default `2` (seconds) |
+| `timeout` | Overall deadline, in seconds or as a duration string | default `60` (seconds) |
 | `until` | Assertion expression deciding success | default: exit code `0` |
 | `success_threshold` | Consecutive passes required | default `1` |
 | `on_failure` | Command run once when the probe gives up | optional |
@@ -167,7 +190,7 @@ on a status of 400 or above.
 | `url` | Request URL | required |
 | `headers` | Request headers (map) | optional |
 | `body` | Request body (string, or a map/list sent as JSON) | optional |
-| `timeout` | Timeout in seconds | default `30` |
+| `timeout` | Timeout, in seconds or as a duration string | default `30` (seconds) |
 
 A string `body` is sent verbatim, so set `Content-Type` yourself. A `body`
 written as YAML structure is marshalled to JSON and `Content-Type:
@@ -206,7 +229,7 @@ explicit package list. Provide one of `path` or `packages`.
 |--------|-------------|--------------------|
 | `path` | Path to a `requirements.txt` (or a directory containing one) | required unless `packages` |
 | `packages` | List of package specs to install | required unless `path` |
-| `timeout` | Timeout in seconds | default `300` |
+| `timeout` | Timeout, in seconds or as a duration string | default `300` (seconds) |
 
 If a `/wheels` directory is present, the handler installs from those local
 wheels first (offline mode) before resolving the rest.
@@ -234,7 +257,7 @@ Run `npm install --legacy-peer-deps` for a Node project (a directory containing
 |--------|-------------|--------------------|
 | `path` | Directory containing `package.json` | required |
 | `replace_file_deps` | Replace `file:` dependencies with a resolvable version | default `true` |
-| `timeout` | Timeout in seconds | default `300` |
+| `timeout` | Timeout, in seconds or as a duration string | default `300` (seconds) |
 
 By default `file:` dependencies (which point at host paths that don't exist in
 the container) are rewritten so `npm install` can resolve them. If a `/packages`
@@ -258,7 +281,7 @@ directory containing `pom.xml`).
 | `strip_file_repos` | Remove `<repository>` blocks with `file://` URLs | default `true` |
 | `align_version` | Align `<mcp-mesh.version>` to the SDK found in the local m2 repo | default `true` |
 | `m2_repo` | Local m2 repository path used for version alignment | default `/root/.m2/repository` |
-| `timeout` | Timeout in seconds | default `300` |
+| `timeout` | Timeout, in seconds or as a duration string | default `300` (seconds) |
 
 ```yaml
 - name: Resolve maven deps
@@ -276,7 +299,7 @@ wrapper is used when present, otherwise the system `gradle`.
 |--------|-------------|--------------------|
 | `path` | Directory containing a Gradle build file | required |
 | `strip_file_repos` | Remove `maven { ... }` repositories with `file://` URLs | default `true` |
-| `timeout` | Timeout in seconds | default `300` |
+| `timeout` | Timeout, in seconds or as a duration string | default `300` (seconds) |
 
 ```yaml
 - name: Resolve gradle deps

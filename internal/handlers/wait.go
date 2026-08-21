@@ -11,6 +11,12 @@ import (
 // WaitHandler waits for a duration or condition
 type WaitHandler struct{}
 
+const (
+	defaultWaitSeconds     = 1 * time.Second
+	defaultWaitHTTPTimeout = 30 * time.Second
+	defaultWaitInterval    = 2 * time.Second
+)
+
 func (h *WaitHandler) Name() string {
 	return "wait"
 }
@@ -35,18 +41,30 @@ func (h *WaitHandler) Execute(step map[string]any, ctx *interpolate.Context) Ste
 }
 
 func (h *WaitHandler) waitSeconds(step map[string]any) StepResult {
-	seconds := 1
-	if s, ok := step["seconds"].(int); ok && s > 0 {
-		seconds = s
+	duration, err := durationField(step, "seconds", defaultWaitSeconds)
+	if err != nil {
+		return StepResult{
+			Success: false,
+			Error:   fmt.Sprintf("wait handler: %v", err),
+		}
 	}
 
-	time.Sleep(time.Duration(seconds) * time.Second)
+	time.Sleep(duration)
 
 	return StepResult{
 		Success:  true,
 		ExitCode: 0,
-		Stdout:   fmt.Sprintf("Waited %d seconds", seconds),
+		Stdout:   waitedMessage(duration),
 	}
+}
+
+// waitedMessage keeps the historical "Waited 5 seconds" wording for whole-second
+// waits, since that stdout is capturable and suites may match on it.
+func waitedMessage(d time.Duration) string {
+	if d%time.Second == 0 {
+		return fmt.Sprintf("Waited %d seconds", int64(d/time.Second))
+	}
+	return fmt.Sprintf("Waited %s", d)
 }
 
 func (h *WaitHandler) waitHTTP(step map[string]any, ctx *interpolate.Context) StepResult {
@@ -61,25 +79,29 @@ func (h *WaitHandler) waitHTTP(step map[string]any, ctx *interpolate.Context) St
 	// Interpolate URL
 	url, _ = interpolate.Interpolate(url, ctx)
 
-	timeout := 30
-	if t, ok := step["timeout"].(int); ok && t > 0 {
-		timeout = t
+	timeout, err := durationField(step, "timeout", defaultWaitHTTPTimeout)
+	if err != nil {
+		return StepResult{
+			Success: false,
+			Error:   fmt.Sprintf("wait handler: %v", err),
+		}
 	}
 
-	interval := 2
-	if i, ok := step["interval"].(int); ok && i > 0 {
-		interval = i
+	interval, err := durationField(step, "interval", defaultWaitInterval)
+	if err != nil {
+		return StepResult{
+			Success: false,
+			Error:   fmt.Sprintf("wait handler: %v", err),
+		}
 	}
 
 	startTime := time.Now()
-	timeoutDuration := time.Duration(timeout) * time.Second
-	intervalDuration := time.Duration(interval) * time.Second
 
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
 
-	for time.Since(startTime) < timeoutDuration {
+	for time.Since(startTime) < timeout {
 		resp, err := client.Get(url)
 		if err == nil {
 			resp.Body.Close()
@@ -91,12 +113,12 @@ func (h *WaitHandler) waitHTTP(step map[string]any, ctx *interpolate.Context) St
 				}
 			}
 		}
-		time.Sleep(intervalDuration)
+		time.Sleep(interval)
 	}
 
 	return StepResult{
 		Success:  false,
 		ExitCode: 1,
-		Error:    fmt.Sprintf("URL %s not ready after %d seconds", url, timeout),
+		Error:    fmt.Sprintf("URL %s not ready after %s", url, timeout),
 	}
 }

@@ -39,7 +39,13 @@ func (h *ShellHandler) Execute(step map[string]any, ctx *interpolate.Context) St
 
 	workdir := stepWorkdir(step, ctx)
 
-	timeout := parseDuration(step["timeout"], defaultShellTimeout)
+	timeout, err := durationField(step, "timeout", defaultShellTimeout)
+	if err != nil {
+		return StepResult{
+			Success: false,
+			Error:   fmt.Sprintf("shell handler: %v", err),
+		}
+	}
 
 	result := runShellCommand(interpolatedCmd, workdir, timeout)
 	if !result.Success && result.Error == "" {

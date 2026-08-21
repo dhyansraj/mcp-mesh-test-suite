@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/interpolate"
 )
@@ -31,6 +30,16 @@ func (h *NpmInstallHandler) Execute(step map[string]any, ctx *interpolate.Contex
 		return StepResult{
 			Success: false,
 			Error:   "npm-install handler requires 'path' field",
+		}
+	}
+
+	// Resolve the timeout before touching the project, so a malformed step is
+	// rejected rather than rewriting package.json on its way to failing.
+	timeout, err := durationField(step, "timeout", defaultInstallTimeout)
+	if err != nil {
+		return StepResult{
+			Success: false,
+			Error:   fmt.Sprintf("npm-install handler: %v", err),
 		}
 	}
 
@@ -97,11 +106,6 @@ func (h *NpmInstallHandler) Execute(step map[string]any, ctx *interpolate.Contex
 	mode := "published"
 	if _, err := os.Stat("/packages"); err == nil {
 		mode = "local"
-	}
-
-	timeout := 300 * time.Second
-	if t, ok := step["timeout"].(int); ok && t > 0 {
-		timeout = time.Duration(t) * time.Second
 	}
 
 	cmdCtx, cancel := context.WithTimeout(context.Background(), timeout)

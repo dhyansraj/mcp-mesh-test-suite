@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -92,43 +93,62 @@ func commandFailureError(what string, exitCode int, stdout, stderr string) strin
 	return fmt.Sprintf("%s exited with code %d: %s", what, exitCode, textutil.Truncate(detail, textutil.MaxErrorDetail))
 }
 
-// parseDuration normalizes a step's timeout/interval value. YAML hands back an
-// int for `timeout: 300`, a float64 for `timeout: 2.5`, and a string for
+// defaultInstallTimeout bounds a dependency resolution command (pip, npm, mvn,
+// gradle) when the step does not set one.
+const defaultInstallTimeout = 300 * time.Second
+
+// durationField reads a duration-valued step option such as `timeout` or
+// `interval`. Every handler goes through here so all of them accept the same
+// forms, and so a value that is present but unusable fails the step instead of
+// silently reverting to def: a typo'd `timeout: fivem` used to look exactly
+// like no timeout at all.
+//
+// An absent (or nil) key is the only case that yields def.
+func durationField(step map[string]any, key string, def time.Duration) (time.Duration, error) {
+	v, ok := step[key]
+	if !ok || v == nil {
+		return def, nil
+	}
+
+	d, err := toDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %w", key, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("invalid %s: must be positive, got %v", key, d)
+	}
+	return d, nil
+}
+
+// toDuration normalizes one duration value. YAML hands back an int for
+// `timeout: 300`, a float64 for `timeout: 2.5`, and a string for
 // `timeout: "5m"`, so all three are accepted: bare numbers are seconds, strings
 // are either a bare number of seconds or a Go duration ("300s", "5m").
-// Anything missing, unparseable, or non-positive falls back to def.
-func parseDuration(v any, def time.Duration) time.Duration {
-	var d time.Duration
-
+func toDuration(v any) (time.Duration, error) {
 	switch val := v.(type) {
 	case int:
-		d = time.Duration(val) * time.Second
+		return time.Duration(val) * time.Second, nil
 	case int64:
-		d = time.Duration(val) * time.Second
+		return time.Duration(val) * time.Second, nil
 	case float64:
-		d = time.Duration(val * float64(time.Second))
+		return time.Duration(val * float64(time.Second)), nil
 	case time.Duration:
-		d = val
+		return val, nil
 	case string:
 		s := strings.TrimSpace(val)
 		if s == "" {
-			return def
+			return 0, errors.New("value is empty")
 		}
 		if secs, err := strconv.ParseFloat(s, 64); err == nil {
-			d = time.Duration(secs * float64(time.Second))
-		} else if parsed, err := time.ParseDuration(s); err == nil {
-			d = parsed
-		} else {
-			return def
+			return time.Duration(secs * float64(time.Second)), nil
 		}
+		if parsed, err := time.ParseDuration(s); err == nil {
+			return parsed, nil
+		}
+		return 0, fmt.Errorf("%q is neither a number of seconds nor a duration such as \"30s\" or \"5m\"", s)
 	default:
-		return def
+		return 0, fmt.Errorf("%v (%T) is neither a number of seconds nor a duration string", v, v)
 	}
-
-	if d <= 0 {
-		return def
-	}
-	return d
 }
 
 // parseCount normalizes a small positive integer step field, accepting the int,

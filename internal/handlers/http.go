@@ -15,6 +15,9 @@ import (
 // HTTPHandler makes HTTP requests
 type HTTPHandler struct{}
 
+// defaultHTTPTimeout bounds a single request when the step does not set one.
+const defaultHTTPTimeout = 30 * time.Second
+
 func (h *HTTPHandler) Name() string {
 	return "http"
 }
@@ -36,9 +39,12 @@ func (h *HTTPHandler) Execute(step map[string]any, ctx *interpolate.Context) Ste
 	// Interpolate URL
 	url, _ = interpolate.Interpolate(url, ctx)
 
-	timeout := 30
-	if t, ok := step["timeout"].(int); ok && t > 0 {
-		timeout = t
+	timeout, err := durationField(step, "timeout", defaultHTTPTimeout)
+	if err != nil {
+		return StepResult{
+			Success: false,
+			Error:   fmt.Sprintf("http handler: %v", err),
+		}
 	}
 
 	// Get headers. Interpolation normalizes these to map[string]any, but accept
@@ -100,7 +106,7 @@ func (h *HTTPHandler) Execute(step map[string]any, ctx *interpolate.Context) Ste
 
 	// Execute request
 	client := &http.Client{
-		Timeout: time.Duration(timeout) * time.Second,
+		Timeout: timeout,
 	}
 
 	resp, err := client.Do(req)

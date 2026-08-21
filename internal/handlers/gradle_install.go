@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"time"
 
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/interpolate"
 )
@@ -28,6 +27,16 @@ func (h *GradleInstallHandler) Execute(step map[string]any, ctx *interpolate.Con
 		return StepResult{
 			Success: false,
 			Error:   "gradle-install handler requires 'path' field",
+		}
+	}
+
+	// Resolve the timeout before touching the project, so a malformed step is
+	// rejected rather than rewriting the build file on its way to failing.
+	timeout, err := durationField(step, "timeout", defaultInstallTimeout)
+	if err != nil {
+		return StepResult{
+			Success: false,
+			Error:   fmt.Sprintf("gradle-install handler: %v", err),
 		}
 	}
 
@@ -86,11 +95,6 @@ func (h *GradleInstallHandler) Execute(step map[string]any, ctx *interpolate.Con
 		}
 	}
 
-	timeout := 300 * time.Second
-	if t, ok := step["timeout"].(int); ok && t > 0 {
-		timeout = time.Duration(t) * time.Second
-	}
-
 	cmdCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -105,7 +109,7 @@ func (h *GradleInstallHandler) Execute(step map[string]any, ctx *interpolate.Con
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 	if err != nil {
 		if cmdCtx.Err() == context.DeadlineExceeded {
 			return StepResult{
@@ -155,12 +159,14 @@ func findGradleExecutable(projectPath string) string {
 // from Gradle build files. This handles both Groovy DSL and Kotlin DSL syntax.
 //
 // Groovy DSL patterns:
-//   maven { url 'file:///some/local/path' }
-//   maven { url "file:///some/local/path" }
+//
+//	maven { url 'file:///some/local/path' }
+//	maven { url "file:///some/local/path" }
 //
 // Kotlin DSL patterns:
-//   maven { url = uri("file:///some/local/path") }
-//   maven(url = "file:///some/local/path")
+//
+//	maven { url = uri("file:///some/local/path") }
+//	maven(url = "file:///some/local/path")
 func removeGradleFileRepositories(buildFile string) error {
 	data, err := os.ReadFile(buildFile)
 	if err != nil {
