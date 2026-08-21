@@ -7,13 +7,14 @@ package man
 //
 //   - the fence is decoded into the matching struct from internal/config with
 //     yaml KnownFields(true), so a key the struct does not declare is an error
-//   - every step names a handler registered in handlers.NewRegistry()
+//   - every step names a handler registered in handlers.NewRegistry(), and
+//     carries only options that handler actually reads
 //   - every ${...} reference uses a form internal/interpolate actually resolves
 //
-// The three "sources of truth" (handler names, step option keys, interpolation
-// prefixes) are derived from the packages that implement them rather than
-// copied into a literal list here, so the guard follows the binary as it
-// changes instead of becoming a second thing that can drift.
+// The three "sources of truth" (handler names, the step options each handler
+// reads, interpolation prefixes) are derived from the packages that implement
+// them rather than copied into a literal list here, so the guard follows the
+// binary as it changes instead of becoming a second thing that can drift.
 //
 // A fence that is deliberately not a tsuite document (a GitHub Actions
 // snippet, say) must opt out explicitly with an HTML comment on the line
@@ -47,13 +48,6 @@ import (
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/handlers"
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/interpolate"
 )
-
-// freeFormConfigSections lists config.yaml sections whose keys are read out of
-// SuiteConfig.Raw (interpolation, and the version fields cmd/tsuite pulls from
-// packages.*) instead of struct fields. Unknown keys there are legitimate, so
-// they are pruned before the strict decode; keys that do have a struct field
-// are still type-checked.
-var freeFormConfigSections = map[string]bool{"packages": true}
 
 // ---------------------------------------------------------------------------
 // fence extraction
@@ -229,8 +223,7 @@ func kindFromHint(hint string) (fenceKind, bool) {
 func TestManPageYAMLMatchesConfigSchema(t *testing.T) {
 	var (
 		registry  = handlers.NewRegistry()
-		known     = handlerNames(t, registry)
-		stepKeys  = allowedStepKeys(t)
+		stepKeys  = newStepKeyPolicy(t, registry)
 		variables = knownVariableForms(t)
 		topics    = embeddedTopics(t)
 	)
@@ -255,13 +248,12 @@ func TestManPageYAMLMatchesConfigSchema(t *testing.T) {
 				}
 				validated++
 				lint := &fenceLinter{
-					t:            t,
-					topic:        topic,
-					fence:        f,
-					registry:     registry,
-					handlerNames: known,
-					stepKeys:     stepKeys,
-					variables:    variables,
+					t:         t,
+					topic:     topic,
+					fence:     f,
+					registry:  registry,
+					stepKeys:  stepKeys,
+					variables: variables,
 				}
 				lint.run()
 			}
@@ -282,13 +274,12 @@ func TestManPageYAMLMatchesConfigSchema(t *testing.T) {
 }
 
 type fenceLinter struct {
-	t            *testing.T
-	topic        string
-	fence        yamlFence
-	registry     *handlers.Registry
-	handlerNames []string
-	stepKeys     map[string]bool
-	variables    variableForms
+	t         *testing.T
+	topic     string
+	fence     yamlFence
+	registry  *handlers.Registry
+	stepKeys  stepKeyPolicy
+	variables variableForms
 }
 
 // errorf reports a problem with enough context to find and fix it: topic,
@@ -326,7 +317,7 @@ func (l *fenceLinter) run() {
 
 	switch kind {
 	case kindSuiteConfig:
-		l.checkSuiteConfig(doc)
+		l.checkSuiteConfig()
 	case kindTestConfig:
 		l.checkTestConfig()
 	case kindRoutines:
@@ -359,20 +350,11 @@ func (l *fenceLinter) decodeStrict(out any, as string) bool {
 	return true
 }
 
-func (l *fenceLinter) checkSuiteConfig(doc *yaml.Node) {
+func (l *fenceLinter) checkSuiteConfig() {
 	l.t.Helper()
 
-	pruned := pruneFreeFormSections(doc)
-	for _, k := range pruned {
-		l.t.Logf("%s.md:%d fence #%d: not schema-checking %s (read from SuiteConfig.Raw)", l.topic, l.fence.line, l.fence.index, k)
-	}
-
 	var suite config.SuiteConfig
-	dec := yaml.NewDecoder(bytes.NewReader(mustMarshal(l.t, doc)))
-	dec.KnownFields(true)
-	if err := dec.Decode(&suite); err != nil {
-		l.errorf("does not decode as %s: %v", kindSuiteConfig, err)
-	}
+	l.decodeStrict(&suite, string(kindSuiteConfig))
 }
 
 func (l *fenceLinter) checkTestConfig() {
@@ -427,15 +409,24 @@ func (l *fenceLinter) checkSteps(where string, steps []config.Step) {
 		default:
 			if _, ok := l.registry.Get(step.Handler); !ok {
 				l.errorf("%s uses handler %q, which is not registered (registered: %s)",
-					at, step.Handler, strings.Join(l.handlerNames, ", "))
+					at, step.Handler, strings.Join(l.stepKeys.handlers(), ", "))
 			}
 		}
 
 		// config.Step has an inline catch-all (Extra), so KnownFields cannot
 		// reject unknown step keys - they land in Extra instead. Check them
-		// against the keys handlers actually read.
+		// against the keys this step's own handler actually reads.
 		for _, key := range sortedKeys(step.Extra) {
-			if !l.stepKeys[key] {
+			if l.stepKeys.allows(step.Handler, key) {
+				continue
+			}
+			switch {
+			case step.Routine != "":
+				l.errorf("%s sets %q, which is not a step field; a routine step passes values through params:", at, key)
+			case l.stepKeys.knows(step.Handler):
+				l.errorf("%s sets %q, which is not a step field and is not read by the %q handler (its options: %s)",
+					at, key, step.Handler, strings.Join(sortedKeys(l.stepKeys.byHandler[step.Handler]), ", "))
+			default:
 				l.errorf("%s sets %q, which is not a step field and is not read by any handler", at, key)
 			}
 		}
@@ -599,31 +590,171 @@ func TestDerivedVariablePrefixesResolve(t *testing.T) {
 	})
 }
 
-// allowedStepKeys is every key a step may carry: the yaml tags on config.Step
-// plus the keys handlers read out of the step map (config.Step.Extra is an
-// inline catch-all, so those never appear as struct fields).
-func allowedStepKeys(t *testing.T) map[string]bool {
+// stepKeyPolicy is what a step may carry, per handler. universal holds the
+// keys every step may use: the yaml tags on config.Step plus the keys shared
+// code in internal/handlers reads. byHandler holds, for each registered
+// handler name, the extra options only that handler reads out of its step map
+// (config.Step.Extra is an inline catch-all, so those never appear as struct
+// fields) - so `operation:` is a file option, not a shell one.
+type stepKeyPolicy struct {
+	universal map[string]bool
+	byHandler map[string]map[string]bool
+}
+
+func (p stepKeyPolicy) allows(handler, key string) bool {
+	return p.universal[key] || p.byHandler[handler][key]
+}
+
+func (p stepKeyPolicy) knows(handler string) bool {
+	_, ok := p.byHandler[handler]
+	return ok
+}
+
+func (p stepKeyPolicy) handlers() []string { return sortedKeys(p.byHandler) }
+
+// newStepKeyPolicy derives the policy from internal/handlers: which types
+// NewRegistry registers, what name each of those types returns from Name(),
+// and which literal step keys each one reads. Nothing is listed here, so a new
+// handler is covered the moment it is registered.
+func newStepKeyPolicy(t *testing.T, r *handlers.Registry) stepKeyPolicy {
 	t.Helper()
 
-	keys := map[string]bool{}
+	policy := stepKeyPolicy{
+		universal: map[string]bool{},
+		byHandler: map[string]map[string]bool{},
+	}
 	for _, k := range structYAMLKeys(config.Step{}) {
-		keys[k] = true
+		policy.universal[k] = true
 	}
 
-	read := stepMapKeys(t, siblingPkg("handlers"))
-	if len(read) == 0 {
-		t.Fatal("derived no step option keys from internal/handlers; the extractor needs updating")
-	}
-	for _, k := range read {
-		keys[k] = true
-	}
+	files := parseGoDir(t, siblingPkg("handlers"))
+	nameOfType := handlerNameByType(files)
 
-	for _, anchor := range []string{"handler", "command", "operation", "packages", "type"} {
-		if !keys[anchor] {
-			t.Fatalf("expected %q among the allowed step keys; the extractor needs updating", anchor)
+	for _, typ := range registeredHandlerTypes(files) {
+		name, ok := nameOfType[typ]
+		if !ok {
+			t.Fatalf("handlers.NewRegistry registers &%s{} but no Name() method on %s returns a string literal; the extractor needs updating", typ, typ)
+		}
+		if _, ok := r.Get(name); !ok {
+			t.Errorf("handlers.NewRegistry registers &%s{} as %q but the registry has no such handler", typ, name)
+			continue
+		}
+		policy.byHandler[name] = map[string]bool{}
+	}
+	if len(policy.byHandler) == 0 {
+		t.Fatal("derived no handler names from internal/handlers; the extractor needs updating")
+	}
+	for typ, name := range nameOfType {
+		if !policy.knows(name) {
+			t.Errorf("handler %q (%s) declares Name() but is not registered by handlers.NewRegistry()", name, typ)
 		}
 	}
-	return keys
+
+	read := 0
+	for owner, keys := range stepMapKeysByOwner(files, nameOfType) {
+		for _, k := range keys {
+			read++
+			if owner == "" {
+				policy.universal[k] = true
+				continue
+			}
+			policy.byHandler[owner][k] = true
+		}
+	}
+	if read == 0 {
+		t.Fatal("derived no step option keys from internal/handlers; the extractor needs updating")
+	}
+
+	// If the attribution ever stops matching the source, fail loudly here
+	// rather than silently accepting (or rejecting) every option in the docs.
+	for _, anchor := range []string{"handler", "command", "workdir"} {
+		if !policy.universal[anchor] {
+			t.Fatalf("expected %q to be allowed on every step; the extractor needs updating", anchor)
+		}
+	}
+	for handler, key := range map[string]string{
+		"file":           "operation",
+		"wait":           "type",
+		"pip-install":    "packages",
+		"npm-install":    "replace_file_deps",
+		"maven-install":  "m2_repo",
+		"gradle-install": "strip_file_repos",
+	} {
+		if !policy.allows(handler, key) {
+			t.Fatalf("expected the %q handler to read %q; the extractor needs updating", handler, key)
+		}
+	}
+	if policy.allows("shell", "operation") {
+		t.Fatal("shell must not accept the file handler's operation:; step keys are no longer attributed per handler")
+	}
+
+	return policy
+}
+
+// handlerNameByType maps a handler implementation type to the name its Name()
+// method returns.
+func handlerNameByType(files []*ast.File) map[string]string {
+	out := map[string]string{}
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Name.Name != "Name" || fn.Body == nil {
+				continue
+			}
+			typ := receiverType(fn)
+			if typ == "" {
+				continue
+			}
+			for _, stmt := range fn.Body.List {
+				ret, ok := stmt.(*ast.ReturnStmt)
+				if !ok || len(ret.Results) != 1 {
+					continue
+				}
+				if s, ok := stringLit(ret.Results[0]); ok {
+					out[typ] = s
+				}
+			}
+		}
+	}
+	return out
+}
+
+// registeredHandlerTypes returns the types NewRegistry passes to Register,
+// e.g. r.Register(&ShellHandler{}) -> "ShellHandler".
+func registeredHandlerTypes(files []*ast.File) []string {
+	var out []string
+	for _, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			decl, ok := n.(*ast.FuncDecl)
+			if !ok || decl.Name.Name != "NewRegistry" || decl.Body == nil {
+				return true
+			}
+			ast.Inspect(decl.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || len(call.Args) != 1 {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "Register" {
+					return true
+				}
+				arg := call.Args[0]
+				if unary, ok := arg.(*ast.UnaryExpr); ok && unary.Op == token.AND {
+					arg = unary.X
+				}
+				lit, ok := arg.(*ast.CompositeLit)
+				if !ok {
+					return true
+				}
+				if id, ok := lit.Type.(*ast.Ident); ok {
+					out = append(out, id.Name)
+				}
+				return true
+			})
+			return false
+		})
+	}
+	return out
 }
 
 // varNameLiterals returns the string literals compared against `varName`
@@ -710,35 +841,86 @@ func contextExtraKeys(t *testing.T, dir string) []string {
 	return out
 }
 
-// stepMapKeys returns the literal keys handlers pull out of the step map,
-// covering both step["x"] and helper calls such as stringField(step, "x").
-func stepMapKeys(t *testing.T, dir string) []string {
-	t.Helper()
+// stepMapKeysByOwner returns the literal keys handlers pull out of the step
+// map - covering both step["x"] and helper calls such as stringField(step,
+// "x") - attributed to the handler that reads them.
+//
+// Handlers share this package (and its accessor helpers), so ownership is
+// decided per declaration: a method on a registered handler type belongs to
+// that handler; a plain function belongs to the handler its file implements,
+// since every handler lives in its own file. Anything else - handler.go's
+// shared helpers, or a file implementing several handlers - is universal and
+// keyed by "".
+func stepMapKeysByOwner(files []*ast.File, nameOfType map[string]string) map[string][]string {
+	out := map[string][]string{}
+	for _, file := range files {
+		var fileOwners []string
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			if name, ok := nameOfType[receiverType(fn)]; ok && !contains(fileOwners, name) {
+				fileOwners = append(fileOwners, name)
+			}
+		}
 
-	var out []string
-	for _, file := range parseGoDir(t, dir) {
-		ast.Inspect(file, func(n ast.Node) bool {
-			switch node := n.(type) {
-			case *ast.IndexExpr:
-				if isIdent(node.X, "step") {
-					if s, ok := stringLit(node.Index); ok {
-						out = append(out, s)
-					}
-				}
-			case *ast.CallExpr:
-				for i, arg := range node.Args {
-					if !isIdent(arg, "step") || i+1 >= len(node.Args) {
-						continue
-					}
-					if s, ok := stringLit(node.Args[i+1]); ok {
-						out = append(out, s)
-					}
+		for _, decl := range file.Decls {
+			owner := ""
+			if len(fileOwners) == 1 {
+				owner = fileOwners[0]
+			}
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				if name, ok := nameOfType[receiverType(fn)]; ok {
+					owner = name
 				}
 			}
-			return true
-		})
+			out[owner] = append(out[owner], stepMapKeysIn(decl)...)
+		}
 	}
 	return out
+}
+
+// stepMapKeysIn collects the literal step-map keys read anywhere under n.
+func stepMapKeysIn(n ast.Node) []string {
+	var out []string
+	ast.Inspect(n, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.IndexExpr:
+			if isIdent(node.X, "step") {
+				if s, ok := stringLit(node.Index); ok {
+					out = append(out, s)
+				}
+			}
+		case *ast.CallExpr:
+			for i, arg := range node.Args {
+				if !isIdent(arg, "step") || i+1 >= len(node.Args) {
+					continue
+				}
+				if s, ok := stringLit(node.Args[i+1]); ok {
+					out = append(out, s)
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// receiverType returns the (pointer-dereferenced) receiver type name of a
+// method, or "" for a plain function.
+func receiverType(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return ""
+	}
+	expr := fn.Recv.List[0].Type
+	if star, ok := expr.(*ast.StarExpr); ok {
+		expr = star.X
+	}
+	if id, ok := expr.(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
 }
 
 // siblingPkg locates a package next to internal/man from this file's own path,
@@ -874,42 +1056,6 @@ func allItemsHaveKey(items []*yaml.Node, key string) bool {
 	return true
 }
 
-// pruneFreeFormSections drops keys under free-form config.yaml sections that
-// have no struct field, so the strict decode still type-checks the rest.
-// It returns the dotted paths it removed.
-func pruneFreeFormSections(doc *yaml.Node) []string {
-	var pruned []string
-	for i := 0; i+1 < len(doc.Content); i += 2 {
-		section, value := doc.Content[i].Value, doc.Content[i+1]
-		if !freeFormConfigSections[section] || value.Kind != yaml.MappingNode {
-			continue
-		}
-		known := map[string]bool{}
-		for _, k := range structYAMLKeys(config.PackageSettings{}) {
-			known[k] = true
-		}
-		kept := make([]*yaml.Node, 0, len(value.Content))
-		for j := 0; j+1 < len(value.Content); j += 2 {
-			if known[value.Content[j].Value] {
-				kept = append(kept, value.Content[j], value.Content[j+1])
-				continue
-			}
-			pruned = append(pruned, section+"."+value.Content[j].Value)
-		}
-		value.Content = kept
-	}
-	return pruned
-}
-
-func mustMarshal(t *testing.T, node *yaml.Node) []byte {
-	t.Helper()
-	out, err := yaml.Marshal(node)
-	if err != nil {
-		t.Fatalf("re-marshalling yaml node: %v", err)
-	}
-	return out
-}
-
 // leadingComments returns the comment lines at the top of a fence, which is
 // where the pages say `# test.yaml` or `# global/routines.yaml`.
 func leadingComments(body string) string {
@@ -925,47 +1071,6 @@ func leadingComments(body string) string {
 		out = append(out, trimmed)
 	}
 	return strings.Join(out, "\n")
-}
-
-// handlerNames returns the names declared by Handler.Name() implementations in
-// internal/handlers that NewRegistry actually registers. Used only to make the
-// failure message for an unknown handler useful.
-func handlerNames(t *testing.T, r *handlers.Registry) []string {
-	t.Helper()
-
-	var names []string
-	for _, file := range parseGoDir(t, siblingPkg("handlers")) {
-		ast.Inspect(file, func(n ast.Node) bool {
-			decl, ok := n.(*ast.FuncDecl)
-			if !ok || decl.Name.Name != "Name" || decl.Recv == nil || decl.Body == nil {
-				return true
-			}
-			for _, stmt := range decl.Body.List {
-				ret, ok := stmt.(*ast.ReturnStmt)
-				if !ok || len(ret.Results) != 1 {
-					continue
-				}
-				if s, ok := stringLit(ret.Results[0]); ok {
-					names = append(names, s)
-				}
-			}
-			return false
-		})
-	}
-
-	registered := names[:0]
-	for _, name := range names {
-		if _, ok := r.Get(name); ok {
-			registered = append(registered, name)
-		} else {
-			t.Errorf("handler %q declares Name() but is not registered by handlers.NewRegistry()", name)
-		}
-	}
-	sort.Strings(registered)
-	if len(registered) == 0 {
-		t.Fatal("derived no handler names from internal/handlers; the extractor needs updating")
-	}
-	return registered
 }
 
 func indent(s string) string {
