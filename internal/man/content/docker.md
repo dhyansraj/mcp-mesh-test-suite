@@ -28,7 +28,7 @@ docker:
 ```yaml
 docker:
   base_image: python:3.11-slim  # Image workers run in
-  network: bridge               # Network mode
+  network: bridge               # Container network mode (default: bridge)
 ```
 
 There are no `image`, `env`, `volumes`, `pull`, `memory`, or `cpus` settings;
@@ -53,8 +53,31 @@ them are resolved to their targets.
 
 ## Networking
 
-Worker containers run on the default `bridge` network. To reach a service on
-the host from inside a test, use:
+Worker containers run on the `bridge` network unless `docker.network` says
+otherwise:
+
+```yaml
+docker:
+  base_image: python:3.11-slim
+  network: my-net
+```
+
+The value is used as the container's network mode, so `bridge`, `host`, `none`,
+`container:<name>`, or the name of a user-defined network all work. An empty or
+missing `network` means `bridge`, which is the behaviour of every suite that
+does not set it.
+
+tsuite does not create networks. Create a user-defined network first:
+
+```bash
+docker network create my-net
+```
+
+Put workers on a user-defined network when tests must reach other containers by
+name — user-defined networks give attached containers DNS resolution of each
+other, which the default `bridge` network does not.
+
+To reach a service on the host from inside a test, use:
 
 - `host.docker.internal` (Docker Desktop)
 - `172.17.0.1` (Linux default gateway)

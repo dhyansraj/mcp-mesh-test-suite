@@ -693,6 +693,9 @@ func executeTests(cmd *cobra.Command, args []string) error {
 		dockerImage = "tsuite-mesh:local" // Default image
 	}
 
+	// Get docker network from config (empty falls back to "bridge")
+	dockerNetwork := suiteConfig.Docker.Network
+
 	// Set test timeout (10 minutes default)
 	testTimeout := 10 * time.Minute
 
@@ -703,7 +706,7 @@ func executeTests(cmd *cobra.Command, args []string) error {
 	var handler worker.WorkerHandler
 	switch mode {
 	case "docker":
-		handler = worker.NewDockerHandler(apiURL, absPath, baseWorkdir, dockerImage, runID)
+		handler = worker.NewDockerHandler(apiURL, absPath, baseWorkdir, dockerImage, dockerNetwork, runID)
 	case "k8s":
 		if suiteConfig.K8s.NFSServer == "" || suiteConfig.K8s.NFSPath == "" {
 			return fmt.Errorf("k8s.nfs_server and k8s.nfs_path are required in config.yaml")

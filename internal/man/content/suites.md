@@ -86,7 +86,10 @@ docker:
   network: bridge
 ```
 
-`docker` accepts exactly two settings: `base_image` and `network`.
+`docker` accepts exactly two settings: `base_image` (default
+`python:3.11-slim`) and `network`, the container network mode (default
+`bridge`; may be `host`, `none`, or a user-defined network you created with
+`docker network create`). See `tsuite man docker`.
 
 - Full isolation between tests
 - Reproducible environment

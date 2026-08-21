@@ -36,15 +36,45 @@ type MountConfig struct {
 	ReadOnly      bool
 }
 
+// DefaultDockerNetwork is used when no network is configured
+const DefaultDockerNetwork = "bridge"
+
 // DefaultContainerConfig returns a default container configuration
 func DefaultContainerConfig() ContainerConfig {
 	return ContainerConfig{
 		Image:       "python:3.11-slim",
-		Network:     "bridge",
+		Network:     DefaultDockerNetwork,
 		Workdir:     "/workspace",
 		Timeout:     5 * time.Minute,
 		MemoryLimit: 1024 * 1024 * 1024, // 1GB
 	}
+}
+
+// resolveContainerConfig overlays the supplied config onto the defaults.
+// Unset (zero) fields keep their default, so an empty Network yields
+// DefaultDockerNetwork.
+func resolveContainerConfig(config *ContainerConfig) ContainerConfig {
+	cfg := DefaultContainerConfig()
+	if config == nil {
+		return cfg
+	}
+	if config.Image != "" {
+		cfg.Image = config.Image
+	}
+	if strings.TrimSpace(config.Network) != "" {
+		cfg.Network = config.Network
+	}
+	if config.Workdir != "" {
+		cfg.Workdir = config.Workdir
+	}
+	if config.Timeout > 0 {
+		cfg.Timeout = config.Timeout
+	}
+	if config.MemoryLimit > 0 {
+		cfg.MemoryLimit = config.MemoryLimit
+	}
+	cfg.Mounts = config.Mounts
+	return cfg
 }
 
 // DockerExecutor runs tests inside Docker containers
@@ -86,25 +116,7 @@ func NewDockerExecutor(serverURL, suitePath, baseWorkdir string, config *Contain
 		return nil, fmt.Errorf("failed to connect to Docker: %w", err)
 	}
 
-	cfg := DefaultContainerConfig()
-	if config != nil {
-		if config.Image != "" {
-			cfg.Image = config.Image
-		}
-		if config.Network != "" {
-			cfg.Network = config.Network
-		}
-		if config.Workdir != "" {
-			cfg.Workdir = config.Workdir
-		}
-		if config.Timeout > 0 {
-			cfg.Timeout = config.Timeout
-		}
-		if config.MemoryLimit > 0 {
-			cfg.MemoryLimit = config.MemoryLimit
-		}
-		cfg.Mounts = config.Mounts
-	}
+	cfg := resolveContainerConfig(config)
 
 	// Prune stopped containers on startup to prevent accumulation
 	// This cleans up orphaned containers from crashed runs
@@ -120,6 +132,22 @@ func NewDockerExecutor(serverURL, suitePath, baseWorkdir string, config *Contain
 		config:      cfg,
 		runID:       runID,
 	}, nil
+}
+
+// buildHostConfig builds the HostConfig passed to ContainerCreate.
+func (e *DockerExecutor) buildHostConfig(mounts []mount.Mount) *container.HostConfig {
+	network := e.config.Network
+	if strings.TrimSpace(network) == "" {
+		network = DefaultDockerNetwork
+	}
+	return &container.HostConfig{
+		Mounts:      mounts,
+		NetworkMode: container.NetworkMode(network),
+		Resources: container.Resources{
+			Memory: e.config.MemoryLimit,
+		},
+		ExtraHosts: []string{"host.docker.internal:host-gateway"},
+	}
 }
 
 // ContainerResult holds the result of running a container
@@ -264,14 +292,7 @@ func (e *DockerExecutor) ExecuteTest(ctx context.Context, testID string, testCon
 		WorkingDir: "/workspace",
 	}
 
-	hostConfig := &container.HostConfig{
-		Mounts:      mounts,
-		NetworkMode: container.NetworkMode(e.config.Network),
-		Resources: container.Resources{
-			Memory: e.config.MemoryLimit,
-		},
-		ExtraHosts: []string{"host.docker.internal:host-gateway"},
-	}
+	hostConfig := e.buildHostConfig(mounts)
 
 	resp, err := e.client.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, "")
 	if err != nil {
