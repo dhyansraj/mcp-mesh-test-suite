@@ -166,11 +166,13 @@ on a status of 400 or above.
 | `method` | HTTP method | default `GET` |
 | `url` | Request URL | required |
 | `headers` | Request headers (map) | optional |
-| `body` | Request body (string) | optional |
+| `body` | Request body (string, or a map/list sent as JSON) | optional |
 | `timeout` | Timeout in seconds | default `30` |
 
-`body` must be a string; give JSON payloads as a quoted JSON string and set
-`Content-Type` yourself.
+A string `body` is sent verbatim, so set `Content-Type` yourself. A `body`
+written as YAML structure is marshalled to JSON and `Content-Type:
+application/json` is added unless `headers` already sets it. Header values and
+body values are interpolated.
 
 ```yaml
 - name: Register agent
@@ -180,6 +182,18 @@ on a status of 400 or above.
   headers:
     Content-Type: application/json
   body: '{"name": "greeter", "capabilities": ["greeting"]}'
+  capture: register_response
+```
+
+```yaml
+- name: Register agent (structured body)
+  handler: http
+  method: POST
+  url: http://localhost:8000/agents/register
+  body:
+    name: greeter
+    capabilities:
+      - greeting
   capture: register_response
 ```
 

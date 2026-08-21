@@ -127,17 +127,17 @@ type Step struct {
 	IgnoreErrors bool `yaml:"ignore_errors,omitempty"`
 
 	// Handler-specific fields
-	Path       string            `yaml:"path,omitempty"`        // npm-install, pip-install
-	Seconds    int               `yaml:"seconds,omitempty"`     // wait
-	URL        string            `yaml:"url,omitempty"`         // http
-	Method     string            `yaml:"method,omitempty"`      // http
-	Body       string            `yaml:"body,omitempty"`        // http
-	Headers    map[string]string `yaml:"headers,omitempty"`     // http
-	Source     string            `yaml:"source,omitempty"`      // file, secrets
-	Dest       string            `yaml:"dest,omitempty"`        // file
-	Content    string            `yaml:"content,omitempty"`     // file
-	Target     string            `yaml:"target,omitempty"`      // secrets
-	Keys       []string          `yaml:"keys,omitempty"`        // secrets
+	Path    string            `yaml:"path,omitempty"`    // npm-install, pip-install
+	Seconds int               `yaml:"seconds,omitempty"` // wait
+	URL     string            `yaml:"url,omitempty"`     // http
+	Method  string            `yaml:"method,omitempty"`  // http
+	Body    any               `yaml:"body,omitempty"`    // http: string sent verbatim, map/list sent as JSON
+	Headers map[string]string `yaml:"headers,omitempty"` // http
+	Source  string            `yaml:"source,omitempty"`  // file, secrets
+	Dest    string            `yaml:"dest,omitempty"`    // file
+	Content string            `yaml:"content,omitempty"` // file
+	Target  string            `yaml:"target,omitempty"`  // secrets
+	Keys    []string          `yaml:"keys,omitempty"`    // secrets
 
 	// Probe fields
 	Interval         any    `yaml:"interval,omitempty"`          // probe: seconds or duration string
@@ -148,6 +148,11 @@ type Step struct {
 	// Routine fields
 	Routine string         `yaml:"routine,omitempty"`
 	Params  map[string]any `yaml:"params,omitempty"`
+
+	// Extra collects every key without a dedicated field above (operation,
+	// packages, type, strip_file_repos, ...) so handler options stay reachable
+	// without a struct field per handler. Values keep their YAML types.
+	Extra map[string]any `yaml:",inline"`
 
 	// Raw map for interpolation
 	Raw map[string]any `yaml:"-"`

@@ -517,6 +517,13 @@ func (r *TestRunner) updateContext(ctx *interpolate.Context, result StepResult, 
 func stepToMap(step config.Step) map[string]any {
 	m := make(map[string]any)
 
+	// Handler options without a dedicated Step field (operation, packages,
+	// type, strip_file_repos, ...) land in the inline catch-all. Copy them
+	// first so an explicit struct field always wins.
+	for k, v := range step.Extra {
+		m[k] = v
+	}
+
 	if step.Name != "" {
 		m["name"] = step.Name
 	}
@@ -550,7 +557,9 @@ func stepToMap(step config.Step) map[string]any {
 	if step.Method != "" {
 		m["method"] = step.Method
 	}
-	if step.Body != "" {
+	// Body may be a string or a YAML map/list; only an explicit empty string is
+	// dropped, so `body: {}` still reaches the handler.
+	if step.Body != nil && step.Body != "" {
 		m["body"] = step.Body
 	}
 	if step.Headers != nil {

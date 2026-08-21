@@ -41,28 +41,35 @@ func (h *HTTPHandler) Execute(step map[string]any, ctx *interpolate.Context) Ste
 		timeout = t
 	}
 
-	// Get headers
+	// Get headers. Interpolation normalizes these to map[string]any, but accept
+	// the raw map[string]string too for handlers invoked directly.
 	headers := make(map[string]string)
-	if h, ok := step["headers"].(map[string]any); ok {
+	switch h := step["headers"].(type) {
+	case map[string]any:
 		for k, v := range h {
 			if vs, ok := v.(string); ok {
 				vs, _ = interpolate.Interpolate(vs, ctx)
 				headers[k] = vs
 			}
 		}
+	case map[string]string:
+		for k, v := range h {
+			v, _ = interpolate.Interpolate(v, ctx)
+			headers[k] = v
+		}
 	}
 
-	// Get body
+	// Get body. A string is sent verbatim; any YAML structure (map or list) is
+	// marshalled to JSON and defaults Content-Type accordingly.
 	var bodyReader io.Reader
-	if body, ok := step["body"]; ok {
+	if body, ok := step["body"]; ok && body != nil {
 		switch b := body.(type) {
 		case string:
 			bodyStr, _ := interpolate.Interpolate(b, ctx)
 			bodyReader = strings.NewReader(bodyStr)
-		case map[string]any:
-			// Interpolate map values
-			interpolatedMap, _ := interpolate.InterpolateMap(b, ctx)
-			jsonBytes, err := json.Marshal(interpolatedMap)
+		default:
+			interpolated, _ := interpolate.InterpolateValue(b, ctx)
+			jsonBytes, err := json.Marshal(interpolated)
 			if err != nil {
 				return StepResult{
 					Success: false,
