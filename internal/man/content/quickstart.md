@@ -33,10 +33,10 @@ mkdir -p suites/uc01_basic/tc01_hello
 # my-tests/config.yaml
 suite:
   name: My Test Suite
-  mode: standalone  # or 'docker' for container isolation
+  mode: standalone  # 'standalone', 'docker', or 'k8s'
 
 docker:
-  image: python:3.11-slim
+  base_image: python:3.11-slim
 ```
 
 ## 4. Create Your First Test
@@ -48,21 +48,19 @@ description: A simple test that runs a command
 
 test:
   - name: Say Hello
-    exec:
-      command: echo "Hello, World!"
-    capture:
-      output: result.stdout
+    handler: shell
+    command: echo "Hello, World!"
+    capture: output
 
 assertions:
-  - expr: captured.output
-    contains: "Hello"
+  - expr: "${captured.output} contains 'Hello'"
 ```
 
 ## 5. Run the Test
 
 ```bash
-# Run all tests
-tsuite run --suite-path ./my-tests --all
+# Run all tests (no filter = run everything)
+tsuite run --suite-path ./my-tests
 
 # Run specific test case
 tsuite run --suite-path ./my-tests --tc uc01_basic/tc01_hello

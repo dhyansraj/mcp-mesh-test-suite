@@ -19,9 +19,11 @@ tsuite api
 # Start on custom port
 tsuite api --port 8080
 
-# Start with suites pre-loaded
-tsuite api --suites ./my-suite,./other-suite
+# Run the server in the background
+tsuite api --detach
 ```
+
+Stop a detached server with `tsuite stop`.
 
 ## Web Dashboard
 
@@ -166,11 +168,14 @@ Test results are stored in SQLite:
 ### Clearing Data
 
 ```bash
-# Clear all test data
-tsuite clear
+# Clear only test run history (preserves suites and secrets)
+tsuite clear --runs
 
-# Clear specific run
-tsuite clear --run-id {run_id}
+# Clear ALL data (database, logs, reports, secrets, suites)
+tsuite clear --all
+
+# Skip the confirmation prompt
+tsuite clear --runs --force
 ```
 
 ## Integration
@@ -183,7 +188,7 @@ tsuite clear --run-id {run_id}
   run: |
     tsuite api --port 9999 &
     sleep 2
-    tsuite run --suite-path ./tests --all --api-url http://localhost:9999
+    tsuite run --suite-path ./tests --api-url http://localhost:9999
 ```
 
 ### Custom Dashboard

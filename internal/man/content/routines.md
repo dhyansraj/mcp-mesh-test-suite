@@ -9,41 +9,46 @@ multiple test cases.
 
 ## Routine Scopes
 
-| Scope | File Location | Prefix | Description |
-|-------|---------------|--------|-------------|
-| Suite | `routines.yaml` (root) | `suite.` | Available to all tests |
-| UC | `routines.yaml` (UC dir) | `uc.` | Available to tests in that UC |
+| Scope | File Location | Reference | Description |
+|-------|---------------|-----------|-------------|
+| Global | `global/routines.yaml` | `global.<name>` | Available to all tests |
+| UC | `routines.yaml` (UC dir) | `<name>` (bare) | Available to tests in that UC |
+
+A bare name is looked up in the use case's own `routines.yaml` first, then falls
+back to the global routines. Use the `global.` prefix to force the global one.
 
 ## Defining Routines
 
-### Suite-Level Routines
+Each routine is a map with a `steps:` list (and optional `name`/`description`).
+
+### Global Routines
 
 ```yaml
-# my-suite/routines.yaml
+# my-suite/global/routines.yaml
 routines:
   login:
-    - name: Get auth token
-      http:
+    description: Fetch an auth token
+    steps:
+      - name: Get auth token
+        handler: http
         method: POST
-        url: ${API_URL}/auth/login
-        json:
-          username: ${username}
-          password: ${password}
-      capture:
-        token: response.json.access_token
+        url: http://localhost:8080/auth/login
+        headers:
+          Content-Type: application/json
+        body: '{"username": "${params.username}", "password": "${params.password}"}'
+        capture: login_response
 
   create_resource:
-    - name: Create via API
-      http:
+    steps:
+      - name: Create via API
+        handler: http
         method: POST
-        url: ${API_URL}/resources
+        url: http://localhost:8080/resources
         headers:
-          Authorization: Bearer ${token}
-        json:
-          name: ${name}
-          type: ${type}
-      capture:
-        resource_id: response.json.id
+          Content-Type: application/json
+          Authorization: Bearer ${params.token}
+        body: '{"name": "${params.name}", "type": "${params.type}"}'
+        capture: create_response
 ```
 
 ### UC-Level Routines
@@ -52,15 +57,15 @@ routines:
 # my-suite/suites/uc01_users/routines.yaml
 routines:
   create_user:
-    - name: Register user
-      http:
+    steps:
+      - name: Register user
+        handler: http
         method: POST
-        url: ${API_URL}/users
-        json:
-          email: ${email}
-          name: ${name}
-      capture:
-        user_id: response.json.id
+        url: http://localhost:8080/users
+        headers:
+          Content-Type: application/json
+        body: '{"email": "${params.email}", "name": "${params.name}"}'
+        capture: user_response
 ```
 
 ## Using Routines
@@ -70,85 +75,90 @@ routines:
 ```yaml
 # test.yaml
 test:
-  - routine: suite.login
-    with:
+  - routine: global.login
+    params:
       username: admin
       password: secret123
 
-  - routine: uc.create_user
-    with:
+  - routine: create_user      # bare name: UC routine, else global
+    params:
       email: test@example.com
       name: Test User
 ```
 
 ### Using Captured Values
 
-Routines can capture values that subsequent steps can use:
+Values captured inside a routine are copied back into the calling test, so
+later steps can use them:
 
 ```yaml
 test:
-  - routine: suite.login
-    with:
+  - routine: global.login
+    params:
       username: admin
       password: secret
 
-  # captured.token is now available
+  # captured.login_response is now available
   - name: Use token
-    http:
-      method: GET
-      url: ${API_URL}/profile
-      headers:
-        Authorization: Bearer ${captured.token}
+    handler: http
+    method: GET
+    url: http://localhost:8080/profile
+    headers:
+      Authorization: Bearer ${jq:captured.login_response:.access_token}
 ```
 
 ### Chaining Routines
 
 ```yaml
 test:
-  - routine: suite.login
-    with:
+  - routine: global.login
+    params:
       username: admin
       password: secret
 
-  - routine: suite.create_resource
-    with:
-      token: ${captured.token}
+  - routine: global.create_resource
+    params:
+      token: ${jq:captured.login_response:.access_token}
       name: My Resource
       type: document
 
   - name: Verify resource
-    http:
-      method: GET
-      url: ${API_URL}/resources/${captured.resource_id}
+    handler: http
+    method: GET
+    url: http://localhost:8080/resources/${jq:captured.create_response:.id}
 ```
 
 ## Routine Parameters
 
-Parameters are passed via `with:` and available as variables:
+Parameters are passed via `params:` and read inside the routine as
+`${params.<key>}`:
 
 ```yaml
-# routines.yaml
+# global/routines.yaml
 routines:
   send_notification:
-    - name: Send email
-      http:
+    steps:
+      - name: Send email
+        handler: http
         method: POST
-        url: ${API_URL}/notifications
-        json:
-          to: ${recipient}        # From with.recipient
-          subject: ${subject}     # From with.subject
-          body: ${body}           # From with.body
+        url: http://localhost:8080/notifications
+        headers:
+          Content-Type: application/json
+        body: '{"to": "${params.recipient}", "subject": "${params.subject}", "text": "${params.body}"}'
 ```
 
 ```yaml
 # test.yaml
 test:
-  - routine: suite.send_notification
-    with:
+  - routine: global.send_notification
+    params:
       recipient: user@example.com
       subject: Test Subject
       body: Hello, this is a test
 ```
+
+Parameter values are interpolated in the caller's context before the routine
+runs, so they may themselves reference `${captured.*}`, `${config.*}`, and so on.
 
 ## See Also
 

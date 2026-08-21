@@ -29,46 +29,45 @@ tags:
 # Setup steps (run before test)
 pre_run:
   - name: Start mock server
-    exec:
-      command: python mock_server.py &
+    handler: shell
+    command: python mock_server.py &
 
 # Main test steps
 test:
   - name: Login request
-    http:
-      method: POST
-      url: ${API_URL}/login
-      json:
-        username: testuser
-        password: secret
-    capture:
-      token: response.json.access_token
-      status: response.status_code
+    handler: http
+    method: POST
+    url: http://localhost:8080/login
+    headers:
+      Content-Type: application/json
+    body: '{"username": "testuser", "password": "secret"}'
+    capture: login_response
 
   - name: Access protected resource
-    http:
-      method: GET
-      url: ${API_URL}/profile
-      headers:
-        Authorization: Bearer ${captured.token}
-    capture:
-      profile: response.json
+    handler: http
+    method: GET
+    url: http://localhost:8080/profile
+    headers:
+      Authorization: Bearer ${jq:captured.login_response:.access_token}
+    capture: profile
 
 # Cleanup steps (always run, even on failure)
 post_run:
   - name: Stop mock server
-    exec:
-      command: pkill -f mock_server.py
+    handler: shell
+    command: pkill -f mock_server.py
 
 # Assertions (evaluated after test steps)
 assertions:
-  - expr: captured.status
-    equals: 200
-  - expr: captured.token
-    is_not_empty: true
-  - expr: captured.profile.username
-    equals: testuser
+  - expr: "${steps.login_response.exit_code} == 0"
+  - expr: "${jq:captured.login_response:.access_token} exists"
+  - expr: "${jq:captured.profile:.username} == 'testuser'"
 ```
+
+Each step names exactly one `handler:`; the remaining keys configure it.
+`capture: <name>` is a plain string that stores the step's stdout as
+`${captured.<name>}` (and the full result as `${steps.<name>.exit_code}`,
+`${steps.<name>.stdout}`, `${steps.<name>.stderr}`, `${steps.<name>.success}`).
 
 ## Test Phases
 
@@ -125,16 +124,16 @@ name: Long Running Test
 timeout: 300  # 5 minutes
 ```
 
-## Skip Tests
+## Disable Tests
 
-Conditionally skip tests:
+Skip a test case without deleting it:
 
 ```yaml
-name: Linux-only Test
-skip:
-  reason: Only runs on Linux
-  when: ${OS} != "linux"
+name: Work In Progress Test
+disabled: true
 ```
+
+A use case can be disabled the same way with `disabled: true` in its `uc.yaml`.
 
 ## See Also
 

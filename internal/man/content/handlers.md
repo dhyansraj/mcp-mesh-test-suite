@@ -25,10 +25,7 @@ name. The captured value is then available to later steps and to assertions as
 | `maven-install` | Resolve Maven dependencies for a project |
 | `gradle-install` | Resolve Gradle dependencies for a project |
 | `secrets` | Write configured secrets into an env file |
-
-> `runner` is an internal handler that extracts embedded runner binaries from
-> the API server for distributed execution; it is not meant to be written in a
-> `test.yaml` by hand.
+| `runner` | Download the embedded runner binaries from the API server |
 
 ## shell Handler
 
@@ -169,11 +166,11 @@ on a status of 400 or above.
 | `method` | HTTP method | default `GET` |
 | `url` | Request URL | required |
 | `headers` | Request headers (map) | optional |
-| `body` | Request body: a string, or a map sent as JSON | optional |
+| `body` | Request body (string) | optional |
 | `timeout` | Timeout in seconds | default `30` |
 
-When `body` is a map it is marshaled to JSON and `Content-Type:
-application/json` is set automatically unless you provide it yourself.
+`body` must be a string; give JSON payloads as a quoted JSON string and set
+`Content-Type` yourself.
 
 ```yaml
 - name: Register agent
@@ -182,10 +179,7 @@ application/json` is set automatically unless you provide it yourself.
   url: http://localhost:8000/agents/register
   headers:
     Content-Type: application/json
-  body:
-    name: greeter
-    capabilities:
-      - greeting
+  body: '{"name": "greeter", "capabilities": ["greeting"]}'
   capture: register_response
 ```
 
@@ -296,6 +290,28 @@ variable to be set (the runner sets this automatically).
   keys:
     - OPENAI_API_KEY
     - DATABASE_URL
+```
+
+## runner Handler
+
+Download every runner binary embedded in the API server into a directory and
+mark it executable. This is for tests that build or exercise a nested tsuite
+setup; ordinary tests never need it. Requires the `TSUITE_API` environment
+variable (the runner sets this automatically).
+
+| Option | Description | Required / Default |
+|--------|-------------|--------------------|
+| `dest` | Directory to write the binaries into | required |
+
+Relative `dest` paths are resolved against the working directory (default
+`/workspace`), and the directory is created if missing. The step fails if the
+API server has no embedded runners — build tsuite with `make build-with-runners`
+to embed them.
+
+```yaml
+- name: Stage runner binaries
+  handler: runner
+  dest: /workspace/bin/runners
 ```
 
 ## See Also

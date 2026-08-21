@@ -41,24 +41,24 @@ Define routines shared across test cases in the UC:
 # uc01_user_registration/routines.yaml
 routines:
   create_user:
-    - name: Register user via API
-      http:
+    steps:
+      - name: Register user via API
+        handler: http
         method: POST
-        url: ${API_URL}/users
-        json:
-          email: ${email}
-          password: ${password}
-      capture:
-        user_id: response.json.id
+        url: http://localhost:8080/users
+        headers:
+          Content-Type: application/json
+        body: '{"email": "${params.email}", "password": "${params.password}"}'
+        capture: user_response
 ```
 
-Use in test cases:
+Use in test cases (UC routines are referenced by their bare name):
 
 ```yaml
 # tc01_valid_email/test.yaml
 test:
-  - routine: uc.create_user
-    with:
+  - routine: create_user
+    params:
       email: test@example.com
       password: secret123
 ```
@@ -76,13 +76,13 @@ uc01_user_registration/
     └── test.yaml
 ```
 
-Access in tests via `/uc-artifacts/`:
+In Docker and K8s modes these are mounted at `/uc-artifacts/`:
 
 ```yaml
 test:
   - name: Load test data
-    exec:
-      command: cat /uc-artifacts/sample_users.json
+    handler: shell
+    command: cat /uc-artifacts/sample_users.json
 ```
 
 ## Running Use Cases
