@@ -182,6 +182,7 @@ tsuite clear --runs --force
 
 ### CI/CD
 
+<!-- manlint:skip GitHub Actions workflow step, not a tsuite document -->
 ```yaml
 # GitHub Actions example
 - name: Run tests
