@@ -648,17 +648,9 @@ func executeTests(cmd *cobra.Command, args []string) error {
 		}
 
 		// Extract version fields from suite config
-		if pkgs, ok := suiteConfig.Raw["packages"].(map[string]any); ok {
-			if v, ok := pkgs["cli_version"].(string); ok {
-				createReq.CLIVersion = v
-			}
-			if v, ok := pkgs["sdk_python_version"].(string); ok {
-				createReq.SDKPythonVersion = v
-			}
-			if v, ok := pkgs["sdk_typescript_version"].(string); ok {
-				createReq.SDKTypescriptVersion = v
-			}
-		}
+		createReq.CLIVersion = suiteConfig.Packages.CLIVersion.String()
+		createReq.SDKPythonVersion = suiteConfig.Packages.SDKPythonVersion.String()
+		createReq.SDKTypescriptVersion = suiteConfig.Packages.SDKTypescriptVersion.String()
 
 		resp, err := apiClient.CreateRun(createReq)
 		if err != nil {
