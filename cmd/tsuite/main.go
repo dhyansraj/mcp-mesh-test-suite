@@ -590,9 +590,12 @@ func executeTests(cmd *cobra.Command, args []string) error {
 			TestCount:  len(tests),
 		})
 		if err != nil {
-			fmt.Printf("Warning: Failed to sync suite: %v\n", err)
+			fmt.Printf("Warning: Failed to sync suite %q at %s: %v\n", suiteConfig.Suite.Name, absPath, err)
 		} else if syncResp != nil {
 			suiteID = syncResp.ID
+		}
+		if suiteID == 0 {
+			fmt.Printf("Warning: No suite ID after sync for %q at %s - run will not be linked to a suite\n", suiteConfig.Suite.Name, absPath)
 		}
 
 		// Build test info for API (include ALL tests: active + disabled)
@@ -915,12 +918,12 @@ func delegateToAPI(cmd *cobra.Command, args []string) error {
 		TestCount:  len(tests),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to sync suite: %w", err)
+		return fmt.Errorf("failed to sync suite %q at %s: %w", suiteConfig.Suite.Name, absPath, err)
 	}
 
 	suiteID := syncResp.ID
 	if suiteID == 0 {
-		return fmt.Errorf("failed to get suite ID after sync")
+		return fmt.Errorf("failed to get suite ID after sync: server returned suite %q (path %s) with id 0", syncResp.SuiteName, syncResp.FolderPath)
 	}
 
 	// Build trigger request

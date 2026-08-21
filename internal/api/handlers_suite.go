@@ -84,6 +84,12 @@ func (s *Server) createSuite(c *gin.Context) {
 		}
 	}
 	folderPath, _ = filepath.Abs(folderPath)
+	// The CLI registers suites under a symlink-resolved path, so resolve here too or
+	// dashboard-registered suites never match. Keep the Abs path if resolution fails
+	// (e.g. the directory does not exist yet - that is reported below).
+	if resolved, err := filepath.EvalSymlinks(folderPath); err == nil {
+		folderPath = resolved
+	}
 
 	// Check if directory exists
 	info, err := os.Stat(folderPath)
