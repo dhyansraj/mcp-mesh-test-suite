@@ -1,8 +1,12 @@
 package handlers
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -149,6 +153,111 @@ func toDuration(v any) (time.Duration, error) {
 	default:
 		return 0, fmt.Errorf("%v (%T) is neither a number of seconds nor a duration string", v, v)
 	}
+}
+
+// boolField reads a boolean step option such as `insecure_tls`. YAML hands back
+// a bool for `insecure_tls: true`, but a value that arrived through
+// interpolation is a string, so both forms are accepted. A value that is
+// present but unusable fails the step instead of quietly reading as false:
+// `insecure_tls: yes please` must not look exactly like not setting it.
+//
+// An absent (or nil) key is the only case that yields def.
+func boolField(step map[string]any, key string, def bool) (bool, error) {
+	v, ok := step[key]
+	if !ok || v == nil {
+		return def, nil
+	}
+
+	switch val := v.(type) {
+	case bool:
+		return val, nil
+	case string:
+		b, err := strconv.ParseBool(strings.TrimSpace(val))
+		if err != nil {
+			return false, fmt.Errorf("invalid %s: %q is not a boolean (use true or false)", key, val)
+		}
+		return b, nil
+	default:
+		return false, fmt.Errorf("invalid %s: %v (%T) is not a boolean", key, v, v)
+	}
+}
+
+// tlsOptions are the per-step TLS knobs shared by the handlers that make
+// outbound HTTP requests (`http`, and `wait` with `type: http`). Both are
+// off by default, so a step that sets neither behaves exactly as it did before
+// these options existed.
+type tlsOptions struct {
+	// insecure skips certificate verification entirely (`insecure_tls: true`).
+	insecure bool
+	// caCert is a path to a PEM bundle to trust in addition to the system
+	// roots (`ca_cert:`), already interpolated by the caller.
+	caCert string
+}
+
+func (o tlsOptions) set() bool { return o.insecure || o.caCert != "" }
+
+// newHTTPClient builds the client a step should use.
+//
+// With neither TLS option set it returns a bare client on the default
+// transport - identical to what the handlers built before, so the common case
+// keeps http.DefaultTransport's connection pooling and proxy handling.
+//
+// insecure_tls and ca_cert are mutually exclusive rather than one taking
+// precedence: "trust nothing" and "trust exactly this CA" are contradictory
+// intents, and silently honoring one would hide the other.
+func newHTTPClient(timeout time.Duration, opts tlsOptions) (*http.Client, error) {
+	if !opts.set() {
+		return &http.Client{Timeout: timeout}, nil
+	}
+
+	if opts.insecure && opts.caCert != "" {
+		return nil, errors.New("insecure_tls and ca_cert are mutually exclusive: " +
+			"insecure_tls skips certificate verification entirely, ca_cert asks for verification against a specific CA")
+	}
+
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	if opts.insecure {
+		// Explicit, documented, per-step opt-in.
+		tlsConfig.InsecureSkipVerify = true //nolint:gosec // opt-in via insecure_tls
+	} else {
+		pool, err := caCertPool(opts.caCert)
+		if err != nil {
+			return nil, err
+		}
+		tlsConfig.RootCAs = pool
+	}
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tlsConfig
+
+	return &http.Client{Timeout: timeout, Transport: transport}, nil
+}
+
+// caCertPool returns the system trust pool with the PEM bundle at path added to
+// it. The extra CA is additive on purpose: a step that pins a private CA
+// usually still needs to reach public-CA hosts, and replacing the pool would
+// break that in a way that only shows up on the second request.
+//
+// A path that cannot be read, or a file with no usable certificate in it, is an
+// error - falling back to default trust would turn a typo into a step that
+// passes for the wrong reason.
+func caCertPool(path string) (*x509.CertPool, error) {
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		// Not fatal: some platforms have no system pool to read. The bundle
+		// below is then the only thing trusted, which is what was asked for.
+		pool = x509.NewCertPool()
+	}
+
+	pem, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("ca_cert %s: %v", path, err)
+	}
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("ca_cert %s: no PEM certificate found in file", path)
+	}
+
+	return pool, nil
 }
 
 // parseCount normalizes a small positive integer step field, accepting the int,

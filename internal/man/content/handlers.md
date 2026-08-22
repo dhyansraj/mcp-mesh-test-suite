@@ -79,8 +79,13 @@ Pause execution, either for a fixed duration or until a URL becomes reachable.
 | `url` | URL to poll (`type: http`) | required for `http` |
 | `interval` | Time between polls (`type: http`), in seconds or as a duration string | default `2` (seconds) |
 | `timeout` | How long to wait for the URL (`type: http`), in seconds or as a duration string | default `30` (seconds) |
+| `insecure_tls` | Skip TLS certificate verification (`type: http`) | default `false` |
+| `ca_cert` | Path to a PEM CA bundle to trust (`type: http`) | optional |
 
-A URL is considered ready when it responds with a status below 400.
+A URL is considered ready when it responds with a status below 400. When the
+wait gives up, the error reports why the last poll failed - the transport error,
+or the status that kept coming back - so a refused connection, a rejected
+certificate and a server stuck on 503 are not the same message.
 
 ```yaml
 - name: Wait for registry
@@ -88,6 +93,15 @@ A URL is considered ready when it responds with a status below 400.
   type: http
   url: http://localhost:8000/health
   interval: 2
+  timeout: 60
+```
+
+```yaml
+- name: Wait for registry over TLS
+  handler: wait
+  type: http
+  url: https://localhost:8443/health
+  ca_cert: ${env:HOME}/.mcp-mesh/tls/ca.pem
   timeout: 60
 ```
 
@@ -191,6 +205,8 @@ on a status of 400 or above.
 | `headers` | Request headers (map) | optional |
 | `body` | Request body (string, or a map/list sent as JSON) | optional |
 | `timeout` | Timeout, in seconds or as a duration string | default `30` (seconds) |
+| `insecure_tls` | Skip TLS certificate verification | default `false` |
+| `ca_cert` | Path to a PEM CA bundle to trust | optional |
 
 A string `body` is sent verbatim, so set `Content-Type` yourself. A `body`
 written as YAML structure is marshalled to JSON and `Content-Type:
@@ -218,6 +234,37 @@ body values are interpolated.
     capabilities:
       - greeting
   capture: register_response
+```
+
+### TLS
+
+`insecure_tls` and `ca_cert` are available on both the `http` handler and `wait`
+with `type: http`. Neither is set by default: an `https://` URL is verified
+against the system trust store, exactly as `curl` would.
+
+`ca_cert` names a PEM bundle to trust **in addition to** the system roots, so a
+step that pins a private CA can still reach public-CA hosts. The path is
+interpolated like `url`, so it can be written relative to an environment
+variable. A path that does not exist, or a file with no certificate in it, fails
+the step rather than quietly falling back to default trust.
+
+```yaml
+- name: Query registry over TLS
+  handler: http
+  url: https://localhost:8443/agents
+  ca_cert: ${env:HOME}/.mcp-mesh/tls/ca.pem
+  capture: agents
+```
+
+`insecure_tls: true` turns verification off entirely. Setting it together with
+`ca_cert` is an error, not a precedence rule - "trust nothing" and "trust
+exactly this CA" are contradictory, so the step fails instead of guessing.
+
+```yaml
+- name: Query a self-signed dev endpoint
+  handler: http
+  url: https://localhost:8443/agents
+  insecure_tls: true
 ```
 
 ## pip-install Handler

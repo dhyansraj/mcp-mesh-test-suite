@@ -2,10 +2,10 @@ package handlers
 
 import (
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/interpolate"
+	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/textutil"
 )
 
 // WaitHandler waits for a duration or condition
@@ -15,6 +15,8 @@ const (
 	defaultWaitSeconds     = 1 * time.Second
 	defaultWaitHTTPTimeout = 30 * time.Second
 	defaultWaitInterval    = 2 * time.Second
+	// waitProbeTimeout bounds one poll, not the whole wait.
+	waitProbeTimeout = 5 * time.Second
 )
 
 func (h *WaitHandler) Name() string {
@@ -95,15 +97,42 @@ func (h *WaitHandler) waitHTTP(step map[string]any, ctx *interpolate.Context) St
 		}
 	}
 
+	insecure, err := boolField(step, "insecure_tls", false)
+	if err != nil {
+		return StepResult{
+			Success: false,
+			Error:   fmt.Sprintf("wait handler: %v", err),
+		}
+	}
+
+	caCert, _ := step["ca_cert"].(string)
+	if caCert != "" {
+		caCert, _ = interpolate.Interpolate(caCert, ctx)
+	}
+
+	client, err := newHTTPClient(waitProbeTimeout, tlsOptions{insecure: insecure, caCert: caCert})
+	if err != nil {
+		return StepResult{
+			Success: false,
+			Error:   fmt.Sprintf("wait handler: %v", err),
+		}
+	}
+
 	startTime := time.Now()
 
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-	}
+	// The reason the last poll failed is the whole diagnostic value of a wait
+	// that times out: a DNS failure, a refused connection, a rejected
+	// certificate and a server stuck on 503 are otherwise indistinguishable.
+	var (
+		lastErr    error
+		lastStatus int
+	)
 
 	for time.Since(startTime) < timeout {
 		resp, err := client.Get(url)
-		if err == nil {
+		if err != nil {
+			lastErr, lastStatus = err, 0
+		} else {
 			resp.Body.Close()
 			if resp.StatusCode < 400 {
 				return StepResult{
@@ -112,6 +141,7 @@ func (h *WaitHandler) waitHTTP(step map[string]any, ctx *interpolate.Context) St
 					Stdout:   fmt.Sprintf("URL %s is ready (status %d)", url, resp.StatusCode),
 				}
 			}
+			lastErr, lastStatus = nil, resp.StatusCode
 		}
 		time.Sleep(interval)
 	}
@@ -119,6 +149,23 @@ func (h *WaitHandler) waitHTTP(step map[string]any, ctx *interpolate.Context) St
 	return StepResult{
 		Success:  false,
 		ExitCode: 1,
-		Error:    fmt.Sprintf("URL %s not ready after %s", url, timeout),
+		Error:    waitNotReadyError(url, timeout, lastStatus, lastErr),
+	}
+}
+
+// waitNotReadyError explains why the wait gave up, keeping the historical
+// "URL X not ready after T" opening and appending whichever of the two possible
+// last outcomes actually happened.
+func waitNotReadyError(url string, timeout time.Duration, lastStatus int, lastErr error) string {
+	base := fmt.Sprintf("URL %s not ready after %s", url, timeout)
+
+	switch {
+	case lastErr != nil:
+		return fmt.Sprintf("%s: last attempt failed: %s", base,
+			textutil.Truncate(lastErr.Error(), textutil.MaxErrorDetail))
+	case lastStatus != 0:
+		return fmt.Sprintf("%s: last response was HTTP %d (ready means a status below 400)", base, lastStatus)
+	default:
+		return base + ": no request completed before the deadline"
 	}
 }

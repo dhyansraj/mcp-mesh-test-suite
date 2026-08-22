@@ -47,6 +47,29 @@ func (h *HTTPHandler) Execute(step map[string]any, ctx *interpolate.Context) Ste
 		}
 	}
 
+	insecure, err := boolField(step, "insecure_tls", false)
+	if err != nil {
+		return StepResult{
+			Success: false,
+			Error:   fmt.Sprintf("http handler: %v", err),
+		}
+	}
+
+	caCert, _ := step["ca_cert"].(string)
+	if caCert != "" {
+		caCert, _ = interpolate.Interpolate(caCert, ctx)
+	}
+
+	// Built before the request so a misconfigured option fails the step
+	// immediately rather than after a doomed round trip.
+	client, err := newHTTPClient(timeout, tlsOptions{insecure: insecure, caCert: caCert})
+	if err != nil {
+		return StepResult{
+			Success: false,
+			Error:   fmt.Sprintf("http handler: %v", err),
+		}
+	}
+
 	// Get headers. Interpolation normalizes these to map[string]any, but accept
 	// the raw map[string]string too for handlers invoked directly.
 	headers := make(map[string]string)
@@ -105,10 +128,6 @@ func (h *HTTPHandler) Execute(step map[string]any, ctx *interpolate.Context) Ste
 	}
 
 	// Execute request
-	client := &http.Client{
-		Timeout: timeout,
-	}
-
 	resp, err := client.Do(req)
 	if err != nil {
 		return StepResult{
