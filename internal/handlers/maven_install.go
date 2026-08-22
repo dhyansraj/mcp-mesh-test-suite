@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"time"
 
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/interpolate"
 )
@@ -28,6 +27,16 @@ func (h *MavenInstallHandler) Execute(step map[string]any, ctx *interpolate.Cont
 		return StepResult{
 			Success: false,
 			Error:   "maven-install handler requires 'path' field",
+		}
+	}
+
+	// Resolve the timeout before touching the project, so a malformed step is
+	// rejected rather than rewriting pom.xml on its way to failing.
+	timeout, err := durationField(step, "timeout", defaultInstallTimeout)
+	if err != nil {
+		return StepResult{
+			Success: false,
+			Error:   fmt.Sprintf("maven-install handler: %v", err),
 		}
 	}
 
@@ -91,11 +100,6 @@ func (h *MavenInstallHandler) Execute(step map[string]any, ctx *interpolate.Cont
 		}
 	}
 
-	timeout := 300 * time.Second
-	if t, ok := step["timeout"].(int); ok && t > 0 {
-		timeout = time.Duration(t) * time.Second
-	}
-
 	cmdCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -107,7 +111,7 @@ func (h *MavenInstallHandler) Execute(step map[string]any, ctx *interpolate.Cont
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 	if err != nil {
 		if cmdCtx.Err() == context.DeadlineExceeded {
 			return StepResult{

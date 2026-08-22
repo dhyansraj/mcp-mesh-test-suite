@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"time"
 
 	"github.com/dhyansraj/mcp-mesh-test-suite/go/internal/interpolate"
 )
@@ -31,9 +30,12 @@ func (h *PipInstallHandler) Execute(step map[string]any, ctx *interpolate.Contex
 		}
 	}
 
-	timeout := 300 * time.Second
-	if t, ok := step["timeout"].(int); ok && t > 0 {
-		timeout = time.Duration(t) * time.Second
+	timeout, err := durationField(step, "timeout", defaultInstallTimeout)
+	if err != nil {
+		return StepResult{
+			Success: false,
+			Error:   fmt.Sprintf("pip-install handler: %v", err),
+		}
 	}
 
 	cmdCtx, cancel := context.WithTimeout(context.Background(), timeout)

@@ -280,6 +280,11 @@ func (c *Client) UpsertSuite(req *SyncSuiteRequest) (*SyncSuiteResponse, error) 
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to list suites: %s - %s", resp.Status, string(bodyBytes))
+	}
+
 	var listResult struct {
 		Suites []struct {
 			ID         int64  `json:"id"`
@@ -289,13 +294,16 @@ func (c *Client) UpsertSuite(req *SyncSuiteRequest) (*SyncSuiteResponse, error) 
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&listResult); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to decode suite list: %w", err)
 	}
 
 	// Check if suite exists
 	for _, suite := range listResult.Suites {
 		if suite.FolderPath == req.FolderPath {
 			// Suite exists, return it
+			if suite.ID == 0 {
+				return nil, fmt.Errorf("suite %q at %s exists but server returned id 0", suite.SuiteName, suite.FolderPath)
+			}
 			return &SyncSuiteResponse{
 				ID:         suite.ID,
 				SuiteName:  suite.SuiteName,
@@ -316,12 +324,46 @@ func (c *Client) UpsertSuite(req *SyncSuiteRequest) (*SyncSuiteResponse, error) 
 	}
 	defer createResp.Body.Close()
 
-	// For now, just return a placeholder since create might not be fully implemented
-	// The important thing is we tried to sync
-	return &SyncSuiteResponse{
-		SuiteName:  req.SuiteName,
-		FolderPath: req.FolderPath,
-	}, nil
+	createBody, err := io.ReadAll(createResp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read create suite response: %w", err)
+	}
+
+	switch {
+	case createResp.StatusCode >= 200 && createResp.StatusCode < 300:
+		var result SyncSuiteResponse
+		if err := json.Unmarshal(createBody, &result); err != nil {
+			return nil, fmt.Errorf("failed to decode create suite response: %w - %s", err, string(createBody))
+		}
+		if result.ID == 0 {
+			return nil, fmt.Errorf("create suite returned %s without a suite id - %s", createResp.Status, string(createBody))
+		}
+		return &result, nil
+
+	case createResp.StatusCode == http.StatusConflict:
+		// Server replies {"error": "Suite already exists", "suite": {...}} - an
+		// existing suite is a successful upsert, so return its ID.
+		var conflict struct {
+			Error string             `json:"error"`
+			Suite *SyncSuiteResponse `json:"suite"`
+		}
+		if err := json.Unmarshal(createBody, &conflict); err != nil {
+			return nil, fmt.Errorf("failed to decode create suite conflict response: %w - %s", err, string(createBody))
+		}
+		if conflict.Suite == nil || conflict.Suite.ID == 0 {
+			return nil, fmt.Errorf("create suite returned %s without a suite id - %s", createResp.Status, string(createBody))
+		}
+		return conflict.Suite, nil
+
+	default:
+		var errResult struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(createBody, &errResult); err == nil && errResult.Error != "" {
+			return nil, fmt.Errorf("failed to create suite: %s - %s", createResp.Status, errResult.Error)
+		}
+		return nil, fmt.Errorf("failed to create suite: %s - %s", createResp.Status, string(createBody))
+	}
 }
 
 // TriggerRunRequest contains parameters for triggering a run via the API

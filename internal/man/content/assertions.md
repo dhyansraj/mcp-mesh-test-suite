@@ -7,18 +7,24 @@
 Assertions validate test results after all steps complete.
 All assertions must pass for the test to pass.
 
-There are two assertion styles: **inline expressions** (most common) and **field-based assertions** (structured YAML fields).
+An assertion has exactly two fields: `expr` (required) and `message`
+(optional). The operator lives **inside** the expression string; there are no
+`equals:`, `contains:`, or `is_not_empty:` sub-keys.
 
-## Inline Expression Assertions
+## Expression Syntax
 
-Inline assertions use the syntax `${variable} operator value` as a single string expression.
+An expression is `${variable} operator value` as a single string.
 
 ```yaml
 assertions:
   - expr: "${captured.status_code} == 200"
   - expr: "${captured.output} contains 'success'"
   - expr: "${captured.token} exists"
+    message: "Login should return a token"
 ```
+
+An expression that does not match this shape fails with
+`Invalid expression syntax`.
 
 ### Operator Reference
 
@@ -59,7 +65,7 @@ The expected value can reference other variables:
 
 ```yaml
 - expr: "${captured.output} contains '${config.packages.mesh_version}'"
-- expr: "${captured.user_id} == '${env.EXPECTED_USER}'"
+- expr: "${captured.user_id} == '${env:EXPECTED_USER}'"
 ```
 
 ### Type Aliases for `is`
@@ -86,7 +92,7 @@ The `length` operator takes a sub-expression with a comparison operator and a nu
 
 Supported sub-operators: `>`, `<`, `>=`, `<=`, `==`, `!=`.
 
-### Inline Expression Examples
+### More Examples
 
 ```yaml
 assertions:
@@ -110,193 +116,87 @@ assertions:
   - expr: "${captured.tags} length >= 1"
 ```
 
-## Field-Based Assertions
+## Variables in Assertions
 
-Field-based assertions use separate YAML fields for the expression and operator.
+Any variable form works on the left-hand side, not just `captured.`:
 
 ```yaml
 assertions:
-  - expr: captured.status_code
-    equals: 200
+  # Previous step result
+  - expr: "${last.exit_code} == 0"
+  - expr: "${exit_code} == 0"
 
-  - expr: captured.response.name
-    equals: "John Doe"
+  # Full result of a named step
+  - expr: "${steps.build.exit_code} == 0"
 
-  - expr: captured.items
-    is_not_empty: true
+  # jq query over a captured JSON value
+  - expr: "${jq:captured.agent_list:.agents | length} > 0"
+  - expr: "${jq:captured.agent_list:.agents[0].status} == 'running'"
+
+  # File contents
+  - expr: "${file:/workspace/agent/main.py} exists"
 ```
 
-### Equality
+Captured values are plain strings (the step's stdout), so use `jq:`, `json:`,
+or `jsonfile:` to reach into JSON instead of dotted access such as
+`${captured.response.name}`.
 
-```yaml
-# Exact match
-- expr: captured.value
-  equals: 42
-
-# Not equal
-- expr: captured.status
-  not_equals: "error"
-```
-
-### Comparison
-
-```yaml
-# Greater than
-- expr: captured.count
-  greater_than: 0
-
-# Less than
-- expr: captured.latency_ms
-  less_than: 1000
-
-# Greater than or equal
-- expr: captured.items | length
-  gte: 5
-
-# Less than or equal
-- expr: captured.retry_count
-  lte: 3
-```
-
-### String Matching
-
-```yaml
-# Contains substring
-- expr: captured.message
-  contains: "success"
-
-# Starts with
-- expr: captured.id
-  starts_with: "user_"
-
-# Ends with
-- expr: captured.filename
-  ends_with: ".json"
-
-# Regex match
-- expr: captured.email
-  matches: "^[a-z]+@example\\.com$"
-```
-
-### Type and Existence
-
-```yaml
-# Not empty (strings, lists, dicts)
-- expr: captured.items
-  is_not_empty: true
-
-# Is empty
-- expr: captured.errors
-  is_empty: true
-
-# Is null
-- expr: captured.optional_field
-  is_null: true
-
-# Is not null
-- expr: captured.required_field
-  is_not_null: true
-
-# Type check
-- expr: captured.count
-  is_type: int
-
-- expr: captured.items
-  is_type: list
-```
-
-### List Assertions
-
-```yaml
-# Length check
-- expr: captured.items | length
-  equals: 5
-
-# Contains element
-- expr: captured.tags
-  contains: "important"
-
-# All items match
-- expr: captured.statuses
-  all_equal: "active"
-```
-
-### Expression Syntax
-
-```yaml
-# Direct access
-- expr: captured.user_id
-  is_not_null: true
-
-# Nested access
-- expr: captured.response.data.items[0].name
-  equals: "First Item"
-
-# Array indexing
-- expr: captured.list[0]
-  equals: "first"
-
-- expr: captured.list[-1]
-  equals: "last"
-
-# Length filter
-- expr: captured.items | length
-  greater_than: 0
-
-# JSON path (for complex queries)
-- expr: captured.data | jsonpath('$.users[*].active')
-  all_equal: true
-```
+See `tsuite man variables` for the full list of prefixes.
 
 ## Custom Messages
 
-Add descriptive messages for assertion failures:
+Add a descriptive `message` shown when the assertion fails:
 
 ```yaml
 assertions:
-  # Inline style
   - expr: "${captured.status_code} == 200"
     message: "API should return 200 OK"
 
-  # Field-based style
-  - expr: captured.user.email
-    contains: "@"
+  - expr: "${captured.user_email} contains '@'"
     message: "User email should be valid"
 ```
 
 ## Examples
 
-### API Response Validation (Inline Style)
+### API Response Validation
 
 ```yaml
+test:
+  - name: Get user
+    handler: http
+    method: GET
+    url: http://localhost:8080/users/123
+    capture: body
+
 assertions:
-  - expr: "${captured.status} == 200"
-    message: "Should return 200"
+  - expr: "${steps.body.exit_code} == 0"
+    message: "Should return a 2xx/3xx status"
 
-  - expr: "${captured.body.success} == true"
+  - expr: "${jq:captured.body:.success} == true"
 
-  - expr: "${captured.body.data.id} exists"
+  - expr: "${jq:captured.body:.data.id} exists"
     message: "Response should include ID"
 
-  - expr: "${captured.body.data.created_at} matches '^\\d{4}-\\d{2}-\\d{2}'"
+  - expr: "${jq:captured.body:.data.created_at} matches '^\\d{4}-\\d{2}-\\d{2}'"
     message: "Created date should be ISO format"
-
-  - expr: "${captured.body.errors} not exists"
 ```
 
-### Command Output Validation (Field-Based Style)
+### Command Output Validation
 
 ```yaml
+test:
+  - name: Run the tool
+    handler: shell
+    command: my-tool --run
+    capture: tool_output
+
 assertions:
-  - expr: captured.exit_code
-    equals: 0
+  - expr: "${steps.tool_output.exit_code} == 0"
     message: "Command should succeed"
 
-  - expr: captured.stdout
-    contains: "Operation completed"
+  - expr: "${captured.tool_output} contains 'Operation completed'"
 
-  - expr: captured.stderr
-    is_empty: true
+  - expr: "${steps.tool_output.stderr} not contains 'ERROR'"
     message: "No errors expected"
 ```
 

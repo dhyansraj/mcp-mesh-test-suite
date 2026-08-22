@@ -4,25 +4,21 @@
 
 ## Overview
 
-Artifacts are files used by tests. They can be defined at suite, UC,
-or TC level and are automatically mounted into containers in Docker mode.
+Artifacts are files used by tests. They can be defined at UC or TC level and
+are automatically mounted into the container in Docker and K8s modes.
 
 ## Artifact Levels
 
-| Level | Directory | Mount Path | Description |
-|-------|-----------|------------|-------------|
-| Suite | `artifacts/` (root) | `/suite-artifacts/` | Shared across all tests |
-| UC | `artifacts/` (UC dir) | `/uc-artifacts/` | Shared within use case |
-| TC | `artifacts/` (TC dir) | `/tc-artifacts/` | Specific to test case |
+| Level | Directory | Mount Path | Host Path Variable |
+|-------|-----------|------------|--------------------|
+| UC | `artifacts/` (UC dir) | `/uc-artifacts/` | `${uc_artifacts}` |
+| TC | `artifacts/` (TC dir) | `/artifacts/` | `${artifacts}` |
 
 ## Directory Structure
 
 ```
 my-suite/
 ├── config.yaml
-├── artifacts/                    # Suite-level
-│   ├── global_config.json
-│   └── shared_data.csv
 └── suites/
     └── uc01_users/
         ├── artifacts/            # UC-level
@@ -36,41 +32,46 @@ my-suite/
 
 ## Using Artifacts
 
-### In Docker Mode
+### In Docker and K8s Modes
 
-Artifacts are mounted as read-only volumes:
+Each entry inside an `artifacts/` directory is mounted individually (symlinks
+are resolved), TC artifacts under `/artifacts/` and UC artifacts under
+`/uc-artifacts/`:
 
 ```yaml
 # test.yaml
 test:
   - name: Load test data
-    exec:
-      command: cat /tc-artifacts/request.json
+    handler: shell
+    command: cat /artifacts/request.json
 
   - name: Use shared template
-    exec:
-      command: cat /uc-artifacts/user_template.json
+    handler: shell
+    command: cat /uc-artifacts/user_template.json
 
-  - name: Access global config
-    exec:
-      command: cat /suite-artifacts/global_config.json
+  - name: Copy agents into the workspace
+    handler: shell
+    command: cp -r /artifacts/my-agent /workspace/
 ```
 
 ### In Standalone Mode
 
-Artifacts are accessed via absolute paths:
+There is no mount, so use the host paths:
 
 ```yaml
 test:
   - name: Load test data
-    exec:
-      command: cat ${TC_ARTIFACTS}/request.json
+    handler: shell
+    command: cat ${artifacts}/request.json
+
+  - name: Use shared template
+    handler: shell
+    command: cat ${uc_artifacts}/user_template.json
 ```
 
-Environment variables:
-- `${SUITE_ARTIFACTS}` - Path to suite artifacts
-- `${UC_ARTIFACTS}` - Path to UC artifacts
-- `${TC_ARTIFACTS}` - Path to TC artifacts
+Path variables (`${artifacts_path}` and `${uc_artifacts_path}` are aliases):
+- `${artifacts}` - Path to this test case's artifacts
+- `${uc_artifacts}` - Path to the use case's artifacts
 
 ## Common Use Cases
 
@@ -95,10 +96,12 @@ tc01_create/
 # test.yaml
 test:
   - name: Create user
-    http:
-      method: POST
-      url: ${API_URL}/users
-      body_file: /tc-artifacts/create_user.json
+    handler: http
+    method: POST
+    url: http://localhost:8080/users
+    headers:
+      Content-Type: application/json
+    body: ${file:/artifacts/create_user.json}
 ```
 
 ### Expected Response Comparison
@@ -106,21 +109,18 @@ test:
 ```yaml
 test:
   - name: Get user
-    http:
-      method: GET
-      url: ${API_URL}/users/123
-    capture:
-      response: response.json
+    handler: http
+    method: GET
+    url: http://localhost:8080/users/123
+    capture: response
 
   - name: Load expected
-    exec:
-      command: cat /tc-artifacts/expected.json
-    capture:
-      expected: result.stdout | json
+    handler: shell
+    command: cat /artifacts/expected.json
+    capture: expected
 
 assertions:
-  - expr: captured.response
-    equals: ${captured.expected}
+  - expr: "${jq:captured.response:.name} == '${jq:captured.expected:.name}'"
 ```
 
 ### Shared Test Data
@@ -138,40 +138,42 @@ uc01_users/
 
 ### Configuration Files
 
-Suite-level artifacts for global configuration:
+UC-level artifacts for configuration shared by every test case in the UC:
 
 ```yaml
-# config.yaml
-docker:
-  env:
-    CONFIG_PATH: /suite-artifacts/app_config.yaml
+test:
+  - name: Stage app config
+    handler: shell
+    command: cp /uc-artifacts/app_config.yaml /workspace/config.yaml
 ```
 
 ## Binary Files
 
-Artifacts can be binary files (images, PDFs, etc.):
+Artifacts can be binary files (images, PDFs, etc.). Reference them by their
+mount path from a shell step:
 
 ```yaml
 test:
   - name: Upload image
-    http:
-      method: POST
-      url: ${API_URL}/upload
-      file: /tc-artifacts/test_image.png
+    handler: shell
+    command: curl -sf -F file=@/artifacts/test_image.png http://localhost:8080/upload
 ```
 
 ## Generated Artifacts
 
-Tests can write to a designated output directory:
+Everything a test writes under `/workspace` lives in a per-test working
+directory that is discarded after the run. To keep output, write it to the
+mounted log directory, which maps to `~/.tsuite/runs/<run-id>/<uc>/<tc>/` on
+the host:
 
 ```yaml
 test:
   - name: Generate report
-    exec:
-      command: python generate_report.py --output /output/report.html
+    handler: shell
+    command: python generate_report.py --output /var/log/tsuite/report.html
 ```
 
-Output artifacts are preserved for later inspection.
+In standalone mode use `${run_path}` for the same purpose.
 
 ## See Also
 

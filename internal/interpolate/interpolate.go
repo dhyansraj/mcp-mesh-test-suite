@@ -62,7 +62,48 @@ func Interpolate(text string, ctx *Context) (string, error) {
 	return result, nil
 }
 
-// InterpolateMap recursively interpolates all string values in a map
+// InterpolateValue recursively interpolates a single value of any type.
+// Typed collections that come from struct fields (map[string]string, []string)
+// are normalized to map[string]any / []any so handlers only have to deal with
+// one shape. Values of other types are returned unchanged.
+func InterpolateValue(v any, ctx *Context) (any, error) {
+	switch val := v.(type) {
+	case string:
+		return Interpolate(val, ctx)
+	case map[string]any:
+		return InterpolateMap(val, ctx)
+	case map[string]string:
+		result := make(map[string]any, len(val))
+		for k, s := range val {
+			interpolatedKey, err := Interpolate(k, ctx)
+			if err != nil {
+				return nil, err
+			}
+			interpolated, err := Interpolate(s, ctx)
+			if err != nil {
+				return nil, err
+			}
+			result[interpolatedKey] = interpolated
+		}
+		return result, nil
+	case []any:
+		return InterpolateSlice(val, ctx)
+	case []string:
+		result := make([]any, len(val))
+		for i, s := range val {
+			interpolated, err := Interpolate(s, ctx)
+			if err != nil {
+				return nil, err
+			}
+			result[i] = interpolated
+		}
+		return result, nil
+	default:
+		return v, nil
+	}
+}
+
+// InterpolateMap recursively interpolates all string keys and values in a map
 func InterpolateMap(m map[string]any, ctx *Context) (map[string]any, error) {
 	result := make(map[string]any)
 	for k, v := range m {
@@ -71,28 +112,11 @@ func InterpolateMap(m map[string]any, ctx *Context) (map[string]any, error) {
 			return nil, err
 		}
 
-		switch val := v.(type) {
-		case string:
-			interpolated, err := Interpolate(val, ctx)
-			if err != nil {
-				return nil, err
-			}
-			result[interpolatedKey] = interpolated
-		case map[string]any:
-			interpolated, err := InterpolateMap(val, ctx)
-			if err != nil {
-				return nil, err
-			}
-			result[interpolatedKey] = interpolated
-		case []any:
-			interpolated, err := InterpolateSlice(val, ctx)
-			if err != nil {
-				return nil, err
-			}
-			result[interpolatedKey] = interpolated
-		default:
-			result[interpolatedKey] = v
+		interpolated, err := InterpolateValue(v, ctx)
+		if err != nil {
+			return nil, err
 		}
+		result[interpolatedKey] = interpolated
 	}
 	return result, nil
 }
@@ -101,28 +125,11 @@ func InterpolateMap(m map[string]any, ctx *Context) (map[string]any, error) {
 func InterpolateSlice(s []any, ctx *Context) ([]any, error) {
 	result := make([]any, len(s))
 	for i, v := range s {
-		switch val := v.(type) {
-		case string:
-			interpolated, err := Interpolate(val, ctx)
-			if err != nil {
-				return nil, err
-			}
-			result[i] = interpolated
-		case map[string]any:
-			interpolated, err := InterpolateMap(val, ctx)
-			if err != nil {
-				return nil, err
-			}
-			result[i] = interpolated
-		case []any:
-			interpolated, err := InterpolateSlice(val, ctx)
-			if err != nil {
-				return nil, err
-			}
-			result[i] = interpolated
-		default:
-			result[i] = v
+		interpolated, err := InterpolateValue(v, ctx)
+		if err != nil {
+			return nil, err
 		}
+		result[i] = interpolated
 	}
 	return result, nil
 }

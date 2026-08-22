@@ -18,46 +18,23 @@ suite:
   mode: docker
 
 docker:
-  image: python:3.11-slim
+  base_image: python:3.11-slim
 ```
 
 ## Docker Configuration
 
-### Basic Settings
+`docker` accepts exactly two settings:
 
 ```yaml
 docker:
-  image: python:3.11-slim      # Required: base image
-  network: host                 # Network mode
-  pull: always                  # Pull policy: always, never, if-not-present
+  base_image: python:3.11-slim  # Image workers run in
+  network: bridge               # Container network mode (default: bridge)
 ```
 
-### Environment Variables
-
-```yaml
-docker:
-  env:
-    API_URL: http://host.docker.internal:8080
-    DEBUG: "true"
-    DATABASE_URL: postgres://db:5432/test
-```
-
-### Volume Mounts
-
-```yaml
-docker:
-  volumes:
-    - /host/path:/container/path:ro
-    - ${HOME}/.config:/config:ro
-```
-
-### Resource Limits
-
-```yaml
-docker:
-  memory: 512m
-  cpus: 1.0
-```
+There are no `image`, `env`, `volumes`, `pull`, `memory`, or `cpus` settings;
+anything else under `docker:` is ignored. Per-test environment values belong in
+the step itself (`handler: shell` with `VAR=... cmd`) or in the `secrets`
+handler.
 
 ## Automatic Mounts
 
@@ -65,69 +42,59 @@ tsuite automatically mounts:
 
 | Host Path | Container Path | Mode |
 |-----------|----------------|------|
-| Suite artifacts | `/suite-artifacts/` | Read-only |
-| UC artifacts | `/uc-artifacts/` | Read-only |
-| TC artifacts | `/tc-artifacts/` | Read-only |
-| Output directory | `/output/` | Read-write |
+| Suite directory | `/tests/` | Read-only |
+| Per-test working directory | `/workspace/` | Read-write |
+| UC artifacts (per entry) | `/uc-artifacts/` | Read-only |
+| TC artifacts (per entry) | `/artifacts/` | Read-only |
+| `~/.tsuite/runs/<run>/<uc>/<tc>/` | `/var/log/tsuite/` | Read-write |
 
-## Network Modes
+Artifact directories are mounted one entry at a time so that symlinks inside
+them are resolved to their targets.
 
-### Host Network
+## Networking
 
-```yaml
-docker:
-  network: host
-```
-
-- Container shares host network
-- Access services on localhost
-- Simplest for local testing
-
-### Bridge Network (Default)
+Worker containers run on the `bridge` network unless `docker.network` says
+otherwise:
 
 ```yaml
 docker:
-  network: bridge
+  base_image: python:3.11-slim
+  network: my-net
 ```
 
-- Isolated network
-- Use `host.docker.internal` for host services
-- Better isolation
+The value is used as the container's network mode, so `bridge`, `host`, `none`,
+`container:<name>`, or the name of a user-defined network all work. An empty or
+missing `network` means `bridge`, which is the behaviour of every suite that
+does not set it.
 
-### Custom Network
+tsuite does not create networks. Create a user-defined network first:
 
-```yaml
-docker:
-  network: my-test-network
+```bash
+docker network create my-net
 ```
 
-- Connect to existing Docker network
-- Useful for service dependencies
+Put workers on a user-defined network when tests must reach other containers by
+name — user-defined networks give attached containers DNS resolution of each
+other, which the default `bridge` network does not.
 
-## Accessing Host Services
+To reach a service on the host from inside a test, use:
 
-From container, use:
 - `host.docker.internal` (Docker Desktop)
 - `172.17.0.1` (Linux default gateway)
 
-```yaml
-docker:
-  env:
-    API_URL: http://host.docker.internal:8080
-```
+The API URL handed to the runner already has `localhost`/`127.0.0.1` rewritten
+to `host.docker.internal`.
 
 ## Custom Images
 
-### Using Pre-built Images
+Point `base_image` at any image that has the toolchains your tests need:
 
 ```yaml
 docker:
-  image: my-registry/my-test-image:latest
+  base_image: my-registry/my-test-image:latest
 ```
 
-### Building Images
-
-For complex test environments, build a custom image:
+Build it beforehand (tsuite does not build images for you):
 
 ```dockerfile
 # Dockerfile
@@ -139,56 +106,36 @@ COPY test_utils.py /app/
 WORKDIR /app
 ```
 
-```yaml
-docker:
-  image: my-test-image:latest
-  build:
-    context: ./docker
-    dockerfile: Dockerfile
+```bash
+docker build -t my-test-image:latest .
 ```
 
 ## Parallel Execution
 
-Docker mode supports parallel test execution:
+Run several containers at once with `--parallel`, or set `execution.max_workers`
+in `config.yaml`:
 
-```yaml
-suite:
-  mode: docker
-  parallel: 4  # Run up to 4 tests concurrently
+```bash
+tsuite run --suite-path ./my-suite --parallel 4
 ```
 
 Each test runs in its own container with full isolation.
 
 ## Container Lifecycle
 
-1. **Create** - Container created from image
-2. **Start** - Container started
-3. **Execute** - Test steps run inside container
-4. **Capture** - Output and artifacts collected
+1. **Create** - Container created from `base_image`
+2. **Start** - Container started, runner binary injected
+3. **Execute** - Test steps run inside the container
+4. **Capture** - Output streamed back to the API server
 5. **Stop** - Container stopped
 6. **Remove** - Container removed (cleanup)
 
 ## Debugging
 
-### Keep Container Running
-
-For debugging, prevent automatic cleanup:
-
-```bash
-tsuite run --suite-path ./my-suite --tc uc01/tc01 --keep-container
-```
-
-### View Container Logs
-
-```bash
-docker logs tsuite-<run-id>-<test-id>
-```
-
-### Interactive Mode
-
-```bash
-tsuite run --suite-path ./my-suite --tc uc01/tc01 --interactive
-```
+Worker logs for each test are written to the host at
+`~/.tsuite/runs/<run-id>/<uc>/<tc>/worker.log`, and step output is visible in
+the dashboard and the terminal. Containers are removed after each test, so
+inspect those logs rather than the container.
 
 ## Comparison with Standalone
 

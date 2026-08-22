@@ -35,8 +35,35 @@ type SuiteSettings struct {
 
 // PackageSettings contains package version configuration
 type PackageSettings struct {
-	Mode  string         `yaml:"mode"`  // "local", "published", or "auto"
-	Local LocalSettings  `yaml:"local"`
+	Mode  string        `yaml:"mode"` // "local", "published", or "auto"
+	Local LocalSettings `yaml:"local"`
+
+	// Versions recorded with each run and reachable from tests as
+	// ${config.packages.cli_version}. ScalarString because configs write them
+	// unquoted (`cli_version: 0.8` resolves to a YAML float, not a string).
+	CLIVersion           ScalarString `yaml:"cli_version"`
+	SDKPythonVersion     ScalarString `yaml:"sdk_python_version"`
+	SDKTypescriptVersion ScalarString `yaml:"sdk_typescript_version"`
+}
+
+// ScalarString is a string that accepts any YAML scalar, keeping the text as
+// written. A plain `string` field would fail the whole config load on an
+// unquoted version that YAML resolves to another type (`cli_version: 0.8` ->
+// !!float, `cli_version: 1` -> !!int); those become "0.8" and "1" here.
+type ScalarString string
+
+func (s ScalarString) String() string { return string(s) }
+
+func (s *ScalarString) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode {
+		return fmt.Errorf("line %d: expected a scalar value, got %s", node.Line, node.ShortTag())
+	}
+	if node.Tag == "!!null" {
+		*s = ""
+		return nil
+	}
+	*s = ScalarString(node.Value)
+	return nil
 }
 
 // LocalSettings contains paths for local package mode
@@ -53,13 +80,13 @@ type DockerSettings struct {
 
 // K8sSettings contains Kubernetes configuration
 type K8sSettings struct {
-	Namespace  string `yaml:"namespace"`   // default: "tsuite"
-	NFSServer  string `yaml:"nfs_server"`  // e.g., "10.0.0.50"
-	NFSPath    string `yaml:"nfs_path"`    // e.g., "/path/to/tests"
-	NFSRoot    string `yaml:"nfs_root"`    // NFS export root for symlink resolution (e.g., "/home/dhyanraj/workspace")
-	Image      string `yaml:"image"`       // override docker.base_image
-	APIUrl     string `yaml:"api_url"`     // e.g., "http://10.0.0.50:9999"
-	Kubeconfig  string `yaml:"kubeconfig"`    // optional, defaults to ~/.kube/config
+	Namespace   string `yaml:"namespace"`    // default: "tsuite"
+	NFSServer   string `yaml:"nfs_server"`   // e.g., "10.0.0.50"
+	NFSPath     string `yaml:"nfs_path"`     // e.g., "/path/to/tests"
+	NFSRoot     string `yaml:"nfs_root"`     // NFS export root for symlink resolution (e.g., "/home/dhyanraj/workspace")
+	Image       string `yaml:"image"`        // override docker.base_image
+	APIUrl      string `yaml:"api_url"`      // e.g., "http://10.0.0.50:9999"
+	Kubeconfig  string `yaml:"kubeconfig"`   // optional, defaults to ~/.kube/config
 	MemoryLimit string `yaml:"memory_limit"` // pod memory limit, default "4Gi"
 	CPULimit    string `yaml:"cpu_limit"`    // pod CPU limit, default "2"
 }
@@ -100,16 +127,16 @@ type ReportSettings struct {
 
 // TestConfig represents a test.yaml file
 type TestConfig struct {
-	Name        string              `yaml:"name"`
-	Disabled    bool                `yaml:"disabled"`
-	Description string              `yaml:"description"`
-	Tags        []string            `yaml:"tags"`
-	DependsOn   []string            `yaml:"depends_on"`
-	Timeout     int                 `yaml:"timeout"`
-	PreRun      []Step              `yaml:"pre_run"`
-	Test        []Step              `yaml:"test"`
-	PostRun     []Step              `yaml:"post_run"`
-	Assertions  []Assertion         `yaml:"assertions"`
+	Name        string      `yaml:"name"`
+	Disabled    bool        `yaml:"disabled"`
+	Description string      `yaml:"description"`
+	Tags        []string    `yaml:"tags"`
+	DependsOn   []string    `yaml:"depends_on"`
+	Timeout     int         `yaml:"timeout"`
+	PreRun      []Step      `yaml:"pre_run"`
+	Test        []Step      `yaml:"test"`
+	PostRun     []Step      `yaml:"post_run"`
+	Assertions  []Assertion `yaml:"assertions"`
 
 	// Raw map for interpolation access
 	Raw map[string]any `yaml:"-"`
@@ -127,17 +154,17 @@ type Step struct {
 	IgnoreErrors bool `yaml:"ignore_errors,omitempty"`
 
 	// Handler-specific fields
-	Path       string            `yaml:"path,omitempty"`        // npm-install, pip-install
-	Seconds    int               `yaml:"seconds,omitempty"`     // wait
-	URL        string            `yaml:"url,omitempty"`         // http
-	Method     string            `yaml:"method,omitempty"`      // http
-	Body       string            `yaml:"body,omitempty"`        // http
-	Headers    map[string]string `yaml:"headers,omitempty"`     // http
-	Source     string            `yaml:"source,omitempty"`      // file, secrets
-	Dest       string            `yaml:"dest,omitempty"`        // file
-	Content    string            `yaml:"content,omitempty"`     // file
-	Target     string            `yaml:"target,omitempty"`      // secrets
-	Keys       []string          `yaml:"keys,omitempty"`        // secrets
+	Path    string            `yaml:"path,omitempty"`    // npm-install, pip-install
+	Seconds int               `yaml:"seconds,omitempty"` // wait
+	URL     string            `yaml:"url,omitempty"`     // http
+	Method  string            `yaml:"method,omitempty"`  // http
+	Body    any               `yaml:"body,omitempty"`    // http: string sent verbatim, map/list sent as JSON
+	Headers map[string]string `yaml:"headers,omitempty"` // http
+	Source  string            `yaml:"source,omitempty"`  // file, secrets
+	Dest    string            `yaml:"dest,omitempty"`    // file
+	Content string            `yaml:"content,omitempty"` // file
+	Target  string            `yaml:"target,omitempty"`  // secrets
+	Keys    []string          `yaml:"keys,omitempty"`    // secrets
 
 	// Probe fields
 	Interval         any    `yaml:"interval,omitempty"`          // probe: seconds or duration string
@@ -149,8 +176,10 @@ type Step struct {
 	Routine string         `yaml:"routine,omitempty"`
 	Params  map[string]any `yaml:"params,omitempty"`
 
-	// Raw map for interpolation
-	Raw map[string]any `yaml:"-"`
+	// Extra collects every key without a dedicated field above (operation,
+	// packages, type, strip_file_repos, ...) so handler options stay reachable
+	// without a struct field per handler. Values keep their YAML types.
+	Extra map[string]any `yaml:",inline"`
 }
 
 // Assertion represents a test assertion
@@ -171,9 +200,9 @@ type UseCaseRoutinesConfig struct {
 
 // RoutineDefinition represents a reusable routine
 type RoutineDefinition struct {
-	Name        string         `yaml:"name"`
-	Description string         `yaml:"description,omitempty"`
-	Steps       []Step         `yaml:"steps"`
+	Name        string `yaml:"name"`
+	Description string `yaml:"description,omitempty"`
+	Steps       []Step `yaml:"steps"`
 }
 
 // LoadSuiteConfig loads config.yaml from a suite path
@@ -315,6 +344,9 @@ func (c *SuiteConfig) ToMap() map[string]any {
 			"wheels_dir":   c.Packages.Local.WheelsDir,
 			"packages_dir": c.Packages.Local.PackagesDir,
 		},
+		"cli_version":            c.Packages.CLIVersion.String(),
+		"sdk_python_version":     c.Packages.SDKPythonVersion.String(),
+		"sdk_typescript_version": c.Packages.SDKTypescriptVersion.String(),
 	}
 	m["docker"] = map[string]any{
 		"base_image": c.Docker.BaseImage,

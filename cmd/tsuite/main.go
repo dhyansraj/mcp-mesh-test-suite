@@ -590,9 +590,12 @@ func executeTests(cmd *cobra.Command, args []string) error {
 			TestCount:  len(tests),
 		})
 		if err != nil {
-			fmt.Printf("Warning: Failed to sync suite: %v\n", err)
+			fmt.Printf("Warning: Failed to sync suite %q at %s: %v\n", suiteConfig.Suite.Name, absPath, err)
 		} else if syncResp != nil {
 			suiteID = syncResp.ID
+		}
+		if suiteID == 0 {
+			fmt.Printf("Warning: No suite ID after sync for %q at %s - run will not be linked to a suite\n", suiteConfig.Suite.Name, absPath)
 		}
 
 		// Build test info for API (include ALL tests: active + disabled)
@@ -645,17 +648,9 @@ func executeTests(cmd *cobra.Command, args []string) error {
 		}
 
 		// Extract version fields from suite config
-		if pkgs, ok := suiteConfig.Raw["packages"].(map[string]any); ok {
-			if v, ok := pkgs["cli_version"].(string); ok {
-				createReq.CLIVersion = v
-			}
-			if v, ok := pkgs["sdk_python_version"].(string); ok {
-				createReq.SDKPythonVersion = v
-			}
-			if v, ok := pkgs["sdk_typescript_version"].(string); ok {
-				createReq.SDKTypescriptVersion = v
-			}
-		}
+		createReq.CLIVersion = suiteConfig.Packages.CLIVersion.String()
+		createReq.SDKPythonVersion = suiteConfig.Packages.SDKPythonVersion.String()
+		createReq.SDKTypescriptVersion = suiteConfig.Packages.SDKTypescriptVersion.String()
 
 		resp, err := apiClient.CreateRun(createReq)
 		if err != nil {
@@ -690,6 +685,9 @@ func executeTests(cmd *cobra.Command, args []string) error {
 		dockerImage = "tsuite-mesh:local" // Default image
 	}
 
+	// Get docker network from config (empty falls back to "bridge")
+	dockerNetwork := suiteConfig.Docker.Network
+
 	// Set test timeout (10 minutes default)
 	testTimeout := 10 * time.Minute
 
@@ -700,7 +698,7 @@ func executeTests(cmd *cobra.Command, args []string) error {
 	var handler worker.WorkerHandler
 	switch mode {
 	case "docker":
-		handler = worker.NewDockerHandler(apiURL, absPath, baseWorkdir, dockerImage, runID)
+		handler = worker.NewDockerHandler(apiURL, absPath, baseWorkdir, dockerImage, dockerNetwork, runID)
 	case "k8s":
 		if suiteConfig.K8s.NFSServer == "" || suiteConfig.K8s.NFSPath == "" {
 			return fmt.Errorf("k8s.nfs_server and k8s.nfs_path are required in config.yaml")
@@ -915,12 +913,12 @@ func delegateToAPI(cmd *cobra.Command, args []string) error {
 		TestCount:  len(tests),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to sync suite: %w", err)
+		return fmt.Errorf("failed to sync suite %q at %s: %w", suiteConfig.Suite.Name, absPath, err)
 	}
 
 	suiteID := syncResp.ID
 	if suiteID == 0 {
-		return fmt.Errorf("failed to get suite ID after sync")
+		return fmt.Errorf("failed to get suite ID after sync: server returned suite %q (path %s) with id 0", syncResp.SuiteName, syncResp.FolderPath)
 	}
 
 	// Build trigger request

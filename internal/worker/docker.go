@@ -23,27 +23,38 @@ type DockerHandler struct {
 	executors   sync.Map // workerID -> *runner.DockerExecutor
 }
 
-// NewDockerHandler creates a new Docker handler
-func NewDockerHandler(serverURL, suitePath, baseWorkdir, dockerImage, runID string) *DockerHandler {
+// DefaultDockerNetwork is used when docker.network is unset in config.yaml
+const DefaultDockerNetwork = "bridge"
+
+// NewDockerHandler creates a new Docker handler. An empty network falls back to
+// DefaultDockerNetwork.
+func NewDockerHandler(serverURL, suitePath, baseWorkdir, dockerImage, network, runID string) *DockerHandler {
+	if strings.TrimSpace(network) == "" {
+		network = DefaultDockerNetwork
+	}
 	return &DockerHandler{
 		serverURL:   serverURL,
 		suitePath:   suitePath,
 		baseWorkdir: baseWorkdir,
 		dockerImage: dockerImage,
 		runID:       runID,
-		network:     "bridge",
+		network:     network,
 	}
 }
 
 func (h *DockerHandler) Name() string { return "docker" }
 
-func (h *DockerHandler) StartWorker(ctx context.Context, testID string, runID string, apiURL string) (WorkerInfo, error) {
-	// Each worker gets its own docker executor (for isolation)
-	dockerConfig := &runner.ContainerConfig{
+// containerConfig builds the per-worker container configuration.
+func (h *DockerHandler) containerConfig() *runner.ContainerConfig {
+	return &runner.ContainerConfig{
 		Image:   h.dockerImage,
 		Network: h.network,
 	}
-	dockerExec, err := runner.NewDockerExecutor(h.serverURL, h.suitePath, h.baseWorkdir, dockerConfig, h.runID)
+}
+
+func (h *DockerHandler) StartWorker(ctx context.Context, testID string, runID string, apiURL string) (WorkerInfo, error) {
+	// Each worker gets its own docker executor (for isolation)
+	dockerExec, err := runner.NewDockerExecutor(h.serverURL, h.suitePath, h.baseWorkdir, h.containerConfig(), h.runID)
 	if err != nil {
 		return WorkerInfo{}, fmt.Errorf("failed to create Docker executor: %w", err)
 	}
